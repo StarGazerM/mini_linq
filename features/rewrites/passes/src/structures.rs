@@ -1,6 +1,7 @@
-use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
+use cq_lang_structures::provider::base as providers;
+use cq_lang_structures::{self as ir, Structure, symbol_name};
 use proc_macro2::TokenStream;
-use syn::{Ident, Type};
+use syn::Ident;
 
 mod retain_lookups;
 pub use retain_lookups::retain_lookups;
@@ -10,9 +11,9 @@ pub use expand_lookups::expand_lookups;
 /// Record the existing full-key existential-storage certificate. The
 /// Structures checker proves that no reader observes a non-key payload and
 /// that the projected build satisfies the filtered-storage contract.
-pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn membership(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let name: Ident = syn::parse2(arguments)?;
-    ir::contract::check(source)?;
+    ir::contract::check(physical, source)?;
     let mut target = source.clone();
     let mut matched = 0;
     for entry in &mut target.structures.entries {
@@ -42,18 +43,20 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
             "membership advice requires one built provider",
         ));
     }
-    ir::check_rewrite(source, &target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
 /// Add every admissible covered scalar filter to the named scan occurrence
-/// that is not already recorded. The default type is exact; a later
-/// `retype(scan join_filter => T)` chooses its representation. This is
-/// explicit positional-host advice, including when selection was not given
-/// positional hosts. The same Structures contract checks the result.
-pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+/// that is not already recorded, as the `join_filter_membership` token positional
+/// selection records; a later `retype(scan join_filter => @token as T)`
+/// chooses another representation. Every filter's policy is then
+/// recorded (SEL-FilterPolicy). This is explicit positional-host advice,
+/// including when selection was not given positional hosts. The same
+/// Structures contract checks the result.
+pub fn join_filter(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let scan: Ident = syn::parse2(arguments)?;
-    let facts = ir::contract::check(source)?;
+    let facts = ir::contract::check(physical, source)?;
     // Analysis coalesces runtime filters; advice must inspect every recorded
     // proof witness to remain idempotent after that coalescing.
     let recorded: Vec<_> = source
@@ -65,13 +68,12 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             _ => None,
         })
         .collect();
-    let candidates: Vec<_> = source
-        .physical
+    let candidates: Vec<_> = physical
         .program
         .definitions
         .iter()
         .flat_map(|d| {
-            ir::join_filter_candidates(source, &facts, &symbol_name(&d.name))
+            ir::join_filter_candidates(physical, source, &facts, &symbol_name(&d.name))
                 .into_iter()
                 .map(move |c| (&d.name, c))
         })
@@ -103,35 +105,71 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 .expect("checked lineage"),
         );
         let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
-        let build = source
-            .physical
+        let build = physical
             .program
             .definitions
             .iter()
             .find(|d| symbol_name(&d.name) == candidate.build)
             .map(|d| &d.name)
             .expect("checked build");
+        let provider = providers::declaration("join_filter_membership").instance();
         target.structures.entries.push(syn::parse_quote! {
-            #scan join_filter = ::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>
-                build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
+            #scan join_filter = #provider
+                build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>
+                policy always;
         });
     }
-    ir::check_rewrite(source, &target)?;
+    target.structures.declare(&providers::declarations())?;
+    ir::record_join_filter_policies(physical, &mut target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
 /// Formal rule EXT-SortedRuns:
-/// Retype one-level HashIndex payload builds with one integral key.
+/// Retype one-level `hash_index` payload builds with one generic ordered key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
-pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    select_runs(source, arguments, RunKind::Sorted)
+pub fn sorted_runs(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(physical, source, arguments, RunKind::Sorted)
 }
 
 /// Formal rule EXT-RadixRuns:
-/// Retype eligible singleton integral payload builds to RadixSpline runs.
-/// This selects an exact provider, not an ordered-input processing algorithm.
-pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    select_runs(source, arguments, RunKind::Radix)
+/// Retype eligible singleton payload builds to RadixSpline runs.
+/// Rust checks OrderKey; this selects storage, not an ordered-input algorithm.
+pub fn radix_runs(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(physical, source, arguments, RunKind::Radix)
+}
+
+/// Formal rule EXT-PackedCanon:
+/// Retype every canonical rows record of token `sort` (the default sorted
+/// array) to token `packed`, the sorted run keyed by the packed OrderKey. The
+/// advice is the authored premise that every column of those results has an
+/// OrderKey; rustc checks it at the build. Other records and canonical
+/// references are unchanged.
+pub fn packed_canon(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    if !arguments.is_empty() {
+        return Err(syn::Error::new_spanned(
+            arguments,
+            "packed_canon takes no arguments",
+        ));
+    }
+    let analysis = ir::contract::check(physical, source)?;
+    let mut target = source.clone();
+    for entry in &mut target.structures.entries {
+        let Structure::Rows { provider, .. } = &mut entry.structure else {
+            continue;
+        };
+        let rows_record = analysis
+            .canonical
+            .get(&symbol_name(&entry.name))
+            .and_then(ir::CanonSource::rows_provider)
+            .is_some();
+        if rows_record && provider.token == "sort" {
+            *provider = providers::declaration("packed").instance();
+        }
+    }
+    target.structures.declare(&providers::declarations())?;
+    ir::check_rewrite(physical, source, physical, &target)?;
+    Ok(target)
 }
 
 #[derive(Clone, Copy)]
@@ -141,6 +179,7 @@ enum RunKind {
 }
 
 fn select_runs(
+    physical: &ir::physical::Program,
     source: &ir::Program,
     arguments: TokenStream,
     kind: RunKind,
@@ -152,8 +191,8 @@ fn select_runs(
         };
         return Err(syn::Error::new_spanned(arguments, message));
     }
-    let analysis = ir::contract::check(source)?;
-    let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let analysis = ir::contract::check(physical, source)?;
+    let candidates = ir::physical::candidate_prefixes(physical, &analysis.physical);
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
         let Structure::Built { keyed, .. } = &mut entry.structure else {
@@ -163,8 +202,7 @@ fn select_runs(
         if keyed.levels.len() != 1
             || keyed.levels[0].columns.is_empty()
             || keyed.membership.is_some()
-            || !matches!(&keyed.ty, Type::Path(p) if p.qself.is_none()
-                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "HashIndex"]))
+            || keyed.provider.token != "hash_index"
         {
             continue;
         }
@@ -189,78 +227,98 @@ fn select_runs(
             .collect();
         if matches!(kind, RunKind::Radix) {
             // Constants removed from the stored key do not make a composite
-            // read eligible: the public advice promises one logical key.
+            // read eligible. Rust checks the selected provider's key traits.
             if columns.len() == 1 && stored.len() == 1 {
-                let mut ty = ir::ungroup_type(&analysis.physical.rows[&name].types[stored[0]]);
-                while let Type::Reference(reference) = ty {
-                    ty = ir::ungroup_type(&reference.elem);
-                }
-                if matches!(ty, Type::Path(path)
-                    if ["i32", "i64", "u32", "u64"].iter().any(|name| path.path.is_ident(name)))
-                {
-                    keyed.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _>);
-                    keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
-                }
+                // The recorded `items` fact (SEL-ItemLayout) is the only
+                // source of the provider's declared layout argument.
+                keyed.provider = providers::declaration("radix_run").instance();
+                keyed.items = Some(if split_payload(physical, source, &analysis, &name, &columns) {
+                    syn::parse_quote!(items columns)
+                } else {
+                    syn::parse_quote!(items rows)
+                });
+                keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
             }
             continue;
         }
-        let computed = |result: &str| {
-            analysis.physical.rows[result]
-                .computed
-                .iter()
-                .any(|c| columns.contains(c))
-        };
-        let owned = computed(&name)
-            || analysis
-                .physical
-                .key_reads
-                .get(&name)
-                .into_iter()
-                .flatten()
-                .any(|(reader, _)| {
-                    source
-                        .physical
-                        .program
-                        .definitions
-                        .iter()
-                        .any(|definition| {
-                            if symbol_name(&definition.name) != *reader {
-                                return false;
-                            }
-                            match &definition.operator {
-                                Operator::Probe(_, read)
-                                | Operator::Semi(_, read)
-                                | Operator::Anti(_, read) => computed(&symbol_name(&read.left)),
-                                _ => false,
-                            }
-                        })
-                });
-        if stored.len() == 1
-            && cq_structure_selection::arguments::sorted_key(&analysis.physical.rows[&name].types[stored[0]])
-        {
-            keyed.ty = if owned {
-                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>)
-            } else {
-                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>)
-            };
+        // The recorded codec is spelled in the provider: one stored column
+        // records `I64Codec`, whose `OrderKey` bound rustc checks at the build.
+        if stored.len() == 1 {
+            keyed.provider = providers::instance(
+                "sorted_run",
+                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::I64Codec>),
+            );
             keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
         }
     }
-    ir::check_rewrite(source, &target)?;
+    target.structures.declare(&providers::declarations())?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
-/// Record an exact hashed-bucket run for one-level composite scalar keys.
+/// Formal rule SEL-ItemLayout: store a payload column-wise when it has two to
+/// twelve fields (the tuple layouts) and some payload reader of this index,
+/// a probe or merge on its key, carries only part of it. Complete-row readers
+/// keep contiguous rows; key, count and membership reads never touch items.
+/// Needs are the recorded carried columns (`ir::demand`), never Rust types.
+fn split_payload(
+    physical: &ir::physical::Program,
+    source: &ir::Program,
+    analysis: &ir::Analysis,
+    name: &str,
+    key: &[String],
+) -> bool {
+    let carried = ir::demand::carried_columns(physical, source, analysis);
+    let stored: Vec<String> = match analysis.filtered.get(name) {
+        Some(filtered) => filtered.payload.columns.iter().map(symbol_name).collect(),
+        None => carried[name].clone(),
+    };
+    let payload: Vec<String> = stored
+        .into_iter()
+        .filter(|column| !key.contains(column))
+        .collect();
+    if !(2..=12).contains(&payload.len()) {
+        return false;
+    }
+    physical
+        .program
+        .definitions
+        .iter()
+        .any(|definition| {
+            let (ir::physical::Operator::Probe(_, read) | ir::physical::Operator::Merge(_, read)) =
+                &definition.operator
+            else {
+                return false;
+            };
+            let mut columns: Vec<_> = read.columns.iter().map(symbol_name).collect();
+            columns.sort();
+            symbol_name(&read.right) == name
+                && columns == key
+                && payload
+                    .iter()
+                    .any(|column| !carried[&symbol_name(&definition.name)].contains(column))
+        })
+}
+
+/// The exact hashed-bucket run token `hashed_runs` records.
+fn hashed_run() -> ir::Declaration {
+    syn::parse_quote!(
+        hashed_run = ::cq_gpu_runtime::HashedRun<_, _> { reads [exact, membership], build typed };
+    )
+}
+
+/// Record an exact hashed-bucket run (token `hashed_run`) for one-level
+/// composite scalar keys of token `hash_index`.
 /// Bucket collisions are resolved by comparing every recorded key column.
-pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn hashed_runs(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
         return Err(syn::Error::new_spanned(
             arguments,
             "hashed_runs takes no arguments",
         ));
     }
-    let analysis = ir::contract::check(source)?;
-    let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let analysis = ir::contract::check(physical, source)?;
+    let candidates = ir::physical::candidate_prefixes(physical, &analysis.physical);
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
         let Structure::Built { keyed, .. } = &mut entry.structure else {
@@ -269,8 +327,7 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         if keyed.levels.len() != 1
             || keyed.levels[0].columns.len() < 2
             || keyed.membership.is_some()
-            || !matches!(&keyed.ty, Type::Path(p) if p.qself.is_none()
-                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "HashIndex"]))
+            || keyed.provider.token != "hash_index"
         {
             continue;
         }
@@ -283,17 +340,13 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         }) {
             continue;
         }
-        if columns.iter().all(|column| {
-            let ty = ir::ungroup_type(&analysis.physical.rows[&name].types[column]);
-            matches!(ty,
-                Type::Path(p) if ["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "bool", "String"]
-                    .iter().any(|name| p.path.is_ident(name)))
-                || matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")))
-        }) && keyed.filtered.is_none() {
-            keyed.ty = syn::parse_quote!(::cq_gpu_runtime::HashedRun<_, _>);
+        // Scalar-key encoding is a Rust trait obligation, not a type-name test.
+        if keyed.filtered.is_none() {
+            keyed.provider = hashed_run().instance();
             keyed.supports = None;
         }
     }
-    ir::check_rewrite(source, &target)?;
+    target.structures.declare(&[hashed_run()])?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }

@@ -427,6 +427,170 @@ mod tests {
                 });
         }
     }
+
+    #[test]
+    fn routed_sidecars_publish_once_and_share_one_completed_filter() {
+        use cq_storage::{MergeSidecarBuilder, SidecarBuilder};
+        use cq_storage::{
+            AdaptiveMembership, BuildSidecar, BuildWithSidecar, ExactMembership,
+            IndexRead, ProjectedSidecar,
+        };
+        use cq_storage::sharded::{Index, Sharded, route_index};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Counted<'a, B> {
+            inner: B,
+            observed: &'a AtomicUsize,
+            finished: &'a AtomicUsize,
+        }
+        impl<K, B: SidecarBuilder<K>> SidecarBuilder<K> for Counted<'_, B> {
+            type Output = B::Output;
+            fn observe(&mut self, key: &K) {
+                self.observed.fetch_add(1, Ordering::Relaxed);
+                self.inner.observe(key);
+            }
+            fn finish(self) -> Self::Output {
+                self.finished.fetch_add(1, Ordering::Relaxed);
+                self.inner.finish()
+            }
+        }
+        impl<K, B: MergeSidecarBuilder<K>> MergeSidecarBuilder<K> for Counted<'_, B> {
+            fn merge(&mut self, other: Self) {
+                self.inner.merge(other.inner);
+            }
+        }
+
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for count in [1, 7, 32] {
+                        for rows in [
+                            vec![],
+                            vec![((2u64, 7u64), 3u64); 23],
+                            vec![((2, 7), 3), ((2, 8), 4), ((2, 7), 3), ((9, 7), 5)],
+                        ] {
+                            let chunks = rows.chunks(2).map(<[_]>::to_vec).collect();
+                            let router = |key: &(u64, u64), n| route_index(key, n);
+                            let parts = route_by(owned_tiles(chunks), count, |row, n| {
+                                router(&row.0, n)
+                            });
+                            let built = AtomicUsize::new(0);
+                            let consumed = AtomicUsize::new(0);
+                            let observed = AtomicUsize::new(0);
+                            let finished = AtomicUsize::new(0);
+                            let (index, filter) =
+                                Sharded::build_from_parts_with_router_and_sidecar(
+                                    &parts,
+                                    |part, builder| {
+                                        built.fetch_add(1, Ordering::Relaxed);
+                                        Index::build_with_sidecar::<true, true>(
+                                            part.iter().copied().inspect(|_| {
+                                                consumed.fetch_add(1, Ordering::Relaxed);
+                                            }),
+                                            builder,
+                                        ).0
+                                    },
+                                    router,
+                                    || Counted {
+                                        inner: ProjectedSidecar::new(
+                                            AdaptiveMembership::<u64, 64>::sidecar_builder(),
+                                            |key: &(u64, u64)| &key.1,
+                                        ),
+                                        observed: &observed,
+                                        finished: &finished,
+                                    },
+                                );
+                            assert_eq!(built.load(Ordering::Relaxed), count);
+                            assert_eq!(consumed.load(Ordering::Relaxed), rows.len());
+                            assert_eq!(observed.load(Ordering::Relaxed), rows.len());
+                            assert_eq!(finished.load(Ordering::Relaxed), 1);
+                            for key in 0..12 {
+                                assert_eq!(
+                                    filter.contains(&key),
+                                    rows.iter().any(|row| row.0.1 == key),
+                                );
+                            }
+                            let address = &filter as *const _ as usize;
+                            let answers = map_tiles(IndexedTiles::new(19, |n| n), &|_| {
+                                assert_eq!(&filter as *const _ as usize, address);
+                                let mut answer = Vec::new();
+                                for key in [(2, 7), (2, 8), (9, 7), (9, 8), (0, 0)] {
+                                    if filter.contains(&key.1) {
+                                        answer.extend((&index).lookup(&key).map(|v| (key, v)));
+                                    }
+                                }
+                                answer.sort_unstable();
+                                answer
+                            });
+                            let mut expected = rows.clone();
+                            expected.sort_unstable();
+                            assert!(answers.iter().all(|answer| *answer == expected));
+                            assert_eq!(finished.load(Ordering::Relaxed), 1);
+                        }
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn routed_runs_share_borrowed_point_and_interval_filters() {
+        use cq_storage::{Build, IndexRead, RunFilterView, SortedRun};
+        use cq_storage::sharded::{Sharded, route_index};
+
+        for count in [1, 7, 32] {
+            for rows in [
+                vec![],
+                vec![(1u64, 2u64), (1, 2), (1, 3), (9, 4), (u64::MAX, 5)],
+            ] {
+                let chunks = rows.chunks(2).map(<[_]>::to_vec).collect();
+                let parts = route_by(owned_tiles(chunks), count, |row, n| {
+                    route_index(&row.0, n)
+                });
+                let builds = std::sync::atomic::AtomicUsize::new(0);
+                let consumed = std::sync::atomic::AtomicUsize::new(0);
+                let index = Sharded::build_from_parts_with_router(
+                    &parts,
+                    |part| {
+                        builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        SortedRun::<u64, u64>::build(part.iter().copied().inspect(|_| {
+                            consumed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }))
+                    },
+                    cq_storage::sharded::FullKey,
+                );
+                let filter = RunFilterView::new(&index, |key| key);
+                assert_eq!(builds.load(std::sync::atomic::Ordering::Relaxed), count);
+                assert_eq!(consumed.load(std::sync::atomic::Ordering::Relaxed), rows.len());
+                let address = &filter as *const _ as usize;
+                let answers = map_tiles(IndexedTiles::new(17, |n| n), &|_| {
+                    assert_eq!(&filter as *const _ as usize, address);
+                    for (lo, hi) in [(0, 0), (0, 1), (2, 8), (8, 9), (10, u64::MAX), (9, 1)] {
+                        assert_eq!(
+                            filter.any_in(&lo, &hi),
+                            rows.iter().any(|&(key, _)| lo <= key && key <= hi),
+                        );
+                    }
+                    let mut answer = Vec::new();
+                    for key in [0, 1, 2, 9, u64::MAX] {
+                        assert_eq!(filter.test(&key), rows.iter().any(|row| row.0 == key));
+                        if filter.test(&key) {
+                            answer.extend((&index).lookup(&key).map(|value| (key, value)));
+                        }
+                    }
+                    answer.sort_unstable();
+                    answer
+                });
+                let mut expected = rows;
+                expected.sort_unstable();
+                assert!(answers.iter().all(|answer| *answer == expected));
+                assert_eq!(builds.load(std::sync::atomic::Ordering::Relaxed), count);
+                assert_eq!(consumed.load(std::sync::atomic::Ordering::Relaxed), expected.len());
+            }
+        }
+    }
     #[test]
     fn serial_equivalence() {
         for threads in [1, 24] {

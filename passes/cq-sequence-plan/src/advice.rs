@@ -18,11 +18,22 @@ impl Parse for Advice {
         parenthesized!(arguments in input);
         let result = match kind.to_string().as_str() {
             "store" => Self::Store(arguments.parse()?),
-            "group_without_canon" => Self::GroupWithoutCanon(arguments.parse()?),
-            "lookup_first" => Self::LookupFirst(Box::new(arguments.parse()?)),
-            "adaptive" => Self::Adaptive(arguments.parse()?),
             "key_partition" => Self::KeyPartition(arguments.parse()?),
             "store_level" => Self::StoreLevel(arguments.parse()?),
+            "retain" => {
+                let name = arguments.parse()?;
+                arguments.parse::<Token![,]>()?;
+                let rows = arguments.parse::<LitInt>()?.base10_parse()?;
+                arguments.parse::<Token![,]>()?;
+                let tile = arguments.parse::<LitInt>()?.base10_parse()?;
+                arguments.parse::<Token![,]>()?;
+                Self::Retain {
+                    name,
+                    rows,
+                    tile,
+                    minimum: arguments.parse::<LitInt>()?.base10_parse()?,
+                }
+            }
             "publish" => {
                 let name = arguments.parse()?;
                 arguments.parse::<Token![,]>()?;
@@ -83,11 +94,19 @@ impl ToTokens for Advice {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let invocation = match self {
             Self::Evidence(evidence) => quote!(#evidence),
-            Self::LookupFirst(arguments) => quote!(lookup_first(#arguments)),
             Self::Store(name) => quote!(store(#name)),
-            Self::GroupWithoutCanon(name) => quote!(group_without_canon(#name)),
             Self::StoreLevel(name) => quote!(store_level(#name)),
-            Self::Adaptive(arguments) => quote!(adaptive(#arguments)),
+            Self::Retain {
+                name,
+                rows,
+                tile,
+                minimum,
+            } => {
+                let rows = LitInt::new(&rows.to_string(), name.span());
+                let tile = LitInt::new(&tile.to_string(), name.span());
+                let minimum = LitInt::new(&minimum.to_string(), name.span());
+                quote!(retain(#name, #rows, #tile, #minimum))
+            }
             Self::KeyPartition(arguments) => quote!(key_partition(#arguments)),
             Self::Publish { name, producer } => quote!(publish(#name, #producer)),
             Self::Tile { name, n, items }
@@ -125,23 +144,30 @@ mod tests {
     fn authored_advice_is_the_serialized_planner_trace() {
         for invocation in [
             "store(result)",
-            "group_without_canon(grouped)",
             "store_level(joined)",
+            "retain(joined, 150000, 1024, 10000)",
             "publish(result, producer)",
             "tile(result, 256)",
             "partition(result, 256, items 4)",
             "segment(result, 1024, items 4)",
             "output(reserve)",
             "grade(gpu, result at host.device)",
-            "evidence { count R = 42; }",
-            "lookup_first(using Index, order [r,s,t], transfer [s], early [t])",
-            "adaptive(filtered, published, 100000)",
-            "adaptive(filtered, published, 100000, select false)",
+            "evidence from authored(\"advice parser fixture\") { count R = 42; }",
             "key_partition(grouped, published, [region, year], 8)",
             "key_partition(provider, published, [key], 8, threshold 65536)",
         ] {
             let advice: Advice = syn::parse_str(invocation).unwrap();
             assert_eq!(advice, syn::parse2(advice.to_token_stream()).unwrap());
+        }
+    }
+
+    #[test]
+    fn retired_relational_replanning_advice_is_rejected() {
+        for invocation in [
+            "lookup_first(using Index, order [r,s])",
+            "adaptive(filtered, published, 100000)",
+        ] {
+            assert!(syn::parse_str::<Advice>(invocation).is_err());
         }
     }
 }

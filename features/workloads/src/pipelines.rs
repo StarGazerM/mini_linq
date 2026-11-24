@@ -16,7 +16,6 @@ pub struct Pipeline {
     pub canon: bool,
     pub smallest: bool,
     pub lazy: bool,
-    pub ordered_dedup: bool,
     pub sorted_payload: bool,
     pub push: bool,
     pub positional: bool,
@@ -70,9 +69,6 @@ impl Pipeline {
             physical.push(quote!(::cq_rewrites::merge_joins));
         }
         let mut structures = Vec::new();
-        if self.ordered_dedup {
-            structures.push(quote!(::cq_workload_passes::ordered_dedup));
-        }
         if self.sorted_payload {
             structures.push(quote!(::cq_workload_passes::sorted_payload));
         }
@@ -81,6 +77,7 @@ impl Pipeline {
         } else {
             quote!(::mini_linq::passes::translate_pull)
         };
+        let print_input = self.push.then(|| quote!(print_input = structures;));
         let selection = self.positional.then(|| {
             let hosts = source.inputs().map(|input| &input.name);
             quote!(select = ::mini_linq::passes::select(positional(#(#hosts),*));)
@@ -90,6 +87,7 @@ impl Pipeline {
             plan = ::cq_planners::order(#arguments);
             physical = [#(#physical),*];
             structures = [#(#structures),*];
+            #print_input
             print = #printer;
         }))
     }
@@ -115,8 +113,8 @@ impl Pipeline {
         } else {
             TokenStream::new()
         };
-        let structures = match cq_structure_selection::compile_with(target, advice) {
-            Ok(structures) => structures,
+        let (physical, structures) = match cq_structure_selection::compile_with(target, advice) {
+            Ok(selected) => selected,
             Err(error) if error.to_string().ends_with(SMALLEST_LAYOUT_REJECTION) => {
                 return Ok(Some(SMALLEST_LAYOUT_REJECTION));
             }
@@ -133,7 +131,7 @@ impl Pipeline {
                 "push printer refuses ordered merge or smallest intersection",
             ));
         }
-        let analysis = cq_lang_structures::contract::check(&structures)?;
+        let analysis = cq_lang_structures::contract::check(&physical, &structures)?;
         for (result, reads) in &analysis.physical.merge_reads {
             if !analysis.host_read(result) {
                 continue;

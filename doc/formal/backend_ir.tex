@@ -7,6 +7,11 @@ one level below Structures, shared by every back end,
 and states what below it is not a level: placement is a grading on Sequence
 terms, the machine is a parameter of that grading, and each emitter is a
 translation. The level names no data structure, no algorithm and no machine.
+Sequence is an annotation over separately supplied Physical $P$ and Structures
+$S$ programs. Its printed syntax contains neither base program. Checking,
+grading, rewriting and translation receive $(P,S,Q)$ explicitly; named row
+functions and providers resolve in those bases. The private structural-proof
+cache is derived from these parameters, not stored in Sequence Analysis.
 
 \subsection{Why one level, and why this one}
 A level is justified when its denotation changes: it adds or forgets an
@@ -18,12 +23,11 @@ makes nothing else observable, so order, multiplicity before \code{canon},
 evaluation counts, sizes and placement are all the emitter's to choose. A
 parallel runtime makes positions and sizes decisions that change the
 program (which positions form the parallel domain; what must be allocated
-before it runs), and makes placement and partiality constraints on whether
-a term can run at all (where a value is visible; that device code cannot
-unwind). Positions and sizes change the objects: that is the Sequence
-level. Placement and partiality constrain terms without changing their
-values: that is a type-and-effect grading, not a level. Kernels, barriers
-and launch shapes are derived from the grading: not a level, not syntax.
+before it runs), and constrains placement by value visibility and recorded
+representation capabilities. Positions and sizes change the objects: that is
+the Sequence level. Representation and scope constrain terms without changing
+their values: that is a type-and-effect grading, not a level.
+Kernels, barriers and launch shapes are derived from the grading: not a level, not syntax.
 
 This is deliberately not progressive lowering in the MLIR sense. A pass
 takes a whole program at one level to a whole program at the next; no
@@ -43,9 +47,9 @@ forgetful maps are monad morphisms:
  \qquad \alpha\circ\mathsf{flatten}=\mathsf{join}_{\rm Bag}\circ\alpha\circ\mathrm{Seq}(\alpha),
  \quad \alpha\circ\mathsf{map}\,f=\mathrm{Bag}(f)\circ\alpha .
 \]
-The front end computes in $\bot+\mathrm{Set}$; Sequence computes in
-$\bot+\mathrm{Seq}$; the refinement obligation is that the morphism of the
-result equals the front-end value. Parallel admissibility is exactly the
+The front end computes in $\mathrm{Set}$; Sequence computes in
+$\mathrm{Seq}$ under the same pure-total Rust premises; the morphism of the
+result must equal the front-end value. Parallel admissibility is exactly the
 structure $\mathrm{Bag}$ has and $\mathrm{Seq}$ lacks: its monoid is
 commutative, so a fold over it is schedule-independent, and $\alpha$
 forgets the order a schedule imposes.
@@ -61,9 +65,9 @@ column. A \emph{space} is a shape considered on its own: a finite index set
 with lexicographic order and nesting.
 
 \subsection{Terms}
-$f$ ranges over per-position maps built from the total Physical kernels
-(rename, project, relational select, point and range reads, semi and anti
-tests over admissible keys; ST-Total). $b$ ranges over providers.
+$f$ ranges over per-position Physical maps, including unchanged Rust
+expressions under the totality premise; device execution additionally requires
+BE-RustRepresentation. $b$ ranges over providers.
 \begin{lstlisting}
 t ::= rows r                     // the positions of a retained result or host
     | map f t                    // per-position total map
@@ -77,6 +81,18 @@ t ::= rows r                     // the positions of a retained result or host
     | store t                    // materialize
     | choose [ g => t ]*         // size-guarded equal alternatives
 \end{lstlisting}
+An optional trailing packet, after evidence, records column representations:
+\begin{lstlisting}
+representation { identity [x, ...]; encoded [y, ...]; }
+\end{lstlisting}
+\code{Program.representation} and \code{Analysis.representation} contain
+\code{Representation \{ identity, encoded: BTreeSet<String> \}}. The sets
+record facts supplied by binding/codecs, not facts inferred from host types.
+Unlisted columns have unknown device representation and cannot justify
+device Rust evaluation. Rewrites may monotonically refine this packet:
+each source identity fact remains identity and each source encoded fact
+remains encoded, while an unlisted column may acquire either fact.
+The two sets remain disjoint and every listed column must exist.
 \code{tile}, \code{flatten} over known offsets, \code{lookup} over a range
 cursor and the gathers inside $f$ are \emph{views}: bijections on positions
 that change addressing and materialize nothing (Lift's layout patterns,
@@ -89,6 +105,19 @@ Machine grading adds Range obligations when a non-leaf collective needs
 indexed bucket offsets, or a distributing tile cuts the flattened bucket
 stream across executors. This distinction preserves exact routed-provider
 reads inside a whole task-local segment without weakening collective scans.
+BE-NativeBind records each checked lookup's required capability by provider,
+result reader and key, and checks only that reader's native record.
+For required capabilities membership,
+exact, range, ordered and candidates, respectively, the covering native reads
+are $\{\mathsf{membership},\mathsf{exact}\}$, $\{\mathsf{exact}\}$,
+$\{\mathsf{range},\mathsf{ordered}\}$, $\{\mathsf{ordered}\}$ and
+$\{\mathsf{candidates}\}$. Sequence keyed lookups additionally admit only
+recorded exact or membership reads; ordered merges and native range or
+candidate reads require a supported recorded fallback instead.
+Grading promotes these per-lookup requirements when it adds Range obligations;
+the checker reapplies BE-NativeBind only to those recorded lookups,
+so a native lookup promoted to Range is rejected before printing. An aggregate
+provider/key capability never strengthens another reader's requirement.
 Under BE-Alpha, constructors are lifted through outer tile levels:
 \code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
 \code{store} operate on innermost rows and preserve those outer partitions;
@@ -97,6 +126,14 @@ flatten under a tile preserves that tile. Analysis records lengths at every
 level (a tile has $\lceil L/n\rceil$ parts and at most $n$ rows per part),
 while $\alpha$ forgets all partition levels. A collaborative store can hold
 one part; a separated store publishes the concatenation of its outer parts.
+For merge admission, $\mathsf{partial}(t)$ records \emph{partition ancestry},
+not merely current nesting depth: Tile and PartitionK introduce it, and
+Flatten, aliases and ordinary row functions preserve it. A named flat Store
+published at host closes that ancestry. A merge's provider capability proves
+the provider cursor's order, not the order of an arbitrary tile of its row
+stream. Therefore neither reopening that complete cursor once per tile nor
+silently treating the tile as sorted is admissible. The existing legal
+schedule evaluates the complete merge before tiling its output.
 \begin{mathpar}
 \Rule{BE-Alpha}{}
  {\alpha(\mathsf{map}\,f\,t)=\mathrm{Bag}(f)(\alpha t)\quad
@@ -105,6 +142,19 @@ one part; a separated store publishes the concatenation of its outer parts.
 
 \Rule{BE-Bind}{}
  {\sem{\mathsf{probe}[K](l,b)}=\mathrm{supp}\,\alpha\big(\mathsf{flatten}(\mathsf{map}\,(x\mapsto x\bowtie\mathsf{lookup}_b[K]\,x)\,l)\big)}
+
+\Rule{BE-OrderedFallback}{\mathsf{host}(r)\quad\text{reader }c\text{ of }r\text{ is a merge}\quad\mathsf{fallback}(r,c)=T}
+ {\text{the ordered read of }r\text{ is typed }T\text{, not by another reader's fallback}}
+
+\Rule{BE-MergeInput}{m=\mathsf{merge}[K](l,r)\quad
+ t\text{ supplies }l\quad\mathsf{partial}(t)}
+ {\text{rejected: a merge requires its complete order-owning input boundary}}
+
+\Rule{BE-NativeBind}{\mathsf{host}(r)\quad c=\mathsf{result}(\mathsf{reader})\quad
+ \mathsf{native}(r,c,K)=(\rho,\ldots)\\
+ \rho\in\{\mathsf{exact},\mathsf{membership}\}\quad
+ \mathsf{required}(r,c,K)\sqsubseteq\rho\text{, including after grading}}
+ {\text{the lookup of }r\text{ on }K\text{ is discharged by the host; no provider or codec premise}}
 
 \Rule{BE-Partition}{\{P_k\}\text{ disjoint}\quad\textstyle\bigcup_kP_k=[0,|t|)\quad
  (\oplus,e)\text{ commutative}}
@@ -117,14 +167,41 @@ one part; a separated store publishes the concatenation of its outer parts.
  {\alpha(\mathsf{canon}\,t)=\iota(\mathrm{supp}\,B)\quad
   \mathsf{canon}(\textstyle\biguplus_kB_k)=\mathsf{canon}(\textstyle\biguplus_k\mathsf{canon}\,B_k)}
 
+\Rule{BE-CanonSort}{\alpha t=B\quad
+ \preceq\text{ is Rust Ord on the complete valuation, consistent with identity}}
+ {\alpha(\mathsf{unique}_{=}
+   (\mathsf{sortUnstable}_{\preceq}(\mathsf{collect}(t))))
+   =\iota(\mathrm{supp}\,B)}
+
+\Rule{BE-CanonOrdered}{t=\mathsf{directHostScan}(W)\quad
+ W\text{ is immutable and load-verified nondecreasing under prefix }p\\
+ x=y\Longrightarrow p(x)=p(y)\quad
+ \preceq\text{ is a total complete-row order consistent with identity}\\
+ [R_i]_i\text{ are the maximal equal-prefix runs of }W}
+ {\alpha\big(\textstyle\mathsf{concat}_i
+   \mathsf{unique}_{=}(\mathsf{sortUnstable}_{\preceq}(R_i))\big)
+   =\iota(\mathrm{supp}\,\alpha t)}
+
 \Rule{BE-Code}{\mathsf{dec}\text{ injective on }K\text{ (both sides)}\quad
  \mathsf{enc}\text{ monotone on }c}
  {\text{equality, hashing and canon on }K\text{, and order reads on }c\text{, act on codes}}
 
 \Rule{BE-Choose}{t_1,\ldots,t_n\text{ have checked equal support}\quad
- \text{guards }g_i\text{ over lengths or target-wide workers, exhaustive}}
+ \text{guards }g_i\text{ over lengths, workers or checked statistics, exhaustive}}
  {\mathsf{choose}\,[g_i\Rightarrow t_i]\text{ denotes any }t_i\text{; which runs is free}}
+
+\Rule{BE-StatsRead}{
+ r=\mathsf{reference}(s)\quad \mathsf{Store}(b)\prec\mathsf{read}(r)\quad
+ \mathsf{sameBuildLayoutDomainUnitPrecision}(r,s)\\
+ s.\mathsf{placement}=\mathsf{host}\quad
+ \mathsf{readScope}=\mathsf{host}\quad
+ s.\mathsf{unit}\ne\mathsf{codeBounds}\quad\mathsf{immediatelyFollowingElse}
+}{\mathsf{stat}(r)<n\text{ or }\mathsf{stat}(r)\ge n\text{ is advice}}
 \end{mathpar}
+A statistic guard must be immediately followed by the final \code{else} arm.
+An unavailable statistic therefore selects that arm, rather than testing any
+intervening length, worker, or statistic guard. A present value selects the
+statistic arm exactly when its comparison holds.
 BE-Bind is the Kleisli bind of Section~\ref{sec:denotation} restated: a
 probe is a flatten of per-row lookups, so a join nest is a nested flatten
 and flattening it (NESL~\cite{paper-nesl,paper-ndp-gpu}) is what removes
@@ -138,9 +215,9 @@ only the range obligations of the actual distributed execution context,
 not of unused child levels in the machine.
 A \code{flatten} or \code{fold} graded at a
 leaf level (one sequential executor) is a loop, not a collective; BE-Collective
-constrains only terms graded at a level whose members jointly evaluate them. BE-Partition is the law every schedule relies on; it
-holds for partial $f$ (one undistinguished $\bot$) but licenses no early
-stop and is stated on bags: a lost or duplicated position changes
+constrains only terms graded at a level whose members jointly evaluate them.
+BE-Partition is the law every schedule relies on; it licenses no arbitrary
+early stop and is stated on bags: a lost or duplicated position changes
 $\alpha$. BE-Canon makes per-part canon a sound prefilter that replaces
 the global boundary only when equal rows meet in one part. BE-Choose is
 incremental flattening~\cite{paper-futhark-flatten}: the right
@@ -152,6 +229,28 @@ collective participation, supplies no size evidence, and does not change
 support; a final \code{else} covers the remaining worker counts. Pull supplies
 one worker; target-hook translations receive an explicit worker expression,
 with Tasks supplying \code{rayon::current\_num\_threads()}.
+
+Canonicalization is the build of the result's canonical index, an ordinary
+index recorded by Structures (STR-Canon), not a strategy name or a
+per-element hash-insert law. Its rows provider is a \textsc{PL-Distinct}
+provider; the default \code{dedup::Sort} (sorted array), used also for
+computed heads, collects the whole stream at that boundary before
+sorting and adjacent unique (\textsc{BE-CanonSort}). Tasks realizes the sort with parallel comparison
+sorting and then an in-place adjacent-unique pass. Comparisons use Rust
+\code{Ord} on borrowed fields, including opaque user types and wide rows.
+A \code{host} reference (\textsc{BE-CanonOrdered}) consumes only a direct proof-carrying host scan: the load check
+retains the exact prefix comparison with immutable rows. No downstream
+projection, predicate, join or computed head propagates that witness.
+It proves order, never uniqueness; every equal-prefix run still requires
+complete-row sort and unique. A borrowed realization may collect row
+references without copying owned rows. Consumer membership indexes remain
+separate. CPU Datalog's \textsc{DL-InsertNew} instead admits through the
+committed canonical layout and its round-local NEW version, using the
+recorded provider's own membership and insertion operations.
+Push consumers obey the same whole-stream provider-build barrier: publication
+callbacks begin only after its input is collected and canonicalized. A push
+printer may not substitute per-element hash insertion to preserve earlier
+callback timing; that would ignore the recorded canonical index.
 
 \paragraph{Key-disjoint partitions.}
 Let $B=\alpha t$ be a bag of complete valuations $V$, $K$ a tuple of
@@ -193,9 +292,20 @@ The case $P=1$ is the identity cover $B_0=B$, with no hash routing.
 Here equalities forget enumeration order but preserve bag multiplicities;
 canon compares complete valuations, never just routing or aggregate columns.
 Provider routing projects the physically stored lookup tuple: constant-bound
-columns omitted by filtered layouts are not routing coordinates. Structures
-rejects covering join filters over provider families lacking exact key
-enumeration, including unsupported routed families.
+columns omitted by filtered layouts are not routing coordinates. Covering join
+filters require exact distinct-key enumeration through \code{Keys}; rustc checks
+this provider obligation, without a shared-compiler type-name whitelist.
+A routed provider type is installed only when its actual constructor consumes
+the recorded cover. Fused-arm providers are constructed inside each prefix-row
+invocation; their flat Sequence stores are deferred, not independent builds.
+The top-level provider rewrite therefore cannot retype these local providers:
+rewriting a deferred store would leave the real constructor unrouted.
+Native position snapshots retain their selected carrier: a partitioned Store
+cannot publish a result with a Structures Selection record. Automatic provider
+routing excludes these results, and the Sequence contract checks the recorded
+Store independently of that choice. The base Sharded provider's declared flat
+\code{Build} operation constructs the singleton cover by consuming the source
+once through its inner provider; it does not invent a multi-part routing policy.
 The group law uses the same complete-valuation canonicalization and declared
 monoids as BE-Group. Since $G\to K$, no group crosses a part boundary.
 An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup.
@@ -208,9 +318,9 @@ combines scalar partial states and always emits its single identity row.
 The checked premise is global uniqueness of complete valuations across
 all parts, not merely uniqueness within each part. It is established either
 by BE-KeyPartCanon (routing determined by the complete valuation followed
-by per-part canon), or by BE-GroupKey's proof that the original valuations
-are globally distinct. The latter permits ordinary contiguous tiles without
-canon. Raw tiles without such a uniqueness proof are rejected: per-tile
+by per-part canon), or by the checked global uniqueness of the input
+valuations. The latter permits ordinary contiguous tiles without canon.
+Raw tiles without such a uniqueness proof are rejected: per-tile
 canon alone cannot eliminate duplicates crossing tile boundaries.
 Both \code{Tile} and \code{PartitionK} may feed an unkeyed partial fold.
 A keyed \code{Tile} partial fold merges finite maps; a keyed
@@ -230,11 +340,11 @@ grade checks on every streamed operation.
 Unauthored single-use views on that spine are graded at the pool's producer
 along with the streamed work; moving only the Group would leave illegal
 unstored host references. Authored grades and stored boundaries are preserved.
-An opaque pipeline instead publishes \code{parts = store tile N t} at host,
-then a pool-graded partial Group consumes that ancestor-stored nested cover.
-Every opaque operation remains host-owned, with unchanged expression and
-domain order; no totality assertion is introduced. This is an ordinary explicit
-parts publication, not a claim of bounded-memory or incremental execution.
+A pipeline lacking a descendant representation instead publishes
+\code{parts = store tile N t} at host, then a pool-graded partial Group
+consumes that ancestor-stored nested cover. Rust payloads remain unchanged;
+host ownership follows representation facts, never a partiality distinction.
+This is an explicit parts publication, not bounded-memory execution.
 The provider law concerns exact point buckets (and hence membership), with
 the same routing function and partition count at build and lookup. It does
 not license a range lookup spanning several routing keys to read one part,
@@ -255,7 +365,31 @@ through \code{lookup} and the term records only what the read requires:
 exact bucket, contiguous range (rangeCursor), membership, order. Its type
 is an opaque token discharged by runtime traits, as Structures does today
 (STR-Key, STR-SortedRun); the same holds for codecs (BE-Code's premises
-are trait obligations, like Leibniz admissibility) and for \code{canon}.
+are trait obligations, like Leibniz admissibility). A codec obligation
+records \code{codec\_id: Option<CodecId>} from Structures input columns,
+looked up by the column's recorded \code{LogicalTypeId}, with \code{None}
+denoting identity encoding. Declaration boundaries intern missing logical
+and codec ids once by opaque spelling; automatic equal spellings share an id,
+while explicitly different ids remain distinct. Source/provider logical-id
+mismatches and conflicting codec ids for one logical id are rejected even
+when type spellings agree. Sparse row \code{logical\_type\_ids} carry declared
+identities, including declared Physical result identities for computed outputs;
+computed opaque types without a declaration remain unknown. Logical and codec
+types are printing payloads, never lookup keys after interning.
+GPU Value captures retain \code{codec\_id: Option<CodecId>} independently of
+their printing payload. The checker compares ids for identity and requires the
+payload to equal the selected declaration, preventing a different printed
+implementation from being substituted under an unchanged id.
+Canonicalization instead
+records the checked canonical reference (a \textsc{PL-Distinct} rows provider,
+an existence-only Built index, or the host carrier), or for the returned
+answer its recorded identity index, and grading records the boundary's level;
+runtime order laws remain premises.
+Whole-relation access is a separate checked Structures fact
+(\code{ReadAccess::Whole}), not a keyed provider capability. An empty-key
+lookup consumes that fact and has exact read semantics without a keyed
+provider obligation. Pull, sequence-pull and push printers dispatch on the
+recorded access (\code{Access::Rows}); they do not classify empty keys.
 
 \subsection{Placement: a grading over a machine parameter}
 \begin{definition}[Machine model]
@@ -265,6 +399,11 @@ A finite tree of \emph{levels} $\ell$, each labelled: \emph{collaborative}
 at a common ancestor, at a boundary); scheduling static or dynamic; and a
 failure channel to the root. The root is $\mathsf{host}$.
 \end{definition}
+Each \code{LevelNode} also records \code{host\_rust: bool}: true for host and
+CPU task execution, false for GPU device/block/lane execution. At a level
+without host Rust support, a Rust expression requires the recorded identity
+representation of every read column; unknown or encoded reads stay at host.
+This machine capability is separate from separation or collaboration.
 \begin{center}
 \begin{tabular}{@{}p{0.16\linewidth}p{0.4\linewidth}p{0.2\linewidth}p{0.16\linewidth}@{}}
 \toprule
@@ -295,38 +434,71 @@ GPU instance of the grade.
 \Rule{BE-Separate}{\ell_1,\ell_2\text{ separated siblings}}
  {\text{they exchange only through a store at a common ancestor; nothing else is observable across them}}
 
-\Rule{BE-Length}{\mathsf{store}\,t\text{ at a separated level (host stores need no bound)}}
- {|t|\text{ is in its type before the write (a scan), or a capacity with an overflow flag}}
+\Rule{BE-Length}{d=\mathsf{store}\,t\text{ at a separated level}\quad
+ \mathsf{checkedLen}(d)\ne\mathsf{Unknown}(\varnothing)\ \lor\
+ t\text{ names a completed host producer}}
+ {|t|\text{ is available before the write, or bounded with an overflow flag}}
 
 \Rule{BE-Publication}{d=\mathsf{store}\,t\quad t\text{ has checked provenance and consumers}}
  {\mathsf{publication}(d)\in\{\mathsf{BorrowHost},\mathsf{Alias},\mathsf{OwnRows},\mathsf{DeferredRows},\mathsf{Parts}\}}
 
+\Rule{BE-TaskProducer}{t\text{ checked}\quad i=(\text{definition},\text{constructor preorder})}
+ {\mathsf{producers}(t)=\text{distributing Tile identities reachable through row inputs and Ref}}
+
+\Rule{BE-CarrierPublication}{t\text{ checked}\quad i=\mathsf{id}(t)}
+ {\mathsf{carrier}(i)=\mathsf{TileInput}\text{ if no host borrow exists, or }\mathsf{Choice}\text{ for runtime choice}}
+
 \Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
  {\text{is one unit of dispatch (a kernel, a task); its domain is the outer stored space; derived, not written}}
 
-\Rule{BE-Partial}{\text{opaque Rust }e}
- {e\text{ runs at }\mathsf{host}\text{ only: closed }e\text{ once before dispatch (IF-Parameter); row-dependent }e\text{ never below host}}
+\Rule{BE-RustRepresentation}{\fv(e)\cap Q=C\quad
+ \forall c\in C.\ \mathsf{deviceRepresentation}(c)=\mathsf{identity}\\
+ \mathsf{otherInputs}(e)\text{ are closed captures}}
+ {e\text{ may run on device, emitted verbatim and compiled by cuda-oxide}}
+Representation facts enable placement; they do not themselves establish
+codec correctness. Their correctness is the binder's GPU-Representation
+obligation. BE-RustRepresentation admits monotone target refinements of
+these facts, never removal or an identity/encoded flip.
 
 \Rule{BE-Abort}{\bot\text{ raised below }\mathsf{host}}
  {\text{a once-set flag on the failure channel, mapped to }\bot\text{ at the next host boundary; no truncated success}}
 
 \Rule{BE-Resource}{d\text{ a checked dispatch at }\ell\quad
+ \mathsf{shape}(d)\text{ consumes recorded publication refinement}\quad
  \mathsf{layout}_M(\mathsf{shape}(d))\le\mathsf{capacity}_M(\ell)}
  {\text{the dispatch fits the bounded resource of its machine level}}
 \end{mathpar}
 The resource shape records every branch, payload lookup, live parent column
 with its checked type and codec facts, fold, tile and item count. Byte layout
 and alignment belong to the target-supplied machine, not to the language.
+Payload carriers consume the shared Structures carried-column demand, including
+canonical valuations, built keys, filtered payloads, native keyed-read layouts
+and backward consumer demand; Sequence does not repeat that DAG analysis.
+A printer carries exactly the recorded live parent columns across each payload
+lookup; it does not recompute their liveness from generated code.
+BE-Publication's ordinary owned-row publication stores expanded rows.
+A terminal lookup does not by itself denote a deferred range: that
+representation requires the explicit GPU-Launch refinement and a supported
+contiguous-range provider. Without that record (including machines with no
+GPU refinement), BE-Resource charges the lookup's live-parent payload scratch.
+A later read of any completed publication does not charge its producer's
+scratch again. This keeps the generic machine's expansion costs distinct
+from the GPU's recorded deferred-range execution.
 An unbounded level imposes no capacity premise. A bounded level without a
 layout model, arithmetic overflow, or an oversized layout is rejected before
 translation, including for explicitly advised programs. Resource recovery
 enumerates checked alternatives in fixed order: nested inner-flatten
 segmentation at preferred geometry, smaller item counts, then smaller strips
 derived by halving the machine width. Only after these fail may it add
-dispatch-splitting publications. Every candidate satisfies all grading and
-catalog premises, including BE-Resource; PL-Cost compares the legal segmented
-and plain schedules at the first feasible geometry. If none fits, rejection
-retains all diagnostics from every attempted candidate.
+dispatch-splitting publications. On machines without a resource-layout model,
+a final alternative leaves decomposition untiled and places all unauthored
+work at host; it preserves explicit grades and tiles and must satisfy grading and catalog
+premises. In particular, a failed partial Merge schedule does not make a
+well-formed default program unplannable when its complete host execution is
+admissible. Every candidate satisfies all grading and catalog premises,
+including BE-Resource; PL-Cost compares the legal segmented and plain
+schedules at the first feasible geometry. If none fits, rejection retains
+all diagnostics from every attempted candidate.
 
 The laws mention only labels of the machine parameter. A term that uses a
 collective at a level the target marks separated is rejected for that
@@ -334,9 +506,12 @@ target, not reinterpreted. BE-Boundary derives kernels (GPU) and tasks
 (Rayon) from the grading: the domain of a dispatch is the type of its outer
 stored space, which replaces the current printer's
 \code{driver.len.div\_ceil(1024)}; storing the H05 Customer level as
-offsets makes the next dispatch span every customer. Written order has no
-force below host: nothing partial is there (BE-Partial), so inside a
-dispatch the full set algebra applies.
+offsets makes the next dispatch span every customer. All admitted Rust is
+total by premise. Row-dependent Rust lacking BE-RustRepresentation runs at
+host; closed operands evaluate once at host (IF-Parameter). Codec-encoded
+comparisons use explicit relational predicates and host-encoded operands,
+not a rewritten Rust expression. No type-name whitelist establishes device
+eligibility; sizes and encodings come from recorded provider/codec facts.
 A store at a separated level is publication: a depth-zero producer is one
 part at its unique child. Its outermost tile in dataflow order distributes parts over that
 child; further tiles in the same definition strip-mine jointly at the
@@ -402,11 +577,11 @@ retained-row traffic $B$, not another row-expression evaluation or a unit of
 compute span. Provider insertions continue to contribute work and span.
 Borrow and alias publication add no traffic. Thus being consumed by a key
 partition is not a free-store rule.
-The native routed-provider representation records the inner provider of the
-canonical \code{cq\_storage::sharded::Sharded} ABI. Before emission, checking
-validates its type arguments and proves every routing column belongs to the
-stored outer key, after constant elision. An unrelated type with the same
-last identifier has no routed interpretation.
+The native routed-provider representation is the recorded inner instance of a
+provider whose token declares \code{routed} (STR-Routed). Before emission,
+checking proves every routing column belongs to the
+stored outer key, after constant elision. No type spelling, path or last
+identifier gives a provider a routed interpretation.
 
 The \(\mathsf{DeferredRows}(c)\) refinement is checked Store-consumer fusion,
 not a global lazy interpretation of \code{store}. It applies only to a staged
@@ -437,9 +612,42 @@ publication record, and the interpreter may not infer a new scheduling guard.
 \subsection{Decomposition}
 A planner is an advice generator, not another interpretation of Sequence.
 Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
-$K$ of target-supplied provider, codec and canon tokens with capabilities
-and admissible levels. The catalog is data: shared planning and checking
-do not depend on a target implementation. A successful result is a graded
+$K$ of target-supplied provider token declarations (including \code{Distinct} canonical rows providers),
+entries keyed by token id with admissible levels, and codec tokens keyed by
+\code{codec\_id: Option<CodecId>} (\code{None} is identity).
+A single catalog codec token must match the obligation's recorded id,
+required ordering and every graded level; the codec type is only printed.
+Canon obligations are discharged only at their recorded level through their
+recorded token; a missing token or level is unmet.
+Builtin syntactic \code{Dense} codec tokens are absent: they cannot authorize
+arbitrary declaration-local ids. Custom codecs require explicit tokens.
+The GPU \code{decompose} adapter optionally accepts
+\code{codecs [CodecToken \{ codec\_id: Some(0), codec: Some(Type), ordered: true, levels: [[host], [host, device]] \}]}.
+The fields occur in the order shown: \code{codec\_id} is \code{Some(u32)} or
+\code{None}; \code{codec} is \code{Some(Type)} or \code{None} (identity pairs
+both fields as \code{None}); \code{ordered} is a Boolean; and \code{levels}
+lists explicit level paths. These tokens extend the target catalog; omitted
+arguments add no tokens. No codec capability is inferred from an input schema
+or a Rust type spelling.
+The 26-output DOOP pipeline records \code{DoopSymbols} as codec id 0 in its
+storage declaration and explicitly supplies that id's ordered catalog token
+at host, device, block and lane levels. The integer-only SRD DOOP pipeline
+uses the identity codec instead; a symbol type spelling grants no admission.
+Closed answer captures are absent from Physical row layouts, but their
+authored answer slots still supply logical identities. GPU codec lookup uses
+those ids when recording capture carriers and arena metadata; it never treats
+the logical symbol type as an identity scalar merely because no row binds it.
+GPU publication provider-build records also name the exact device-layout
+indices they construct. The checker requires every non-host layout exactly
+once in order; host-only layouts retain their host construction. Printers
+consume the recorded indices and never rebuild a host provider from device rows.
+GPU realization records \code{whole\_lookups} for complete-relation lookup
+operands. Checking requires exactly the zero-key reads of the Sequence term;
+printing resolves the recorded whole-relation access to its source or completed
+publication, without requiring or constructing an empty-key index.
+The catalog is data: shared planning and checking
+do not depend on a target implementation, and no rule reads a provider's Rust
+spelling. A successful result is a graded
 program together with a replayable trace of the existing Sequence rewrites.
 Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
 \begin{mathpar}
@@ -455,29 +663,76 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
   \text{candidate and catalog order fixed}}
  {\mathsf{plan}(t,M,K)\text{ has one result (or one rejection)}}
 
+\Rule{PL-Catalog}{\mathsf{decl}_t(x)\text{ and }\mathsf{decl}_K(x)\text{ defined}}
+ {\mathsf{decl}_t(x)=\mathsf{decl}_K(x)\quad
+  \mathsf{levels}_K(p)=\mathsf{levels}(k)\text{ for an entry }k\in K\text{ covering }p\text{ (same token; listed inner tokens equal, an unlisted inner any)}}
+
 \Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
- e\in\mathsf{Structures}(s')\quad
- k=\mathsf{first}\{k\in K\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
- \ \mathsf{levels}(k)\ne\varnothing,\
- \mathsf{elements}(e)\subseteq\mathsf{acceptedElements}(k)\}}
+ e\in\mathsf{Structures}(s')\quad K_e=\mathsf{stablePartition}(K,\mathsf{tokens}(k)=\mathsf{tokens}(e))\quad
+ k=\mathsf{first}\{k\in K_e\mid \mathsf{needs}(e)\subseteq\mathsf{facts}(k).\mathsf{reads},
+ \ \mathsf{suppliesLiveSupport}(k,e),\
+ (\mathsf{canon}(e)\Rightarrow\mathsf{facts}(k).\mathsf{packedBits}=\bot),\
+ (\mathsf{selection}(e)\Rightarrow\mathsf{tokens}(k)=\mathsf{tokens}(e)),\
+ \mathsf{levels}(k)\ne\varnothing\}}
  {\mathsf{select}(s,K):\
- e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
+ e.\mathsf{provider}\gets k\ (\text{recorded spelling kept iff }\mathsf{tokens}(k)=\mathsf{tokens}(e))\quad\text{by checked retention, index construction and retype}}
+
+\Rule{PL-Distinct}{\mathsf{Distinct}\in\mathsf{facts}(P).\mathsf{reads}\quad t\text{ any row stream}}
+ {\alpha(\mathsf{build}_P\,t)=\iota(\mathrm{supp}\,\alpha t)\quad
+  \mathsf{scan}_P\text{ reads each stored row once}}
+
+\Rule{PL-Resident}{\mathsf{hostRead}(p)\quad \exists\ell\in\mathsf{reads}(p).\ |\ell|>1}
+ {\mathsf{admit}(p,k)\Longrightarrow
+  \mathsf{Resident}\in\mathsf{facts}(k).\mathsf{reads}\ \land\
+  \mathsf{tokens}(p)=\mathsf{tokens}(k)\ \land\
+  \mathsf{needs}(p)\subseteq\mathsf{facts}(k).\mathsf{reads}\ \land\
+  \mathsf{reads}(p)\subseteq\mathsf{levels}(k)}
+
+\Rule{PL-GroupPartial}{g=\operatorname{group}(r,\ldots)\in D_{\mathrm{Physical}}
+ \quad \neg\mathsf{canon}_{\mathrm{Physical}}(r)}
+ {\mathsf{considerContiguousPartial}(g)}
 
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
-  \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
+ \mathsf{groupMode}(c)=\mathsf{Analysis}(c).\mathsf{partialGroups}\quad
+ \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
  {c^*=\mathsf{foldl}\bigl(
    (a,b)\mapsto\text{if }\kappa(b)\prec\kappa(a)\text{ then }b\text{ else }a,
    c_1,(c_2,\ldots,c_k)\bigr)}
 \end{mathpar}
+BE-Length consumes the structural checker's recorded store length, never a
+second syntactic size analysis. A reference to a completed store with an
+unknown construction length has the runtime length of that publication.
+Maps preserve their input length; choices join the checked lengths of their
+arms. Host stores may grow, and a completed host producer supplies its length
+before downward publication.
+Group work and host merge costs consume the constructor-preorder mode in
+\code{Analysis.partial\_groups}; layer geometry does not choose execution mode.
 Catalog levels describe where a provider may be read, not where its owner is
 constructed. Building an index from host rows does not certify a host read.
 Placement must select a supported read level; authored unsupported grades are
 rejected rather than silently reinterpreted.
+Positional \code{Selection} entries retain their recorded constructor token
+and concrete spelling. Their \code{from\_positions} construction contract is
+not a generic \code{Membership} read obligation; a membership-capable hash
+index cannot replace it. PL-Select rejects an absent constructor token rather
+than falling back to catalog order, and PL-Catalog independently checks that
+the recorded constructor remains admitted even when selection is skipped.
+The explicit \(\mathsf{Resident}\) catalog capability certifies that a native
+input handle already denotes immutable target-resident storage. It permits
+that handle's recorded descendant reads without constructing a host fallback
+index. It is not inferred from a Rust type name, a range capability, or the
+presence of device levels. Ordinary pipe-host adapters still require retention;
+resident tokens must also satisfy every type, element, read and level obligation.
+Placement predicts every candidate read level with this same admission; it
+applies no stricter host-handle rule. A resident handle read (for example a
+full-key membership) whose consumer is opaque host Rust is therefore stored at
+its admitted descendant level and published to host, not left at host where
+no token admits it.
 
 PL-Closure inherits its value laws from BE-* and the Sequence extension
 rewrites; it adds no new equality of values. PL-Precedence preserves
-authored grades, tiles, stores, choices, output protocols and codec/canon
-tokens: planning fills missing decisions rather than optimizing them away.
+authored grades, tiles, stores, choices, output protocols, codecs and canon
+strategies: planning fills missing decisions rather than optimizing them away.
 PL-Det includes rejection when no catalog token satisfies a recorded
 obligation. PL-Cost uses the work and span of the preceding Cost paragraph,
 not a semantic preference. Here $\prec$ is provable strict lexicographic
@@ -489,10 +744,16 @@ An inversion is a Lookup evaluated after an upstream Expand in the same
 pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
-For a BE-GroupKey-proven keyed group, both contiguous partial-map folding
-and group-key routing remain candidates. The former is enumerated first,
-then the native schedule and routed alternatives; cardinality uncertainty
-uses the same stable incomparability rule, not a query-specific estimate.
+Contiguous partial folding is considered only under PL-GroupPartial: Physical
+records no canon on the group's input. Otherwise the automatic group candidate
+retains key routing, so canonicalization can execute inside key-disjoint parts
+instead of publishing a global canonical stream before task-local groups.
+This consumes Physical's recorded boundary, without repeating uniqueness
+analysis or changing its canonicalization decision. Explicit authored partial
+schedules remain governed by BE-GroupPartial, not by this candidate policy.
+Eligible partial candidates are enumerated first, then the native schedule
+and routed alternatives; cardinality uncertainty uses the same stable
+incomparability rule, not a query-specific estimate.
 Partial folding owns one accumulator map per machine scheduler partition,
 not per logical tile. Its fold span uses that scheduler width. Host merge
 adds serial dependency span for up to $P\,|G|$ partial aggregate states,
@@ -590,8 +851,8 @@ strict improvement replaces the earlier candidate, preserving stable ties.
 Dispatch splitting is a last resort, never a substitute for an admissible
 single-dispatch segmentation. All tiers retain authored tiles, grades and stores.
 
-A planning invocation may reuse a structural proof only for an equal complete
-Structures prefix and equal Sequence and evidence syntax. Machine grading is
+A planning invocation may reuse a structural proof only for equal complete
+Physical and Structures programs and equal Sequence and evidence syntax. Machine grading is
 checked separately for every requested grade. The join-support certificate
 interns relation and column names into invocation-local integer identities;
 its cache keys retain the complete ordered graph, headings and query atoms.
@@ -600,15 +861,30 @@ remain the source of spans and opaque Rust equality; proof comparison does
 not require rendering those trees to token strings.
 
 PL-Select is an explicit Structures selection operation before decomposition,
-not an implicit override by PL-Precedence. It visits built indexes, sets,
-row buffers and canon providers in recorded entry order, selecting the first
-catalog token satisfying all reads of that entry; host scan adapters are unchanged.
+not an implicit override by PL-Precedence. It visits built indexes, sets
+and row buffers in recorded entry order. Provider catalog order is explicitly
+stable-partitioned per entry: tokens matching its recorded representation
+precede all other tokens, retaining catalog order within both classes.
+The first eligible token wins. This preserves admitted native keyed ABIs
+instead of replacing them with generic row providers.
+Eligibility includes the live support obligations of built indexes, not just
+read capabilities: declared Expand may discharge required Retain. Unused
+support may change, but selected witnesses and filters must remain supported.
+Canonical row selection requires Distinct and skips providers declaring
+\code{packed\_bits}; packed bounds are runtime codec facts, not facts inferred
+from Rust types. Provider and support records are replaced together.
+Sort may record an
+explicit \code{using Type} device sort/unique implementation selected by the
+catalog; this refinement preserves Sort and never replaces Ordered with Sort.
+The old dedup-provider retype selector is removed. Host scan adapters are unchanged.
 Unsupported integral keyed host stream reads first use the checked Physical
 \code{build\_host\_reads} retention rewrite, then receive a built index
 checked by Structures. Obsolete keyed host fallback entries are removed;
 the original host scan adapters remain unchanged. A built index supplies
 the keyed obligation rather than claiming that column encoding supplies
 an unavailable provider capability.
+Its macro entry point uses this retention correspondence, not the strict
+Structures rewrite correspondence that requires identical Physical trees.
 Structures has no machine grading, so selection requires host publication.
 Later Sequence planning validates every actual execution level.
 Provider tokens may restrict scalar row element types; an omitted restriction
@@ -626,9 +902,12 @@ their keyed fallbacks replaced by built indexes. The dedicated
 \code{check\_retention\_rewrite} checks both endpoints and the Physical
 rewrite contract, requiring identical non-mode Physical syntax and order,
 original host scans, existing key layouts and canonical boundaries.
-Provider, retained-row, membership-state and canon implementation types
-may change. Ordinary Structures rewrites still require exact Physical
-syntax; neither boundary permits replacing an opaque reader or predicate.
+Provider, retained-row and membership-state types may change, including a
+canonical rows provider retyped to another \code{Distinct} provider. The
+canonical reference itself is preserved, particularly the host reference's
+verified-carrier requirement.
+Ordinary Structures rewrites still require exact Physical syntax; neither
+boundary permits replacing an opaque reader or predicate.
 When catalog selection follows Sequence lowering, each newly retained
 rename also receives an explicit Sequence store, so its provider is built
 before lookup emission. Native provider preservation matches result and
@@ -636,20 +915,27 @@ key layout, not entry position: retention removes fallback entries and
 appends indexes, changing their positions.
 The native Tasks target preserves retained row-buffer types separately:
 replayable rows use the row collection ABI, not a keyed range-provider family.
-Catalog retyping also composes with a subsequent checked join reexpression.
-The endpoint proof compares surviving storage layouts modulo implementation
-types, while separately proving relational support, opaque evaluation order
-and exact host-reader syntax. It does not require the composite Physical
-change to fit the narrower mode-only retention certificate.
-Placement propagates opaque evaluation and its unstored feeds to host before
-assigning descendant work. String-literal predicates and operations reading
-or producing String-bearing rows likewise stay host through the projection
-that publishes a numeric-only row. Independent named union arms with distinct stored
-domains are published separately, then concatenated at host; neither rule
-weakens BE-Partial or BE-Boundary.
-An already-checked Sequence store cuts opaque Physical provenance, including
-for lookup providers: descendant reads consume the materialized rows rather
-than re-evaluating the host guard. This requires no asserted totality marker.
+Sequence rewrites preserve the Physical and Structures programs unless the complete change
+has the checked catalog-retention certificate above. In particular,
+equivalent relational support does not authorize reordering Physical joins.
+\begin{mathpar}
+\Rule{BE-PhysicalPreserved}
+ {(P',S')=(P,S)\ \lor\ \mathsf{checkedRetention}(P,S;P',S')}
+ {\mathsf{SequenceRewrite}(P,S,t;P',S',t')\text{ may proceed to the final-support check}}
+\end{mathpar}
+Placement propagates unavailable device representations and their unstored
+feeds to host. A Rust expression may read only identity-represented device
+columns, with other inputs supplied by closed captures; encoded columns use
+relational predicates. Independent named union arms with distinct stored
+domains are published separately, then concatenated at host. Unary consumers,
+including the canonicalization enclosing a lowered set union, do not merge
+its driver domains: placement finds the union beneath those consumers and
+keeps them at host. Distinct relation occurrences remain distinct spaces even
+when their source relation and projected values agree. Neither rule
+weakens BE-RustRepresentation or BE-Boundary.
+An already-checked Sequence store cuts producer provenance, including for
+lookup providers: descendant reads consume materialized rows rather than
+re-evaluating the host expression.
 Guard-result carriers project away columns absent from the checked downstream
 required-column set. The guard still receives its complete required input;
 this representation projection happens after evaluation and does not change
@@ -679,8 +965,9 @@ protocols are filled: count when the final length depends only on input
 lengths, otherwise reserve; a bounded protocol requires an authored
 capacity. Reported provider, canon and codec obligations are validated
 against catalog capabilities at their levels. Structures already records
-provider and canon types; planning does not replace them or add selection
-syntax. Codec laws remain abstract runtime premises; planning validates
+provider types and canonical references; a canonical rows provider must carry
+the \code{Distinct} capability. Catalog support may retype that provider without changing the reference.
+Codec laws remain abstract runtime premises; planning validates
 catalog support, not those laws. Every proposed rewrite and the resulting
 grade are checked; no emitter decision is introduced.
 
@@ -710,10 +997,31 @@ grading, lengths and views.
   \mathsf{map}/\mathsf{compact}\mapsto\text{the Physical row function},\
   \mathsf{lookup}\mapsto\text{the recorded capability},\
   \mathsf{flatten}\mapsto\text{iterator concatenation},\
-  \mathsf{tile}/\mathsf{choose}\mapsto\text{identity (one part, else arm)},\
-  \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the recorded provider},\
+  \mathsf{tile}\mapsto\text{contiguous groups},\
+  \mathsf{choose}\mapsto\text{else arm unless a worker guard requires first-match evaluation},\
+  \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the canonical provider's build},\
   \mathsf{store}\mapsto\text{intermediate }\code{Vec}\text{ or final count iterator}}
 \end{mathpar}
+BE-TaskProducer records stable producer identities; an active producer is
+consumed exactly once by its join. Ref and lifted adapters preserve those
+identities irrespective of generated Rust names. BE-CarrierPublication extends
+BE-Publication to translation carrier storage: a non-borrowable task driver
+retains its input once, and a runtime choice runs only its selected arm.
+Choices use allocation-free sum iterators at every dimension, preserving part
+boundaries without collecting the selected stream. Owners of recorded selections,
+retained rows, indices, filters and keysets are declared in the enclosing scope
+with distinct identities per arm and initialized only inside the selected branch;
+the arm's iterator borrows that enclosing storage. Nested choices share the same
+owner scope. Profiled target-hook evaluation uses inline timing guards, so owner
+declarations and their deferred initialization stay in that same lexical scope;
+no timing closure captures an uninitialized owner. Binding sites carry ownership
+explicitly, without inspecting emitted Rust syntax or provider types. These
+records are printable analysis.
+Only retained driver inputs contribute symbolic carrier-copy traffic to cost;
+summing conditional publications gives a conservative bound, not a claim that
+unselected arms execute. Ordinary pull erases choices without worker or statistic
+guards to Else, permitted by BE-Choose's equal-support premise; worker/statistic
+guarded pull and target hooks evaluate first-match guards (pull has one worker).
 The host-only translation leaves the final store with \code{output count}
 as a lazy pull iterator (BK-Dual); it does not collect the output into a
 \code{Vec}. Intermediate stores materialize, and rows escaping block-local
@@ -724,13 +1032,14 @@ propagates Rust failure by unwinding.
 
 \subsection{Passes}
 \begin{mathpar}
-\Rule{L-Sequence}{s\text{ checked Structures}}
- {\mathsf{lower}(s):\ \text{host rename}\mapsto\mathsf{rows};\
+\Rule{L-Sequence}{P,S\text{ checked Physical and Structures}}
+ {\mathsf{lower}(P,S):\ \text{host rename}\mapsto\mathsf{rows};\
   \text{unary step}\mapsto\mathsf{map}/\mathsf{compact};\
   \text{probe, merge}\mapsto\mathsf{flatten}(\mathsf{lookup});\
   \text{semi, anti}\mapsto\mathsf{compact}(\mathsf{lookup}_{\rm membership});\
   \text{union}\mapsto\mathsf{union};\
-  \text{let}\mapsto\mathsf{store};\ \text{canon}\mapsto\mathsf{canon};\
+  \text{let}\mapsto\mathsf{store}\ (\text{except a canon let whose rows record moves by value, STR-RowsByValue});\
+  \text{canon}\mapsto\mathsf{canon};\
   \text{return}\mapsto\mathsf{store}\text{ with }\mathsf{output}\ \mathsf{count};\ \text{no tile, no grade}}
 \end{mathpar}
 The checker re-derives this construction and compares it structurally.
@@ -762,7 +1071,9 @@ construction-based support equality:
 
 \Rule{EXT-SeqChoose}{a,b\text{ have checked equal support}\quad\text{guards exhaustive}}{d:=\mathsf{choose}[g\Rightarrow a,\ \mathsf{else}\Rightarrow b]\quad\text{(BE-Choose)}}
 
-\Rule{EXT-SeqOutput}{p\in\{\mathsf{count},\mathsf{reserve},\mathsf{bounded}\}\quad p=\mathsf{bounded}\Rightarrow\text{capacity declared}}{\mathsf{output}:=p}
+\Rule{EXT-SeqOutput}{p\in\{\mathsf{count},\mathsf{reserve},\mathsf{reserve\_previous},\mathsf{bounded}\}\quad p=\mathsf{bounded}\Rightarrow\text{capacity declared}}{\mathsf{output}:=p}
+
+\Rule{EXT-SeqRoots}{\text{every definition precedes }\mathsf{roots}}{\mathsf{roots}:=\mathsf{spread}\text{; the construction and its support are unchanged}}
 
 \Rule{EXT-SeqGrade}{\text{machine }M\text{ named}\quad\text{placements }d_i\ \mathsf{at}\ \ell_i}{\mathsf{graded}\ M\{\ldots\}\text{ extended; the construction is unchanged}}
 \end{mathpar}
@@ -779,102 +1090,108 @@ them. A stored filtered relation with an indexed provider carries the
 forward phase across a publication boundary. No additional Sequence
 constructor is introduced.
 
-The join graph is extracted from checked Physical dependencies, using
-shared attribute equivalence classes as edge weights. LargestRoot constructs
-a maximum-weight spanning tree, rooted at the largest relation according to
-available count evidence \cite[Section~3.1, Lemma~3.2]{paper-rpt}.
-Unknown sizes retain deterministic syntax order, not invented cardinalities.
-A projected index need not forbid its relation from becoming this root.
-When its unfrozen Physical producer is a rename or a selection (including
-point and range), and every consumer belongs to the replaced join region,
-the rewrite can recover that producer's full-row stream using its existing
-scan adapters. It removes the now-unread projected index and rebuilds any
-opposite-side provider through the same catalog selection. It does not scan
-or reinterpret the projected payload. Independently consumed, frozen and
-union index producers retain their representation and remain ineligible for
-this recovery. Structures liveness and the full support certificate are
-checked again after the orientation change.
-Among equally weighted parents the deepest parent wins, the chaining
-forward-tree tie-break of ATP \cite[Section~3]{paper-rpt-plus}.
-The forward phase retains predicate-bearing relations and bridge relations,
-filtering before building the next provider. This restricted transfer
-heuristic does not claim full semijoin reduction without its premises.
-The scan root retains its authored streaming mode unless a keyed consumer
-or displaced native keyed adapter requires retention. Replacing a merge
-under the same consumer name records a retained-row transition before
-removing that root's ordered host reader; it cannot silently discard an
-authored adapter while leaving the root a pipe. Root forward filters also stream: each has exactly
-one consumer and never supplies a keyed child provider. Nonroot forward
-filters remain retained for those provider builds. Resource decomposition
-may subsequently introduce checked publications. Along a positive left spine, an existing
-join or semijoin against the same named provider on all requested keys already
-witnesses membership. The scheduler omits a repeated forward or Lookup filter
-there, without dropping the later Expand. This local optimization stops at
-opaque operators and never uses estimated keys, counts or selectivities as
-proof. The complete rewritten construction still satisfies
-\textsc{EXT-SeqLookup}.
-If eliminating witnessed Lookups leaves the complete Physical program
-unchanged, this ordering pass returns the original checked Sequence and
-Structures verbatim. It does not use a no-op ordering decision to prune or
-replace authored provider entries: representation-only rewrites remain
-outside the join-reexpression certificate.
-Provider reconstruction preserves \textsc{STR-Range}: only stream-key demands
-justify a built keyed structure. Constant point and range demands keep their
-direct or retained-row scan/filter path, including shared prefixes of union
-arms; retaining a result does not turn those demands into stream probes.
+Join order, Lookup/Expand order and relational filtering are recorded by
+upstream planning, not rediscovered from Physical dependencies by Sequence.
+Decomposition preserves that construction and chooses checked execution shape.
+Author-supplied \code{choose} advice and key-partition alternatives remain
+governed by \textsc{BE-Choose}; they do not authorize automatic relational
+replanning or optional-filter discovery.
 
-Expands are placed at the first consumer requiring the payload.
-Cycle-closing lookups wait for the Expands that supply their keys
-\cite[Section~4.2]{paper-diamond}; a spanning tree of a cyclic graph is
-not asserted to be a join tree. In the acyclic case, tree-connected
-subjoins satisfy the SafeSubjoin criterion
-\cite[Section~3.2]{paper-rpt}. Evidence may prefer early Expand or a
-different Lookup order but is never used to delete a required join.
-Opaque Rust nodes remain pinned to their written Before domains.
-A provider requiring another key layout may name a fresh retained identity
-projection after that pinned prefix. Keeping the complete checked input
-heading preserves support and positions; the support certificate treats only
-such full-heading projections as transparent aliases. Other projections
-remain opaque certificate nodes. Each provider name then has one recorded
-layout, without requiring an interpreter to choose among layouts.
-In particular, a predicate-bearing leaf is authored by putting its
-predicate after that atom, not by a planner asserting the predicate total.
+Sequence evidence records a nonempty source on every fact: authored provenance
+or the unchanged originating VO provenance. Evidence contains estimates only;
+it has no uniqueness-key syntax. Contradictory numeric estimates remain advice,
+not certified allocation bounds, truncation limits or uniqueness certificates.
+Every compiler input is a set supplied by IO, proving only its full heading
+unique; VO partial keys never become Sequence semantic premises.
+\begin{mathpar}
+\Rule{WF-SequenceEvidence}{
+ \mathsf{source}(e)\ne\epsilon\quad\mathsf{referencesValid}(e)
+}{e\text{ is well formed}}
+\end{mathpar}
+Statistic guards use typed publication references, never free-form provenance
+labels; absent scalars take the recorded else arm. All alternatives have the
+same checked construction. P7.1 admits host reads only; no device visibility,
+transfer or synchronization is inferred by a printer.
+P7.2 CPU accessors implement this optional scalar ABI without forcing a lazy
+hash or multi-run materialization (\textsc{RT-BuildStats}). Recorded
+\code{run\_filter} sources support explicitly selected \code{borrowed\_filter}
+views; explicit \code{attached\_filter} realizations attach \code{BuildSidecar}
+builders through \code{BuildWithSidecar} at the owning exact construction.
+With neither realization fact, the recorded default builds projected
+\code{Keys::distinct\_keys} only after activation. Exact source finalization
+precedes an authored statistics guard. Default filters retain ordinary builds
+and exact \code{Keys::key\_count} activation. Pull and Tasks consume the same completed
+publication. Activation retains its recorded population and percentage with
+overflow-safe comparison; the printer invents no threshold or per-worker build.
+Structures records ordinary or demanded-statistics construction
+(\textsc{STR-Construction}); provider-declared accumulation support and
+matching publication witnesses justify the row/max demand bits.
+The printer consumes this protocol directly. Ordinary builds use \code{Build};
+demanded builds use \code{BuildWithStatistics}, and sidecar builds carry the
+same mask. Unrequested accumulated scalars remain absent while cheap lengths
+remain available. Lazy demanded-initializer dispatch is outside the ordinary
+\code{OnceCell} closure, preserving its capture and hot-loop register shape.
 
 \begin{mathpar}
-\Rule{EXT-SeqLookup}{t,t'\text{ checked}\quad
- \text{join/semijoin constructions have equal support}\quad
- \text{Rust Before domains preserved}}
- {t\rightsquigarrow_{\mathsf{lookup\_first}}t'
-  \quad\text{(Motion, BE-Offsets, BE-Scope)}}
-
-\Rule{EXT-SeqAdaptive}{s\text{ is a published filtered store}\quad
- \mathrm{supp}(\alpha(a))=\mathrm{supp}(\alpha(b))\quad k\text{ is advice}}
- {d:=\mathsf{choose}[
-   \mathsf{len}(s)<k\Rightarrow a,\ \mathsf{else}\Rightarrow b]}
-
 \Rule{PL-Evidence}{E\text{ is syntactically well-formed advice}\quad
- E_{\rm key}\text{ holds}\quad (t',\rho)=\mathsf{plan}(t,M,K,E)}
+ (t',\rho)=\mathsf{plan}(t,M,K,E)}
  {\mathrm{supp}(\alpha(t'))=\mathrm{supp}(\alpha(t))\quad
-  \rho\text{ satisfies PL-Closure under }E_{\rm key}}
+  \rho\text{ satisfies PL-Closure}}
+
+\Rule{BE-PrefixBound}{\beta(\mathsf{rename}\ R)=(\mathsf{count}_E(R),\{\mathsf{heading}(\mathsf{rename}\ R)\})\quad
+ \beta(\mathsf{unit})=(1,\{\varnothing\})\quad
+ \beta(\sigma\,x)=\beta(\mathsf{guard}\ x)=\beta(\mathsf{scalarBind}\ x)
+ =\beta(x\ltimes y)=\beta(x\rhd y)=\beta(x)\\
+ \beta(\pi_A x)=(\beta(x).rows,\{K\in\beta(x).keys\mid K\subseteq A\})\\
+ \beta(\mathsf{group}_G x)=(\mathsf{if}\ G=\varnothing\ \mathsf{then}\ 1\
+ \mathsf{else}\ \beta(x).rows,\{G\})\\
+ \beta(\mathsf{probe}[\bar k]\,x,y)={\begin{cases}\beta(x)&\exists K\in\mathsf{keys}(y).\ K\subseteq\bar k\\
+ \beta(y)&\exists K\in\mathsf{keys}(x).\ K\subseteq\bar k\\
+ \bot&\text{otherwise}\end{cases}}}
+ {|\alpha(p)|\le\beta(p).rows\text{ whenever the count estimates hold}}
+
+\Rule{GR-RetainPrefix}{M.gpu\quad \beta(\mathsf{root}(d))<w_M\quad
+ e_1,\ldots,e_n\text{ the expansions of }d\text{ from its root}\\
+ j=\min\{j\mid \beta(e_j).rows\ge M.retain\_prefix\_rows\}\quad
+ \forall i\le j.\ \beta(e_i).rows\ne\bot\quad j<n}
+ {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\beta(e_j).rows,w_M,M.retain\_prefix\_rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
+
+\Rule{GR-SegmentFanout}{\mathsf{retain}(e_j,\_,\_,\_)\text{ recorded}\quad j<i\le n\quad
+ \neg\exists K\in\mathsf{keys}(\mathsf{provider}(e_i)).\ K\subseteq\mathsf{lookupKeys}(e_i)}
+ {\mathsf{plan}\text{ records }\mathsf{segment}(e_i,w_M\cdot M.items,\ \mathsf{items}\ M.items)}
 \end{mathpar}
+
+Sequence Analysis records $\beta$ as \code{prefix\_bounds}, with explicit
+unknown rows and key sets. The checker checks each record against evidence
+and preceding recorded operands, not by invoking the planner: larger upper
+bounds, omitted keys, and either justified keyed-join side are legal.
+Merge uses the same transfer as Probe; generating binds and Union are unknown.
+A recorded \code{retain(e, n, w, R)} is the checked \code{store\_level(e)} rewrite.
+Replay consumes these checked facts and requires $\beta(e).rows=n$,
+$w,R>0$, a root bound below $w$, $n\ge R$, a following expansion, and
+known earlier bounds below $R$. Width and threshold are explicit policy
+parameters, like ordinary tile advice; replay never reruns advice selection.
+The GR-RetainPrefix search stops at the first unknown bound; it never skips
+it to retain a later bounded expansion.
+GR-RetainPrefix and GR-SegmentFanout change only execution shape (stores, tiles and offsets
+publication), never the recorded relational plan, and apply before
+placement, so ordinary decomposition, grading and PL-Cost continue from the
+result. They reproduce the authored H05 recipe R from the preserved step-R
+order: the one-row region root fills less than one tile, the Customer prefix is
+bounded by its customer count, and the Orders and Lineitem expansions, whose
+lookups cover no provider key, publish offsets before distribution.
 
 Evidence records row counts, keys, foreign keys, selectivities, bounds and
 sortedness beside analysis obligations. Keys are explicit author assertions
 of physical uniqueness, not estimates; a false key can change grouped answers.
-All other facts remain nonsemantic estimates. Their consumers select the root,
-Lookup order, early Expand, and whether a
-transfer filter is worth its cost. The RPT+ selective-filter heuristic
-\cite[Sections~3.6 and~5]{paper-rpt-plus} uses static selectivity evidence
-when present; otherwise a \code{choose} reads an already-published count.
-The alternatives retain the exact joins, so false estimates change execution
-time only. This is a boundary-count adaptation, not a claim to implement
-RPT+'s in-flight sampling or cancellation.
+All other facts remain nonsemantic estimates used by checked execution-shape
+selection. They do not authorize changing the recorded relational plan.
 
 The \code{Planner} interface accepts $(t,M,K,E)$ and returns a program and
 replayable advice trace. Serialized author advice and generated advice use
 the same checked operations. The facade's Sequence-input \code{plan = path}
-phase may replace the rule-based implementation with an ordinary custom
-pass; PL-Closure and the conformance harness remain unchanged.
+phase may select an ordinary custom pass; the default is order-preserving
+decomposition. PL-Closure and the conformance harness remain unchanged.
 
 \subsection{The three machines as interpretations}
 \begin{center}
@@ -951,39 +1268,286 @@ leading scan is \code{tile} of \code{rows}, its grain the tile size, its
 sharded admission BE-Canon, its publication barriers host-level
 boundaries.
 
+\paragraph{Checked blocked host scans.}
+Structures owns source/declaration/representation identities, the exact
+Physical predicate, its translation and summary strategy, and every authorized
+read demand. Sequence adds a printable execution refinement, not another
+family, domain or geometry table. Each scan names only its Structures source;
+native snapshot-bound positions, vector width and reusable byte-mask size
+follow that source's checked \code{vector\_rows} (currently 1024).
+The final vector is clipped to the initialized source extent; an empty
+extent produces no positions and performs no predicate or payload work.
+\begin{mathpar}
+\Rule{BE-Blocks}{
+ \mathsf{STRBlocks}(s)\quad v=s.\mathsf{vectorRows}\quad
+ \mathsf{cover}(s)=\biguplus_i[vi,\min(v(i+1),|s|))\\
+ \mathsf{run}(r)=[p_1,\ldots,p_k]\text{ is an exact single-use Physical spine}\\
+ \mathsf{phases}(p_j)=[\mathsf{prune},\mathsf{exact},\mathsf{positions}]
+ \quad \mathsf{reads}(c)=\mathsf{StructuresDemand}(c)
+}{
+ \mathsf{blocked}(s,r,c)\sim
+ \mathsf{demandedRead}_c(\mathsf{select}_{p_k}\cdots
+ \mathsf{select}_{p_1}(\mathsf{positions}(s)))
+}
+\end{mathpar}
+A run crosses only noncanonical pipe projections and total relational
+predicates with a single consumer. Its original predicate identities remain
+in the Sequence operator spine. It never crosses a Bind, Guard, retained
+publication or fan-out. Every predicate occurs in exactly one recorded run,
+in Physical order; lawful shorter runs remain legal. One run intersects one
+mask in that order, with summary-disqualified vectors skipped and qualified
+tests elided only by their recorded certificate. Formula predicates preserve
+every disjunction and cross-column comparison; carrier restoration is not
+semantic reconstruction. Closed operands are evaluated before traversal once;
+opaque expressions execute only when their surviving occurrence is demanded.
+
+Demanded opaque fields become owned locals whose references are scoped to the
+unchanged Rust expression. Positional carriers and owned computed fields, not
+references to those locals, cross relational boundaries. Canonicalization
+gathers exactly the recorded global-ordinal keys once per survivor and
+compares those cached keys together with the owned computed fields. Equal
+complete logical valuations collapse even at distinct source positions; the
+chosen representative retains its original snapshot-bound position. Final
+answer reads have their separate publication authorization. String codes
+remain codes throughout these actions.
+Sequence \code{Fold Sum} refuses an encoded base field, including one retained
+through a projection, reference, store or canonicalization. It requires an
+owned computed operand instead; \code{Fold Count} does not read source values.
+This refusal derives occurrence lineage from the explicitly supplied Physical
+and Structures contexts, not from an embedded program or Rust type syntax.
+
+The independent checker checks source and predicate coverage, phase order,
+the original intervening operators and their use counts, materialization
+consumers and bounded geometry directly. It does not invoke the producer or
+compare with a preferred plan. Plain/Bytes, summaries disabled, code-decoded
+tests and shorter lawful runs are accepted under their Structures premises.
+The initial host slice rejects unsupported join/index and unrecorded
+relational reconstruction boundaries before either printer runs.
+
+For Tasks, BE-TaskProducer names the borrowed blocked source and partitions
+half-open ranges aligned to its Structures-owned vector width, clipped only
+at the live final extent. Each task
+executes the same recorded run on its disjoint range, with worker-local
+bounded scratch; no complete source collection or repeated whole-table scan
+is a source adapter. BE-CarrierPublication retains immutable source owners
+through task completion. Pull uses the same protocol lazily and may stop
+without preparing later vectors or executing later opaque consumers.
+For a key-disjoint cover, the printed \code{PartitionK} constructor records
+keys and partition count; the blocked execution's \code{route} records map
+each source-field key to its Structures representation identity. Independent
+checking requires exact key-read coverage, retained occurrence lineage and
+the declaration's equality preservation. Computed keys remain owned carrier
+fields. Routing restores each demanded global ordinal once per row and
+hashes that value, never a reference to a reconstructed logical temporary.
+A borrowed blocked source is routed from its recorded vector-sized native
+ranges, not through \code{Rows} or \code{PositionalRows}; its published
+length comes from the immutable source extent without traversing predicates.
+The original positional carrier is retained in each destination buffer.
+
 \paragraph{GPU translation.}
 \begin{mathpar}
 \Rule{T-Gpu}{t\text{ checked against }\mathsf{host}>\mathsf{device}(\text{separated, dynamic})>\mathsf{block}(\text{collaborative})>\mathsf{lane}}
  {\mathsf{run}_{\rm gpu}(t)=
-  \text{one query kernel per BE-Boundary dispatch};\
+  \text{one query kernel plus recorded completion steps per BE-Boundary dispatch};\
   \mathsf{tile}\mapsto\text{recorded distribution or strip-mining};\
   \mathsf{flatten}\mapsto\text{block scan and owner search};\
-  \mathsf{store}\mapsto\text{shared storage or device publication};\
-  \mathsf{canon}\mapsto\text{packed radix sort and unique}}
+  \mathsf{store}\mapsto\text{recorded storage and key codec};\
+  \mathsf{canon}\mapsto\text{recorded provider}}
 \end{mathpar}
-Range providers are built before their query dispatches using stable radix
-ordering and lower-bound directories. Membership searches within those
-recorded ranges. The output protocol and sticky failure flags discharge
+Provider construction consumes the recorded catalog ABI and provider type.
+Range providers own their ordering and directory algorithms; native run
+lookups consume recorded complete permutations. The output protocol and sticky failure flags discharge
 BE-Length and BE-Abort; bounded output retries rather than publishing a
 truncated result. No target-side join order, uniqueness or tile choice is
 inferred by the translation.
 
-\paragraph{Arbitrary-width canonical provider.}
-Let an injective recorded codec pack a row into $N=\max(1,\lceil b/64\rceil)$
-little-endian lanes, where $b$ is computed from its checked setup bounds.
+\paragraph{Checked GPU launch refinement.}
+The GPU machine records its collective block width. Grading records every
+dispatch's partition, publication, offset scan, fold completion and required
+host synchronization points; target realization records its launch preparation
+and grid. These records are part of printable analysis. One-part is explicit,
+not a fallback triggered by a deferred range or a whole-input fold. The native contiguous-range predicate
+is supplied by catalog identity, not by generated names or type suffixes.
+GPU launch refinement precedes BE-Resource: shared-memory accounting and CUDA
+emission consume the same recorded publication kind, never independent
+deferred-range recognizers. Host references stop at completed publication
+boundaries; a host consumer of a later expanded store is not a host consumer
+of that store's deferred-range input.
+The same record fixes the first attempt's output capacity (zero for
+\code{count}, the store's declared capacity, the machine's default
+reservation for an undeclared \code{reserve}, or the arena's previous count),
+the output compaction (each lane gathers its stripe items; the block reserves
+one range per stripe batch), and one strip per strip-mined level of every
+chain in pre-order: rows per expansion batch, items per lane, nested tile
+sizes and the fold's implementation scope (whole domain or the first $n$
+local tiles). Omitted items cover a tile in one block pass; an untiled
+expansion batches one block of children with one item. The checker accepts
+any positive implicit strip and requires explicit tiles and fold scopes to be
+the chain's. Under the Sequence statement \code{roots spread} (EXT-SeqRoots),
+every fold-free dispatch records \textsc{Spread}$(m)$ instead: root tiles
+shrink at launch so a small driver occupies every resident block
+(GPU-RootSpread). A dispatch with a fold keeps its declared partition, because
+block-local fold scopes depend on the root tile. A spread single-chain
+dispatch that expands also records an expansion share (GPU-ExpansionShare):
+once some block waits with nothing to steal, a block running an expansion with
+more than $k$ batches left publishes that expansion's block state (parents,
+range begins, offsets and the run it reads) and its remaining batch range to
+a free pool slot. The owner keeps claiming one batch at a time; an idle block
+copies the state and claims half of what is left, and may publish the rest of
+its range again. Without a free slot the owner expands alone. The kernel holds
+one copy of the chain: a block resuming a published range passes once through
+the enclosing levels with every lane dead until it reaches that site, then
+runs its claimed batches. A block therefore no longer exhausts the descendants of the
+roots it claims. A shared dispatch without a whole reduction first limits its
+participating blocks to the launch's root count plus 32 helpers (at least one);
+blocks past that cohort return before touching root tickets, busy, hungry or
+finish words, and the count is fixed for the launch, so all participants agree
+on the finishing count. A recorded share on a chain with a single expansion
+whose roots are not selected (no GPU-RootSelect) and that is not an authored
+frontier is printed without the pool: its roots are distributed directly,
+since there is no deeper expansion to hand off and the share path raises
+register use (measured 40--48 to 72--80 per thread). Only the assignment
+of roots and batches to blocks changes; the multiset of published rows is the
+declared partition's. The checker accepts any positive $m$ (the declared
+distributed tile when there is one), an optional expansion share on a spread
+single-chain dispatch that expands, with 1 to 65,536 slots and any u32 $k$,
+and fresh metadata anywhere; it never recomputes the producer's bound, share
+or metadata choice. An arena terminal (\code{reserve\_previous}) with a local
+fold may keep its count, failure, claim-cursor and pool words in its arena's
+resident words
+(GPU-ResidentMeta): they are zero on entry, the last block to finish
+publishes count and failure and re-zeroes them, so a launch attempt neither
+allocates nor clears metadata. A spread single-chain dispatch whose first step
+expands a radix or run lookup keyed by root columns first runs a select kernel
+(GPU-RootSelect): it decodes only the key columns of each root row, tests
+membership in that lookup's provider over all its runs, and appends the
+positions that match to a position list (one atomic per warp). The dispatch
+reads its root through that list; its domain is the list's device count and
+its spread tile is recomputed from it on the device, so no count is read back.
+A dropped row would have expanded to no children, so the published multiset is
+unchanged; only the order of roots may differ.
 \begin{mathpar}
-\Rule{GPU-WideCanon}{\mathsf{pack}\text{ injective}\quad
+\Rule{GPU-RootSelect}{d.\mathsf{partition}=\mathsf{Spread}(m)\quad d\text{ has one chain}\quad
+ \text{its first step expands }\mathsf{lookup}(P,K)\text{, }P\text{ a radix or run provider, }K\text{ root columns}}
+ {\mathsf{roots}(d)=\{\,i<|D|\mid \exists\,\text{run }r\text{ of }P:\ P_r[K(D_i)]\neq\emptyset\,\}\quad
+  \mathsf{tile}=\min(m,\max(1,\lceil|\mathsf{roots}(d)|/g\rceil))\quad
+  \text{the published multiset equals the unselected dispatch's}}
+\end{mathpar}
+GPU-ProgramLaunch records either invocation occupancy (capped by root parts),
+program one-block preparation, or a program resident launch envelope. One-block
+preparation requires the one-part partition. Each kernel owns one optional
+preparation for its fixed compiled specialization, without a symbol-keyed
+collection. Only a cache miss resolves the symbol and validates function/device
+attributes and the ordinary one-dimensional envelope. The cache retains the
+function and configuration, not a Rust type tag. Kernel planning records
+structured scalar parameter identities and types, argument identities, and
+semantic uses from demanded source slots and provider/map/output read facts;
+fold-completion facts determine partial-buffer uses. It never derives liveness
+from identifiers in a printed body. The final ABI records live scalar
+positions, parameter-to-witness identities and the preparation entry.
+Its independent checker verifies parameter and argument identity coverage,
+live-use coverage and witness dependencies against the canonical row ABI;
+witness bounds belong to that canonical record, not unchecked copies in a
+kernel. Definitions, preparations and calls print the checked records directly,
+without inspecting types or reparsing generated declarations, kernels or calls.
+A launch checks its context and positive grid against the envelope without
+symbol lookup, allocation or CUDA queries;
+the recorded part cap and spread/share policy determine that grid as before.
+The module and slots live on their worker thread until query-scope release;
+context replacement discards them. No count/failure readback, replay, launch
+grid, or synchronization changes. The selector uses program preparation for
+raw-candidate programs; checking accepts any legal recorded alternative.
+\begin{mathpar}
+\Rule{GPU-Launch}{d\text{ is a checked dispatch}\quad M.\mathsf{gpu}\text{ supplied}}
+ {\mathsf{execution}(d)=
+  (\mathsf{partition},\mathsf{publication},
+   \mathsf{offsetScan},\mathsf{foldCompletion},\mathsf{synchronizations},
+   \mathsf{capacity},\mathsf{reservation},\mathsf{strips})}
+\Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count}\quad
+ S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
+ {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
+\Rule{GPU-ProgramLaunch}{L(d)\text{ recorded}\quad
+ L(d)=\mathsf{ProgramOne}\Rightarrow d.\mathsf{partition}=\mathsf{One}\quad
+ (K,C,B)\text{ is the entry's validated ordinary 1-D envelope}\quad 1\le g\le B}
+ {\mathsf{launch}(K,C,g)\text{ reuses that program entry's function and attributes;
+ only its grid cap varies, with the same scalar ABI and synchronization}}
+\Rule{GPU-RootSpread}{\mathsf{roots}=\mathsf{spread}\quad d\text{ fold-free}\quad
+ m>0\text{, the declared tile when present}\quad
+ R'=S R\text{ (GPU-LAUNCH-OCCUPANCY)}}
+ {d.\mathsf{partition}=\mathsf{Spread}(m)\quad
+  \mathsf{tile}_i=\min(m,\max(1,\lceil|D_i|/R'\rceil))\quad
+  \mathsf{grid}=\min(\max(1,\max_i\lceil|D_i|/\mathsf{tile}_i\rceil),R')\text{, or }R'\text{ when shared (GPU-ExpansionShare)}}
+\Rule{GPU-ExpansionShare}{d.\mathsf{partition}=\mathsf{Spread}(m)\quad d\text{ has one chain and it expands}\quad
+ 1\le s\le 65536\quad
+ \text{inputs immutable during the launch}}
+ {\text{an expansion with more than }k\text{ batches left may publish that range to one of }s\text{ slots; each batch is claimed once by its owner or by a block that copied the published state; a slot is freed only after its claims fail and no block copies it; blocks stop when none is busy; the published multiset is unchanged}}
+\Rule{GPU-FrontierResume}{d.\mathsf{share}=\mathsf{Frontier}(256,k),\ 1\le k<2^{32}\quad
+  \text{one spread fold-free terminal arena chain with resident metadata}\quad
+  \text{inputs immutable through both launches}\quad p_0=0,\ p_{j+1}=p_j+n_j,\ |p|\le257}
+ {\text{after its first batch a producer may transfer its }n_j\ge k\text{ unprocessed batches, with all live parents, range begins, offsets, site and run, to a bounded slot; a full pool continues inline; a second launch partitions }[0,p_{|p|-1})\text{ disjointly and resumes each batch; the same output cursor and failure flag are validated only after both launches; the published bag is unchanged}}
+\Rule{GPU-ResidentMeta}{d.\mathsf{capacity}=\mathsf{PreviousCount}\quad
+ d.\mathsf{foldCompletion}=\mathsf{Local}\quad
+ \text{the arena's resident words are zero before the launch}}
+ {d.\mathsf{meta}=\mathsf{Resident}\quad
+  \text{blocks fence, then count themselves finished; the last copies count and failure to the result words and zeroes every used word}\quad
+  \text{the readback equals the fresh-words protocol's, and the words are zero again}}
+\Rule{GPU-OffsetScan}{d.\mathsf{publication}=\mathsf{DeferredRange}(p)\quad
+ \ell_0,\ldots,\ell_{n-1}\text{ initialized}\quad \ell_n=0}
+ {d.\mathsf{offsetScan}=\mathsf{DeviceExclusive}\quad
+  o=\mathsf{exclusiveScan}_{+,0}(\ell_0,\ldots,\ell_n)\quad |d|=o_n}
+\Rule{GPU-FoldCompletion}{d.\mathsf{foldCompletion}=\mathsf{BlockPartials}(\oplus,e)\quad
+ B=\biguplus_b B_b}
+ {\mathsf{fold}(B)=\bigoplus_b\mathsf{fold}(B_b)\quad
+  \mathsf{publish}\text{ occurs only after the combine step}}
+\end{mathpar}
+The deferred-range publication refinement applies only to a nonterminal,
+noncanonical, non-provider-building publication with one chain whose last
+contiguous lookup is followed only by stores and at least one flatten.
+Host row consumers exclude this representation. The producer writes parent
+rows, range beginnings and lengths on all scheduled blocks; a separate
+device-wide scan completes offsets before consumers run. Wrapping offsets
+are detected by adjacent-prefix decreases and abort publication.
+The launch checker validates the recorded offset and synchronization
+obligations directly, without replaying their producer, and rejects a
+zero-sized tile partition.
+Whole folds retain one scalar per block and combine on the producing stream;
+the empty domain still produces the monoid identity. Checked arithmetic and
+the existing monoid-law premises remain in force.
+Count/failure readback for capacity replay is an explicit synchronization
+record. Deferred offsets additionally record their total/failure readback.
+There is no unrecorded per-dispatch fence.
+Scan modules and workspaces may be retained per pool identity across invocations;
+their context, stream and allocator owner outlive every borrowed resource.
+Reuse changes neither the recorded scan step nor its failure/readback contract.
+
+\paragraph{Ordinary full-row device sets.}
+Let an injective recorded codec pack a row into $N=\max(1,\lceil b/64\rceil)$
+low-first lanes, where $b$ is the sum of recorded field widths.
+\begin{mathpar}
+\Rule{GPU-RadixSet}{\mathsf{pack}\text{ injective on the complete heading}\quad
   P=\mathsf{stableRadix}_{N-1}\circ\cdots\circ\mathsf{stableRadix}_{0}}
  {\mathsf{decode}(\mathsf{unique}_{=\,\text{all lanes}}(P(\mathsf{pack}(B))))
-   =\iota(\mathrm{supp}\,B)}
+   =\iota(\mathrm{supp}\,B)\quad O_i=i}
 \end{mathpar}
-This is an instance of BE-Canon: successive stable least-significant-lane
-passes establish a total complete-key order, and adjacent equality compares
-every lane. The catalog tries \code{PackedCanon} (at most 128 bits) before
-\code{WideCanon} (no fixed width limit), using the complete declared scalar
-domains, never statistical evidence, as conservative obligations. Actual lane
-counts use recorded codec bounds at setup. Both providers publish the same
-device-resident count, failure ancestors, and decoded column protocol.
+This instance of BE-Canon is the ordinary full-key/unit-item form of
+\code{RadixLayout}, not a separate canonical store. Only its constrained
+\code{radix\_set} token promises \code{Distinct}; the occurrence-preserving
+five-hole family does not. Shared stable radix passes order every lane,
+including middle and high lanes beyond 128 bits. Empty headings retain
+one zero lane and at most one live key.
+The consumed FOR codec records scalar trait domains or immutable resident
+domains, which determine the exact lane extent at setup; no duplicate width
+classification is recorded. \code{SetBuild} records construction parameters,
+including the compiled block width. The checker validates these obligations,
+not the selector's defaults, and the printer emits them without type inspection.
+Sort, permutation, compaction and count scratch is reused per thread and pool,
+separate from immutable result owners; shorter calls use only their live prefix.
+Query teardown frees scratch in stream order without a host wait. Unique counts remain
+resident and gate initialized prefixes; constructing a set introduces no
+host count download. Certified sorted unique owned prefixes can be adopted
+without sorting or copying, with their owners retained through stream users.
+CQ's low-first equality codec is not reinterpreted as the typed layout's
+most-significant-first lexicographic embedding.
 
 The CUDA machine bounds block shared storage by 101,376 bytes. Its single
 layout implementation starts with 48 bytes, records each materialized lookup's
@@ -995,7 +1559,7 @@ the final size is aligned to sixteen bytes. The same layout implementation
 supplies BE-Resource and emitted offsets, so resource failure cannot select
 an alternative algorithm inside the interpreter.
 
-For the GPU instance of E-Neg (and RA-Anti), the checked Physical provenance
+For the GPU instance of RL-Neg (and RA-Anti), the checked Physical provenance
 of \code{compact(lookup)} records the negative polarity. Let
 $m(\rho)$ be the provider's membership result on the recorded key columns.
 The lane keep bit is $\mathsf{live}(\rho)\land\neg m(\rho)$ for anti,
@@ -1004,24 +1568,27 @@ same membership probe; neither expands witnesses. Empty provider ranges,
 absent directory keys, and existential wildcard columns follow the same
 equation. The translator reads this polarity, rather than choosing it.
 
-\paragraph{Packed-run inputs and candidate arenas.}
-A checked binding records that a host input is a collection of device runs
-of packed words (\textsc{DL-DevicePacking}) in a stated column permutation;
-it is never inferred from a built index. Scanning visits every run; a lookup
-of a key prefix takes one contiguous word range per run, and expansion loops
-over runs uniformly across the block, flattening each run's ranges as in the
-segmented-flatten lemma. Membership is the disjunction over runs.
+\paragraph{Radix relation inputs and candidate arenas.}
+A checked binding records a \code{radix\_relation} input with
+\code{NativeAbi::RadixRelation}: a typed full-key radix set in a stated
+complete column permutation (\textsc{DL-DevicePacking}), not an item-payload
+index inferred from Rust syntax. Scanning visits every run; lookup encodes
+the logical key prefix once and searches one inclusive complete-key interval
+per run. Expansion loops over runs uniformly across the block, flattening
+each run's ranges as in the segmented-flatten lemma and decoding only demanded
+key fields. Membership is the disjunction over runs. Logical global offsets
+are not addresses into a fictitious contiguous item allocation.
 \begin{mathpar}
-\Rule{GPU-Runs}{\text{input bound to runs }\rho_1\ldots\rho_m\text{ with packing }p\quad
- \textsc{STR-RunRead}}
+\Rule{GPU-Runs}{\text{input bound to full-key radix runs }\rho_1\ldots\rho_m\text{ with packing }p\quad
+ \textsc{DL-DevicePacking}\quad\textsc{STR-RunRead}}
  {\mathsf{lookup}(k)=\biguplus_j\mathrm{unpack}_p(\rho_j[\mathrm{range}_p(k)])\quad
   \mathsf{member}(k)=\bigvee_j\rho_j[\mathrm{range}_p(k)]\neq\emptyset}
 \end{mathpar}
-An arena terminal publishes the hole's head rows packed in the head's
-canonical column order into a caller-owned device buffer and returns it with
-its length. It is a candidate bag: canonicalization belongs to admission
-(\textsc{DL-DeviceRuns}). Sizing follows the dispatch's recorded output
-protocol, so a batch is never truncated.
+An arena terminal writes the hole's head rows, packed by the arena encoding
+its publication storage records (\textsc{GPU-PublicationStorage}), into a
+caller-owned device buffer. The validated prefix is returned at the dispatch
+or head publication barrier; canonicalization belongs to admission (\textsc{DL-DeviceRuns}). Sizing
+follows the dispatch's recorded output protocol, so a batch is never truncated.
 \begin{mathpar}
 \Rule{GPU-Arena}{\mathsf{run}_{\rm gpu}(t)\text{ as T-Gpu}\quad
  \text{output protocol discharges BE-Length}}
@@ -1038,9 +1605,13 @@ change the result.
  \text{all uses ordered on the producing stream}}
  {\text{omitting the terminal fence preserves }\textsc{GPU-Arena}}
 \end{mathpar}
-The recorded output protocol \code{reserve\_previous}, accepted only by the arena
-terminal, starts each invocation of a hole with the last validated count of
-that hole as its capacity (zero at first use). The remembered count is an
+Outside GPU-HeadCursor, the arena terminal's \code{reserve\_previous}
+protocol uses a hint for the selected Round hole. It starts at zero. After a
+successful invocation, the hint is the larger of (i) the last validated count
+plus half that count, with the extra rows limited to 256 MiB, and (ii) twice
+the highest validated count, limited to 8 MiB of rows. Grouped heads instead
+keep a hint per head and phase, as described below. A keys-only attempt uses
+the entire capacity of the leased slot, which is at least the hint. This is an
 initial capacity, not a bound: the kernel counts every candidate and writes
 only in bounds; an arithmetic failure aborts (BE-Abort); a capacity shortfall
 discards the attempt and reruns it with the full required capacity against the
@@ -1052,33 +1623,329 @@ published, so the batch equals the Count protocol's.
  {\text{published batch}=\text{the }\mathsf{count}\text{ protocol's batch}}
 \end{mathpar}
 
-\paragraph{Closed host captures.}
-A Rust subexpression of a guard, binding or selection whose free variables
-include no row column (for example \code{sym("abstract")}) is a closed capture.
-The translator evaluates each closed capture once on the host per invocation,
-before the first dispatch that needs it and only if that dispatch's input is
-nonempty, converts the value to its device encoding (the declared
-\code{SymbolCodec} for symbol types), and passes it as a kernel parameter; the kernel compares
-encodings. Strings therefore never reach the device. This is the closed case of
-\textsc{BE-Partial} realized by \textsc{IF-Parameter}, for any machine; staging
-totality (\textsc{ST-Total}) is unchanged, so host plans are unaffected. The
-host premise is the one already made for Rust predicates: a closed capture is
-deterministic and total, so one evaluation equals the per-row evaluations it
-replaces.
+Round may assign a head's producers to a common reservation when their inputs
+remain unchanged through the publication barrier and any replay. Sequence
+refines only a final raw arena dispatch with \code{reserve\_previous}, local
+fold completion, and no range-offset or other intermediate consumer.
+Dispatch-local claim cursors are still reset by the last block; the head's
+cursor and sticky failure bit are not. A failed count (including a wrapped
+reservation) rejects the whole attempt before admission. Heads due at the
+same publication point read their cursor/failure pairs in one transfer. Only
+a head that exceeds its capacity replays its producers, from zero on the
+same inputs with capacity at least the observed total. On success its cursor
+resets. Retry capacity and the next hint for that head and phase allow bounded
+headroom over the observed total, and all available rows in the leased slot
+are writable. Spare rows are never part of the published prefix.
+Intermediate stores and ungrouped terminals retain their own protocol.
 \begin{mathpar}
-\Rule{GPU-Capture}{e\text{ closed}\quad e\text{ deterministic and total}\quad
- \mathrm{enc}\text{ injective}}
- {\sem{\phi[\mathrm{enc}(e)/e]}_{\mathrm{device}}=\sem{\phi}_{\mathrm{host}}\text{ on every row}}
+\Rule{GPU-HeadCursor}{H=\text{head at a checked publication point}\quad
+ B_i=\text{candidate bag of producer }i\text{ on unchanged inputs}\quad
+ C_H=\text{shared capacity}}
+ {\text{each reservation claims disjoint positions in }[0,N_H),\
+ N_H=\sum_i|B_i|;\quad
+ \neg\mathsf{failure}_H\ \land\ N_H\le C_H
+ \Rightarrow \mathsf{prefix}(H,N_H)=_{\rm bag}\biguplus_i B_i}
 \end{mathpar}
+
+\paragraph{Closed host captures.}
+A query-closed operand of an explicit relational \code{where} predicate is
+evaluated once on the host per invocation and encoded through the column's
+recorded provider/codec. Equality requires an equality-preserving encoding;
+ordered predicates additionally require an order-preserving encoding.
+No type spelling supplies either law. The capture is evaluated before its
+first enabled, nonempty consuming dispatch and cached across capacity retries.
+Rust guards, bindings and iterator expressions remain verbatim: they are not
+split into recognized comparisons or rewritten to operate on dictionary IDs.
+Their row reads must all have recorded identity device representation; their
+other inputs are closed captures. Unknown or codec-encoded row reads require
+host Rust execution, independently of the common pure-total premise.
+Closed-subexpression extraction treats every query-closed subexpression of
+device Rust uniformly: a literal is extracted into the same host-once closure
+witness as any other closed value, with no \code{Expr::Lit} exemption.
+\begin{mathpar}
+\Rule{GPU-Capture}{e\text{ query-closed}\quad e\text{ deterministic and total}\quad
+ \phi\text{ a relational predicate}\quad
+ \mathrm{enc}\text{ preserves the predicate's equality/order}\quad
+ C(e)=\text{recorded consuming definitions}\quad
+ D(e)=\{(d,b)\mid C(e)\cap\mathrm{definitions}(d,b)\ne\varnothing\}}
+ {\sem{\phi[\mathrm{enc}(e)/e]}_{\mathrm{device}}=\sem{\phi}_{\mathrm{host}}
+ \quad\mathrm{evaluate}(e)\iff\bigvee_{(d,b)\in D(e)}(|d|>0\land b)}
+\end{mathpar}
+The capture record retains parameter indices and definition dependencies before
+emission. Launch construction supplies the recorded domain length and branch
+enable expression; generated names and kernel argument offsets carry no meaning.
+The invocation-local cache is shared across capacity retries.
+Query-level capture items are a separate ordered record: bindings evaluate once
+in invocation scope and answer gates short-circuit before later captures,
+input evaluation or query kernels. A false gate returns an empty row publication
+or an empty arena batch with asynchronous metadata uploads. Query inputs bind once after the gates;
+host upload evaluators reuse those input and capture bindings rather than
+evaluating their expressions again. A relational
+constraint with no row operands is one closed Boolean capture; it does not
+need an artificial column or scalar-type guess. Grouped publication with a
+query answer gate currently has no empty-output adapter and is rejected by
+realization production and checking before printing.
+A mixed range may have a closed subject and row-valued bounds. Its closed
+operands record the available row-column codec context, selected from subject,
+lower bound, then upper bound; checking validates that recorded context against
+the source range rather than requiring the subject to be a column.
+
+\paragraph{Resident FOR-native tiles (P6 C).}
+This realization uses the existing resident 1024-row vectors, not S1 blocks.
+One 256-thread block visits a vector, grid-striding over vectors; each thread
+visits four physical transposed positions. The same physical position names
+the same occurrence in every column. Tail positions outside the live row
+prefix do not participate. Physical traversal is admissible only for a
+row-order-insensitive keyless grid fold.
+\begin{mathpar}
+\Rule{GPU-TilePredicate}{s\text{ resident}\quad
+ \pi\text{ a positional Rename/Select/Point/Range/Guard/Bind/Project spine}\quad
+ t\text{ a keyless grid fold}\quad
+ \text{every partial and combine addition is checked}}
+ {\mathsf{SourceAccess}(s)=\mathsf{Tiles}(\mathsf{TileScan}(s,\pi,t))}
+\Rule{GPU-NarrowCarrier}{h\text{ a resident vector header}\quad
+ [\ell,u]\text{ the closed predicate interval}\quad
+ c\text{ the packed code of a live physical position}}
+ {\mathsf{test}_h(c,[\ell,u])\iff
+   \ell\leq\mathsf{value}_h(c)\leq u}
+\end{mathpar}
+The realization checker validates the source, positional lineage, capture
+bounds, consumers and terminal independently, without replaying selection.
+Select, Point and Range tests retain Physical order. FOR translates interval
+endpoints relative to its signed base, clipping to the code domain with
+explicit empty/full cases, never overflowing endpoint subtraction or adding
+the base per tested lane. Plain compares its code directly; Delta and native
+headerless columns use their correct logical decode. Open endpoints retain
+their strictness, including at integer extrema. Width zero, width 64 and
+partial vectors obey the same equivalence.
+
+A surviving lane's first consuming Guard or Bind reconstructs demanded source
+fields under that consumer's recorded \code{rust_reads} (DECODE R).
+Residual relational predicates and direct aggregate operands reconstruct only
+their demanded surviving fields at registered DECODE V sites; the shared
+inverse helper itself grants no opaque read authorization. Existing semantic identity
+and capture obligations remain unchanged. Every partial and combine addition
+uses checked addition: an unflagged result is the exact sum, never a wrapped
+sum. Overflow flagging is incomplete; as with the existing occupancy-dependent
+partition, physical traversal can change which cancellation-heavy sums flag.
+No envelope or rejection premise is added. Selection is
+automatic for admitted shapes, introduces no advice knob, and leaves every
+other expansion unchanged.
+
+\paragraph{GPU realization records.}
+Native ABI is a declared provider-token fact. Input instances record the ordered
+logical/storage column schema and optional codec explicitly; every Rust type is
+opaque. Neither constructor paths nor generic arguments confer native residency,
+and neither do catalog read levels: placement treats a scanned Host provider as
+native row work exactly when its token declares an ABI other than Columns.
+Columns scans retain a host publication boundary for descriptor-based index builds
+unless other row work requires a descendant grade.
+Host row subplans record separate collection adapters by Structures entry:
+device-native range/run/radix rows use a host vector, and their keyed builds
+use a host sorted run with the same key layout. The binding checker validates
+complete adapter coverage and the rewritten host Structures contract before
+printing. Device providers remain unchanged for device consumers; a host
+materialization never collects or iterates a device provider's Rust type.
+\begin{mathpar}
+\Rule{GPU-Representation}{\rho=\text{recorded provider/codec facts}\quad
+ R=\mathrm{fv}(e)\cap\text{row columns}\quad R\subseteq\rho.\mathrm{identity}\quad
+ \mathrm{fv}(e)\setminus R\text{ are closed captures}}
+ {\mathrm{deviceRust}(e)\text{ emits the authored }e\text{ verbatim}}
+\end{mathpar}
+Binding records identity or encoded columns from the selected provider;
+unrecorded columns are unknown. Encoded or unknown Rust reads execute at host,
+and encoded relational operands follow \textsc{GPU-Capture}.
+\begin{mathpar}
+\Rule{GPU-NativeAbi}{p.\mathrm{token}=t\quad \Delta(t).\mathrm{abi}=a\quad
+ a\in\{\mathrm{range},\mathrm{radix\_relation},\mathrm{columns},\mathrm{radix}\}\quad
+ I=p.\mathrm{input}\quad I\ne\bot\Longrightarrow I.\mathrm{keys}\leq |I.\mathrm{columns}|}
+ {\mathrm{abi}(p)=a\quad\mathrm{schema}(p)=I\quad
+ \mathrm{encoded}(I_i)\iff I_i.\mathrm{codecId}\ne\varnothing}
+\Rule{GPU-CodecIdentity}{\forall(\ell,T,i,c),(\ell,T',i',c')\in\mathrm{declaredSymbols}.\ i=i'}
+ {\mathrm{codecId}(\ell)=i\quad\mathrm{captureCodecId}(x:\ell)=\mathrm{codecId}(\ell)}
+\Rule{GPU-ProviderLayout}{T=\text{recorded built provider}\quad
+ a=\text{checked catalog ABI of }T\quad K=\mathrm{concat}(\mathrm{levels})\quad
+ P=\text{recorded complete scan or reconstructed lookup payload}}
+ {\mathrm{layout}=(T,a,K,P,\text{provider directory policy})}
+\Rule{GPU-RadixAdvice}{\Delta(t).\mathrm{abi}=\mathrm{radix}\iff p.\mathrm{radix}=(W,O,\rho,r,m)\quad
+ \rho\geq 2\quad r\leq 32\quad m\geq 1}
+ {\mathrm{advice}(p)=(W,O,\rho,r,m)\text{ authored per instance; nothing chooses it}}
+\Rule{GPU-RadixProvider}{\mathrm{layout}(T)=(T,\mathrm{radix},K,P,\bot)\quad
+ K_i,P_j\text{ carriers of the recorded column types}\quad
+ R=\text{every lookup prefix of }K\text{ and every PH-Smallest side served by }T}
+ {\mathrm{radix}(T)=(K,P,\mathrm{advice}(T),R)\text{, checked against its sources}}
+\Rule{GPU-RadixCandidates}{[\ell,h]=\text{encoded interval of a bound prefix}\quad
+ \mathrm{runs}=\rho_0,\dots,\rho_{n-1}}
+ {\mathsf{distinct}(\ell,h)=\bigl|\bigcup_i \{k\in\rho_i\mid \ell\le k\le h\}\bigr|\quad
+ \mathsf{distinctAt}\text{ enumerates each key once, in its oldest run}}
+\Rule{GPU-RadixEncodedProbe}{v_1..v_q\text{ bound leading fields}\quad
+ v_i\in\mathrm{dom}(f_i)}
+ {[\ell,h]=[\mathsf{enc}(v)\cdot 0^{*},\ \mathsf{enc}(v)\cdot 1^{*}]\text{ formed once; whole-word compares, no }h{+}1}
+\Rule{GPU-RadixExactMember}{q=|K_{\mathrm{physical}}|\quad \ell=h=\mathsf{enc}(v)\quad
+ \mathrm{read}=\mathsf{membership}}
+ {\mathsf{found}\iff \exists i.\ \ell\in\rho_i\quad
+ \text{one exact search per visited run; stop at first hit}}
+\Rule{GPU-RadixSourceBuild}{S_K,S_V\text{ resident sources of }K,V\quad
+ \pi\text{ recorded selection or identity}}
+ {\mathsf{fromSources}=\mathsf{publish}(\mathsf{pack}_K(S_K\circ\pi),\ \mathsf{lanes}_V(S_V\circ\pi))}
+\Rule{GPU-Smallest}{\mathsf{probe\ smallest}\text{ with sides }(T_j,\mathit{pre}_j)_{j<k}\text{ over }c\quad
+ \mathrm{radix}(T_j)\ni(\mathit{pre}_j,\mathrm{Candidates}\ c)}
+ {n_j=\mathsf{distinct}_j\quad j^{*}=\min\{j\mid n_j=\min n\}\quad
+ \text{emit }x\in\mathsf{distinctAt}_{j^{*}}\text{ iff }\forall j\ne j^{*}.\ (\mathit{pre}_j,x)\in T_j}
+\Rule{GPU-GroupProvider}{G.\mathrm{ty}=\text{recorded GPU accumulator provider}\quad
+ G\text{ is keyed}}
+ {\mathsf{group}_{\rm gpu}(G)=G.\mathrm{ty}::\mathsf{fold}(G)}
+\Rule{GPU-PublicationStorage}{S=\text{recorded compact flat rows or packed-key recipe}\quad
+ C=\text{recorded canonical-publication obligation}\quad
+ \text{flat fields are the publication's resident heading, unique, stride }\max(1,|\mathit{fields}|)\quad
+ \text{each consumer reads only published fields at their recorded offsets}\quad
+ \text{packed fields cover the complete published heading in recorded order}\quad
+ \text{each field names its bounds provenance}}
+ {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}
+\end{mathpar}
+Native run and column Host scans require an input schema whose arity and
+recorded logical-type ids match the source relation's ordered declaration;
+catalog templates may omit it. Contiguous ranges require the range ABI and range read capability;
+resident-column bounds require the columns ABI. Codec lookup uses recorded
+\code{LogicalTypeId}; codec identities are compared by recorded \code{CodecId}
+across input schemas before translating expressions. A mismatch or conflict
+is rejected, never overwritten. Logical and codec types are printing payloads;
+equal spelling does not equate explicitly different ids.
+Thus a compared column and its closed capture use the same declared encoding.
+The GPU binding pass records one catalog-backed provider realization for both
+resident and computed paths; the checker validates supplied records without
+rerunning selection. Range providers record a dense u32-addressed domain after
+signed-base normalization, with one terminal entry (zero entries for keyless
+providers). The first key is
+reconstructed from the probe, later keys remain payload, and scans retain their
+complete payload. The domain is symbolic until bounds are available; the runtime
+checks and consumes the allocation rather than selecting its policy.
+Native lookups record either a borrowed leading-prefix view or a complete
+materialized permutation; printers cannot invent a sorted provider.
+Downloaded host scans consume a recorded host adapter replacement; every
+resident scan has exactly one such record. Uploads consume the recorded
+empty-row or numeric-column adapter and its declared carrier tuple.
+Keyed terminal groups print the accumulator recorded in Structures; keyless
+global folds have no keyed accumulator record. Terminal-group execution and
+input realization are recorded separately (\textsc{GPU-TerminalGroup}).
+GPU publication refinement records flat carrier columns and stride, or a
+frame-of-reference equality-key recipe with ordered fields and bounds sources.
+Each packed field uses its minimum as base and its range bit width; fields and
+u64 lanes are low-first, with at least one lane for a zero-bit key. Runtime
+bounds instantiate this recorded recipe. Column fields name the complete union
+of their immutable original resident input domains, or their declared Scalar
+carrier metadata; scalar folds record their monoid's fixed bounds.
+An uploaded host publication does not mutate a recorded packing domain, so
+early and late emission use the same source. Host unions separately record
+their flat staging carrier. A raw-candidate terminal dispatch (no group,
+scalar fold or canonical granularity) also records its arena encoding: the
+head columns in order at their recorded device carriers; an arena translation
+prints that record and rejects any terminal without one. The checker traverses
+Sequence constructors and checks coverage, canonical obligations, field
+provenance, stride, staging and arena encoding without calling the producer's
+context/selection helpers. A codec does not select a canonicalization provider.
+
+\paragraph{GPU realization selection.}
+After publication storage, the target selects one realization of the graded
+program and records it with the bindings; printers consume only these
+records, and an independent checker validates them without calling the
+selection. A selection failure is a recorded fact raised only when that
+candidate is printed: planner candidates are graded, not printed.
+\emph{Sources} record, per Physical result read by a dispatch, its origin
+(resident columns, packed runs with their native lookups, or a host
+evaluation uploaded during the build), its column map, its access (scan, an
+interval's materialized positions, or the recorded Range provider restricted
+to an optional interval) and its construction phase. An interval records
+every explicit relational selection bound on one column, including equality;
+contradictory bounds therefore retain an empty interval. The checker verifies
+the recorded bounds as a set against the constraints of the source's
+selection chain without rerunning origin selection. Runs never take an
+interval. A provider has one owner, and the owner precedes every reader: a
+nonterminal dispatch or host-union publication builds its result's providers
+unless an earlier definition looks them up, in which case the source builds
+them and the publication does not; the exclusion is derived from the produced
+steps.
+The checker also validates union arms against the union's operands in order,
+transfer coverage, provider origins, capture records and the runtime-supported
+auxiliary geometry. \emph{Steps} record,
+per Sequence definition in order, whether it is a terminal-group alias, the
+terminal group, a dispatch, a host union, a host upload, or host-only.
+Host evaluations record the completed publications bound to their results and
+their transfers, each of complete rows. Provider builds over a completed
+publication record each descriptor column's bounds: the union of the resident
+input columns renamed into it or of upload metadata, merged pairwise with later
+uploads, or the Scalar carrier range; a key over packed runs records one
+measured reduction with its readback. Auxiliary element kernels (union decode
+and pack, host-output pack) record one-thread-per-element geometry.
+Closed captures and device Rust callables are extracted once into records:
+values with their column codec, callables with their reads and closed host
+subexpressions, the captures each definition uses, the device expression of
+each row function and the host-bound selection conditions.
+\begin{mathpar}
+\Rule{GPU-Realization}{R=\mathsf{select}(P,A)\text{ after }\textsc{GPU-PublicationStorage}\quad
+ \mathsf{check}(P,A,R)}
+ {\mathsf{print}_{\rm gpu}(P)\text{ consumes }R\text{ (sources, steps, transfers, captures, geometry)}}
+\Rule{GPU-SourceAccess}{\rho=\text{recorded source of }r\quad
+ \rho.\mathsf{interval}=\mathsf{fold}(\text{contiguous selections of }r)}
+ {\mathsf{read}_{\rm gpu}(r)=\rho.\mathsf{access}(\rho.\mathsf{origin})}
+\Rule{GPU-Transfer}{e=\text{recorded host evaluation}\quad
+ \tau\in e.\mathsf{transfers}\quad \tau.\mathsf{granularity}=\mathsf{completeRows}}
+ {\mathsf{host}(e)\text{ reads }\tau.\mathsf{source}\text{ downloaded once per invocation}}
+\Rule{GPU-ProviderDomain}{B=\text{recorded descriptor bounds of column }c\quad
+ \text{every source of }B\text{ publishes }c}
+ {\mathsf{descriptor}(c).\mathsf{bounds}=B\quad
+  \mathsf{domain}(c)=B\text{ or one recorded measurement}}
+\Rule{GPU-TerminalGroup}{G=\text{recorded terminal group of the final publication}\quad
+ \text{aliases are transparent stores of }G}
+ {\mathsf{group}_{\rm gpu}=G.\mathsf{completion}(G.\mathsf{input})}
+\Rule{GPU-GroupGridFold}{G\text{ keyless}\quad
+ B=\biguplus_b B_b\text{ over an occupancy grid}\quad
+ p_b=(\mathsf{fold}_a(B_b),\mathsf{present}_a(B_b))_a}
+ {\mathsf{group}_{\rm gpu}(G)_a=\bigoplus_b (p_b)_a\text{ in one stream-ordered combine block per aggregate }a}
+\end{mathpar}
+Whole-relation (zero-key) lookups also demand a recorded source or completed
+publication, including its row count; they do not require a keyed provider.
+Filtered host Cartesian operands are uploaded with the predicate applied,
+and consumers read the uploaded count rather than the unfiltered input length.
+A source interval is available only when every folded bound restricts the
+same source column. Independent literal restrictions remain row predicates;
+they are not an illegal multi-column interval. Dense range providers normalize
+signed keys by a recorded runtime base $\min(0,\mathsf{bounds.min})$ before
+directory addressing. Domain size and its sentinel are checked with widened
+arithmetic; payload values retain their original signed representation.
+An inferred answer binder's declared head type supplies its carrier inference
+constraint before publication storage records scalar bounds and arena metadata.
+The carrier checker validates that constraint independently; printing does not
+recover a type from expression or type spelling.
+The terminal group record names the Physical group, its input realization and
+its completion. The input is the packed canonical publication (whose recorded
+fields extraction decodes), a completed flat publication or device source
+fused with the chain's row maps under a live mask, or a host evaluation of the
+Physical input, uploaded unless already a device source. Store aliases that
+wrap the same group are realized by its fold rather than published. Keyed
+groups extract arguments on the occupancy grid and call the recorded
+accumulator. Keyless groups fold in one fused pass: each block accumulates its
+grid-stride live rows into typed per-aggregate partials (count and checked sum,
+extrema with presence) at its recorded block geometry, and one block per
+aggregate combines the partials on the producing stream at the recorded
+combine geometry. The empty input keeps one row with zero counts and sums and absent
+extrema; overflow and representation-range failures set the published row's
+sticky failure word.
+
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,
-an equality guard against the literal (a closed capture), and a projection
-that drops the fresh column; its checker re-derives that triple from the
-source and requires exact equality.
+an equality selection against the literal (a closed capture), and a projection
+that drops the fresh column. Its checker inspects the recorded rename--select--project
+chain: intermediate pipes are private single-use results, original mappings
+are preserved, added equalities bind only the source literals, and the final
+projection is exact. It does not regenerate fresh names or rerun the rewrite.
+Operands at code-domain columns arrive
+already translated by A-Domain into capture references; no string literal
+reaches this rewrite.
 \begin{mathpar}
 \Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
- {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{guard}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}
+ {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{select}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}
 \end{mathpar}
 
 
@@ -1105,8 +1972,8 @@ commutative monoid. Min and max use the option lifting of the declared
 total order, with \code{None} as identity and \code{Some} as injection.
 Thus empty keyed input has no answer, while empty global input has one
 answer containing zero counts/sums and absent extrema. These laws assume
-the declared operations satisfy their monoid premises; an expression
-failure propagates the single $\bot$ before any result is published.
+the declared operations satisfy their monoid premises; Rust expressions are
+total by premise and runtime failures must never publish a partial answer.
 
 Let $S$ be a store of distinct valuations, partitioned by key, and let
 $o_k,o_{k+1}$ be the owner offsets of key $k$ in the grouped store.
@@ -1127,23 +1994,29 @@ BE-KeyPartGroup, never as a collective at the separated pool.
 
 \paragraph{Key-aware grouped fold.}
 \begin{mathpar}
-\Rule{BE-GroupKey}{E_{\rm key}\models K_R\to R\ \text{with unique physical keys for every positive atom }R
- \quad V\text{ determines every }K_R}
- {\mathsf{canon}(\mathsf{valuations}_V)=\mathsf{valuations}_V}
+\Rule{BE-GroupKey}{\mathsf{PhysicalTransfer}(V,K_1,\ldots,K_n)=K\quad
+ K\subseteq\mathsf{heading}(V)\quad
+ \forall i.\ K_i\text{ is proved by the actual Sequence operand}}
+ {\mathsf{valuations}_V\text{ is globally unique}}
 \end{mathpar}
-Under these asserted premises, each complete named valuation identifies at
-most one physical witness combination. RA-Group therefore folds the same bag
-without the canonical-valuation store. Renames translate keys, joins combine
-them, scalar binds and filters preserve them, and projection must retain a key.
-Expanding Rust binds and unions supply no such certificate. The checked
-\code{group\_without\_canon} rewrite removes canonicalizers only if the resulting
-group input still has proven positional uniqueness. Proof caches include
-evidence, so removing an assertion cannot reuse its proof. GPU interpretation
-may read resident columns directly and evaluate only the group arguments;
-it does not decide whether a key premise holds.
+Each complete input row is a unique witness under the IO set contract.
+Shared Physical transfer translates keys through renames, combines them through
+joins, preserves them through scalar binds and filters, and requires projections
+to retain a key. For a checked fallback-disjoint union, every actual arm must
+be unique; the shared transfer supplies the complete union heading.
+Evidence never supplies a partial key. Recorded Physical canons do not prove
+that a Sequence term has executed them: only the actual Canon term establishes
+that boundary. The checker uses these facts for BE-Group and BE-GroupPartial,
+not for a separate canonicalizer-removal rewrite.
+
+Physical lowering owns valuation canonicalization. Sequence preserves that
+decision and checks group input uniqueness; it does not remove canonicalizers
+using a second key-based decision. GPU interpretation may read resident
+columns directly and evaluate only the group arguments when the preserved
+input permits it.
 
 \paragraph{GPU machine instance of BE-Group.}
-The recorded canonical provider publishes the distinct complete valuations
+The target canonicalization implementation publishes the distinct complete valuations
 before the grouped boundary. Stable radix ordering of their key codes gives
 a permutation $\pi$; adjacent unequal keys mark owner offsets. Thus each
 half-open segment of $\pi$ enumerates exactly $D_k$, and the same BE-Group
@@ -1152,8 +2025,8 @@ Each owner is reduced collaboratively using the declared integer monoid:
 count and sum have zero identity; extrema carry a separate validity bit
 and retain the full-width value, including both signed endpoints.
 Codec widths constrain the result (in particular unsigned 32-bit sums
-cannot silently become signed 64-bit sums). Arithmetic failure is published
-as bottom through the output status, together with ancestor failures.
+cannot silently become signed 64-bit sums). Runtime capacity or offset failure
+is reported through output status, together with ancestor failures.
 Empty keyed input publishes zero owners; an empty global key publishes one
 owner with count/sum zero and invalid extrema. Values, validity, and logical
 output count remain resident until the explicit typed host decode.
@@ -1182,10 +2055,10 @@ decides for itself. Those are the terms a rewrite must record.
 \toprule
  & CQ \ldots\ Structures & Sequence\\
 \midrule
-objects & finite sets, $\bot+\mathrm{Set}$ & nested sequences of codes; $\alpha$ a monad morphism to bags\\
+objects & finite sets & nested sequences of codes; $\alpha$ a monad morphism to bags\\
 composition & Kleisli bind in written order & \code{map} / \code{flatten} / \code{compact} / \code{tile} / \code{fold}; bind is a flatten of lookups\\
-order & meaning only through pinned Rust & causal partial order at host; none below\\
-partiality & one $\bot$ anywhere & total fragment below host; a flag at boundaries\\
+order & free-variable dependencies and ordered fallback & recorded plan and execution dependencies\\
+Rust & opaque, pure and total by premise & verbatim; device eligibility from representations\\
 sizes & outside meaning & lengths in types; capacity an obligation\\
 positions & none & the parallel index; recorded\\
 placement & the emitter's & a grading over a machine parameter; dispatch derived\\
@@ -1213,7 +2086,7 @@ partial host fragment with written-order meaning above a total device
 fragment.
 
 \paragraph{Invocation-local proof reuse.}
-Planner enumeration may share a checked Structures prefix, its support graph,
+Planner enumeration may share checked Physical and Structures programs, their support graph,
 and immutable structural analysis between candidates. Cache hits require
 complete syntax equality; interned proof identities are introduced only after
 that comparison. Evidence changes revalidate evidence obligations, and grading
@@ -1228,3 +2101,31 @@ rows before a host consumer is an alternative under BE-Scope and PL-Precedence,
 not an exception to the catalog premise. Resource-rejected dispatches may
 instead publish named inner flatten levels using EXT-SeqStore; every resulting
 tile/item candidate still satisfies BE-Resource before PL-Cost selection.
+
+\subsection{Nonsemantic expansion observations}
+\begin{mathpar}
+\Rule{SQ-ExpansionCounters}
+ {s\text{ is a checked Sequence expansion site}\quad
+  C_s=\sum_{p\in\mathsf{parents}(s)}|\mathsf{children}_s(p)|}
+ {\mathsf{observe}(s)=C_s\quad
+  \mathsf{erase}(\mathsf{instrument}(P))=\mathsf{erase}(P)}
+\end{mathpar}
+An opt-in observation names the program, Sequence definition and expansion
+stage; a Datalog invocation adds its checked rule variant and round.
+Count children before downstream closing filters or lookups, not surviving
+children. GPU block leaders add collective child totals using 64-bit atomics;
+pull iterators count successful child production. Only a successful publication
+attempt contributes: capacity retries are discarded. Observations never change
+join order, predicates, providers or output, and disabling instrumentation emits
+the original program. Pull measurements describe demand actually consumed.
+For Datalog, report each rule's distinct candidate set minus the pre-round
+accepted set without mutating it; overlapping rule contributions are not
+additive. Ordinary Sequence dispatches report closing output before any separate
+canonicalization. The largest stage count divided by the corresponding output
+is diagnostic evidence, not a correctness premise or scheduling decision.
+In instrumented Datalog builds, an additional explicit kernel-trace request may
+enable the existing arena event timers around each hole. Reports use source
+rule labels when present and retain variant, round and hole identities.
+The prior arena-timing mode is restored after each observation. These fenced,
+instrumented event times are diagnostic attribution, not the uninstrumented
+fixpoint measurements used for performance comparisons.

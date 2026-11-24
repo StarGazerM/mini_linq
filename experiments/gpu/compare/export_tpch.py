@@ -80,6 +80,49 @@ def run_sql(database, sql):
     result = subprocess.run(command, input=sql, text=True, capture_output=True, check=True)
     return result.stdout
 
+def certify_manifest(root, destination):
+    """Read-only preparation of checked keys; never rewrites relation files."""
+    manifest = json.loads((root / 'manifest.json').read_text())
+    keys = {
+        'lineitem': ['l_orderkey', 'l_linenumber'],
+        'orders': ['o_orderkey'], 'customer': ['c_custkey'],
+        'supplier': ['s_suppkey'], 'part': ['p_partkey'],
+        'partsupp': ['ps_partkey', 'ps_suppkey'],
+        'nation': ['n_nationkey'], 'region': ['r_regionkey'],
+    }
+    for table, relation in manifest['relations'].items():
+        columns = {column['name']: column for column in relation['columns']}
+        names = keys.get(table, [])
+        relation['verified_keys'] = []
+        if not names or not all(name in columns for name in names):
+            continue
+        arrays, hashes = [], {}
+        for name in names:
+            column = columns[name]
+            if column['encoding'] == 'dictionary':
+                raise ValueError(f'{table}.{name}: decoded text keys are not supported')
+            path = root / column['file']
+            data = path.read_bytes()
+            hashes[name] = hashlib.sha256(data).hexdigest()
+            array = np.frombuffer(data, dtype='<i8' if column['type'] == 'i64' else '<i4')
+            if len(array) != relation['rows']:
+                raise ValueError(f'{table}.{name}: row count mismatch')
+            arrays.append(array)
+        # Formal rule IO-GpuPrepareKey: check stored key values, not declared TPC-H constraints.
+        key_rows = np.rec.fromarrays(arrays, names=names)
+        unique = len(np.unique(key_rows)) == relation['rows']
+        if unique:
+            relation['verified_keys'].append({
+                'set': 'verified', 'columns': hashes, 'rows': relation['rows'],
+                'types': {name: columns[name]['type'] for name in names},
+            })
+        print(f'{table}: key {names}: {"verified" if unique else "duplicates; dedup retained"}',
+              flush=True)
+    manifest['schema_version'] = 3
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(manifest, indent=2) + '\n')
+
+
 
 def export(sf, base):
     root = base / f'sf{sf}'
@@ -198,6 +241,7 @@ def export(sf, base):
               str({t: v['median_seconds'] for t, v in timings['threads'].items()}), flush=True)
     manifest['binary_bytes'] = sum(path.stat().st_size for path in root.glob('*.bin'))
     (root / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    certify_manifest(root, root / 'manifest.json')
     print(f'SF{sf} binary bytes: {manifest["binary_bytes"]}', flush=True)
 
 
@@ -210,10 +254,15 @@ def main():
     parser.add_argument('--duckdb', default=CLI, help='DuckDB executable (default: DUCKDB or duckdb on PATH)')
     parser.add_argument('--source-sf1', type=Path, default=SOURCE_SF1,
                         help='optional existing SF1 database to copy; otherwise generate via DuckDB tpch')
+    parser.add_argument('--manifest-only', type=Path,
+                        help='verify existing --root/sfN files read-only; write sfN.json here')
     arguments = parser.parse_args()
     CLI, SOURCE_SF1 = arguments.duckdb, arguments.source_sf1
     for sf in sorted(set(arguments.sf)):
-        export(sf, arguments.root)
+        if arguments.manifest_only is not None:
+            certify_manifest(arguments.root / f'sf{sf}', arguments.manifest_only / f'sf{sf}.json')
+        else:
+            export(sf, arguments.root)
 
 
 if __name__ == '__main__':

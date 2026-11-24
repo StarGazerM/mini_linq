@@ -15,7 +15,7 @@ pub fn check(scenario: Scenario) {
         relation R(x: i32, y: i32);
         relation answer(c0: i32, c1: i32);
         answer(*sum, *shifted) :- R(x, y), let sum: i32 = *x + *y,
-            let shifted: i32 = *sum * 2 - 1, if *shifted > 0;
+            let shifted: i32 = *sum * 2 - 1, where shifted > 0;
     };
     let actual = result
         .map(|(column_0, column_1)| vec![column_0, column_1])

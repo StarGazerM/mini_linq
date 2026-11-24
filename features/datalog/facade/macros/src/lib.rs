@@ -9,6 +9,8 @@ mod kw {
     syn::custom_keyword!(arguments);
     syn::custom_keyword!(hoist_invariants);
     syn::custom_keyword!(driver);
+    syn::custom_keyword!(plan);
+    syn::custom_keyword!(context);
 }
 
 struct Entry {
@@ -54,10 +56,9 @@ fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStre
             .arguments
             .extend(quote::quote!(hoist_invariants;));
     }
-    entry
-        .configuration
-        .resolve(DatalogConfiguration::defaults())?
-        .start(entry.source)
+    let defaults = DatalogConfiguration::defaults();
+    let pipeline = entry.configuration.resolve(defaults)?;
+    pipeline.start(entry.source)
 }
 
 /// Expand surface syntax and run the named checked Datalog pipeline.
@@ -91,13 +92,23 @@ fn invariant_arguments(input: ParseStream<'_>) -> syn::Result<bool> {
     Ok(enabled)
 }
 
-fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<(bool, cq_datalog_incremental::DriverPolicy)> {
+struct IncrementalArguments {
+    hoist: bool,
+    driver: cq_datalog_incremental::DriverPolicy,
+    plans: Vec<cq_datalog_incremental::RulePlan>,
+}
+
+
+fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<IncrementalArguments> {
     let mut hoist = false;
     let mut driver = None;
+    let mut plans = Vec::new();
     while !input.is_empty() {
         if input.peek(kw::hoist_invariants) {
             input.parse::<kw::hoist_invariants>()?;
-            if hoist { return Err(input.error("duplicate hoist_invariants")); }
+            if hoist {
+                return Err(input.error("duplicate hoist_invariants"));
+            }
             hoist = true;
         } else if input.peek(kw::driver) {
             input.parse::<kw::driver>()?;
@@ -107,16 +118,36 @@ fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<(bool, cq_datalo
             let policy = match name.to_string().as_str() {
                 "written_order" => cq_datalog_incremental::DriverPolicy::WrittenOrder,
                 "delta_first" => cq_datalog_incremental::DriverPolicy::DeltaFirst,
-                _ => return Err(syn::Error::new_spanned(name, "expected written_order or delta_first")),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "expected written_order or delta_first",
+                    ));
+                }
             };
-            if !argument.is_empty() { return Err(argument.error("expected one driver policy")); }
-            if driver.replace(policy).is_some() { return Err(input.error("duplicate driver policy")); }
+            if !argument.is_empty() {
+                return Err(argument.error("expected one driver policy"));
+            }
+            if driver.replace(policy).is_some() {
+                return Err(input.error("duplicate driver policy"));
+            }
+        } else if input.peek(kw::plan) {
+            input.parse::<kw::plan>()?;
+            let argument;
+            syn::parenthesized!(argument in input);
+            plans.push(argument.parse::<cq_datalog_incremental::RulePlan>()?);
         } else {
-            return Err(input.error("expected hoist_invariants; or driver(delta_first);"));
+            return Err(
+                input.error("expected hoist_invariants;, driver(delta_first); or plan(..);")
+            );
         }
         input.parse::<Token![;]>()?;
     }
-    Ok((hoist, driver.unwrap_or_default()))
+    Ok(IncrementalArguments {
+        hoist,
+        driver: driver.unwrap_or_default(),
+        plans,
+    })
 }
 
 /// Surface tokens → Source tokens, expanding refutable bindings explicitly.
@@ -152,13 +183,21 @@ pub fn incremental(input: TokenStream) -> TokenStream {
         input.into(),
         |source, args| {
             use syn::parse::Parser;
-            let (hoist, driver) = incremental_arguments.parse2(args)?;
-            let hoist = hoist || cfg!(feature = "hoist-invariants");
+            let arguments = incremental_arguments.parse2(args)?;
+            let hoist = arguments.hoist || cfg!(feature = "hoist-invariants");
             if hoist && source.source.invariants.is_empty() {
                 let source = cq_datalog_stratify::invariants::compile(source)?;
-                cq_datalog_incremental::compile_with_driver(&source, driver)
+                cq_datalog_incremental::compile_with_advice(
+                    &source,
+                    arguments.driver,
+                    &arguments.plans,
+                )
             } else {
-                cq_datalog_incremental::compile_with_driver(source, driver)
+                cq_datalog_incremental::compile_with_advice(
+                    source,
+                    arguments.driver,
+                    &arguments.plans,
+                )
             }
         },
     )
@@ -200,3 +239,43 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
 
 #[cfg(test)]
 mod tests;
+
+/// Resolve this invocation's selectors from carried planning tables, preserving
+/// queue ordinals without reconstructing CQ occurrences from Physical.
+#[proc_macro]
+pub fn smallest_before(input: TokenStream) -> TokenStream {
+    use quote::quote;
+    use syn::parse::Parser;
+    let parser = |input: ParseStream<'_>| -> syn::Result<proc_macro2::TokenStream> {
+        input.parse::<kw::arguments>()?;
+        let arguments;
+        syn::braced!(arguments in input);
+        let next: cq_stage::Invocation = arguments.parse()?;
+        arguments.parse::<Token![;]>()?;
+        let sites: proc_macro2::TokenStream = arguments.parse()?;
+        input.parse::<Token![;]>()?;
+        let context = if input.peek(kw::context) {
+            input.parse::<kw::context>()?;
+            let body;
+            syn::braced!(body in input);
+            let body: proc_macro2::TokenStream = body.parse()?;
+            input.parse::<Token![;]>()?;
+            quote!(context { #body };)
+        } else {
+            proc_macro2::TokenStream::new()
+        };
+        let mut pipeline: cq_stage::Pipeline = input.parse()?;
+        let sites = cq_stage::planning::resolve_smallest(sites, pipeline.planning.as_ref())?;
+        input.parse::<Token![;]>()?;
+        let program: proc_macro2::TokenStream = input.parse()?;
+        pipeline.passes.insert(0, next);
+        Ok(cq_stage::rewrite::<cq_lang_physical::Program>(
+            quote!(arguments { #sites }; #context #pipeline; #program),
+            cq_rewrite_passes::smallest_intersections,
+        ))
+    };
+    parser
+        .parse2(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

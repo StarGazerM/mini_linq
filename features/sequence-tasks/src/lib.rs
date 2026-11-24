@@ -2,8 +2,10 @@
 //!
 //! Generated expressions require `rayon`, `cq-storage` and this crate (its
 //! [`combine`] runtime) in the consumer. The
-//! caller supplies facts checked against [`machine`]; translation never repeats
-//! analysis. Host and task-local constructors reuse the sequential interpreter.
+//! caller supplies Sequence facts checked against [`machine`]; translation never
+//! repeats Sequence analysis. Host and task-local constructors reuse the sequential interpreter,
+//! with whole-stream and answer-head canonicalization explicitly targeting
+//! parallel sort and adjacent unique.
 //! Shared indexed dispatch keeps Rayon plumbing out of generated pipelines.
 //! Pool chunks publish owned buffers in order; task panics propagate to the join.
 //! Key-disjoint partitions support local canon and keyed folds; global monoids
@@ -84,6 +86,7 @@ pub fn machine_with(config: Config) -> Machine {
 pub fn machine_with_width(parts: usize) -> Machine {
     assert!(parts > 0, "task machine partition count must be positive");
     Machine {
+        gpu: None,
         layout: None,
         name: syn::parse_quote!(tasks),
         items: 1,
@@ -92,18 +95,21 @@ pub fn machine_with_width(parts: usize) -> Machine {
         root: LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
+            host_rust: true,
             collaborative: false,
             dynamic: false,
             width: None,
             children: vec![LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(pool),
+                host_rust: true,
                 collaborative: false,
                 dynamic: true,
                 width: Some(parts),
                 children: vec![LevelNode {
                     shared_bytes: None,
                     name: syn::parse_quote!(task),
+                    host_rust: true,
                     collaborative: false,
                     dynamic: false,
                     width: None,
@@ -117,134 +123,92 @@ pub fn machine_with_width(parts: usize) -> Machine {
 /// Native runtime tokens are valid at host, pool publication and task levels.
 ///
 /// Task chunks own their native values; no device codec or provider is implied.
+/// Recorded membership providers retain the same routed publication protocol
+/// as explicit-codec keysets. Single-column membership records `dense_membership`;
+/// provider builds use `Build`, independently of the planner's key-partition choice.
 pub fn catalog() -> cq_lang_sequence::Catalog {
+    use cq_lang_sequence::CatalogEntry;
+    use cq_lang_sequence::structures::provider::base::declaration;
+
     let mut catalog = cq_sequence_pull::catalog();
     let levels = vec![
         vec!["host".into()],
         vec!["host".into(), "pool".into()],
         vec!["host".into(), "pool".into(), "task".into()],
     ];
-    for token in &mut catalog.providers {
+    for entry in &mut catalog.providers {
         // Lazy Rc/RefCell providers remain legal at host, but cannot be
         // captured by shared task readers. Selection upgrades them when its
         // checked retention/retyping rewrite is applicable.
-        if !matches!(&token.ty, syn::Type::Path(path)
-            if path.path.segments.last().is_some_and(|segment|
-                segment.ident == "HashIndex" || segment.ident == "Trie" || segment.ident == "KeySet"))
-        {
-            token.levels = levels.clone();
+        let shared = catalog
+            .declarations
+            .iter()
+            .find(|declaration| declaration.token == entry.provider.token)
+            .is_some_and(|declaration| declaration.facts.shared);
+        if shared {
+            entry.levels = levels.clone();
         }
     }
+    let sharded_index = declaration("sharded_index");
     catalog.providers.insert(
         0,
-        cq_lang_sequence::ProviderToken {
-            supports: vec![cq_lang_sequence::structures::ProviderCapability::Keys],
-            ty: syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
-            capabilities: vec![
-                cq_lang_sequence::Capability::Exact,
-                cq_lang_sequence::Capability::Membership,
-            ],
+        CatalogEntry {
+            provider: sharded_index.instance(),
             levels: levels.clone(),
-            elements: None,
         },
     );
-    // Hash sharding retains exact probes, but not a shard's global ordering.
-    // The synchronous pool join publishes native memory to host and task readers.
-    use cq_lang_sequence::{Capability, ProviderToken};
-    use cq_lang_sequence::structures::ProviderCapability::Keys;
-    for (ty, capabilities, supports) in [
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(
-                ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveKeySet<_, _, _>>
-            ),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_>>),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_, _>>),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(
-                ::cq_storage::sharded::Sharded<::std::collections::BTreeMap<_, ::std::vec::Vec<_>>>
-            ),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
+    catalog.declarations.insert(0, sharded_index);
+    // Formal rule STR-Routed: hash sharding retains exact probes, but not a
+    // shard's global ordering. The synchronous pool join publishes native
+    // memory to host and task readers. A routed entry is spelled with the
+    // projection router (`Sharded<Inner, _>`), which changes partition
+    // placement, not facts.
+    let sharded = declaration("sharded");
+    for inner in [
+        "hash_set",
+        "adaptive_keyset",
+        "adaptive_membership",
+        "dense_membership",
+        "std_hash_set",
+        "sharded_index",
+        "sorted_run",
+        "radix_run",
+        "btree_map_grouped",
     ] {
-        let ty: syn::Type = ty;
-        // A projection router changes partition placement, not capabilities.
-        let mut routed_ty: syn::Type = ty.clone();
-        if let syn::Type::Path(path) = &mut routed_ty {
-            if let syn::PathArguments::AngleBracketed(args) =
-                &mut path.path.segments.last_mut().unwrap().arguments
-            {
-                args.args.push(syn::parse_quote!(_));
-            }
-        }
-        catalog.providers.push(ProviderToken {
-            ty: routed_ty,
-            capabilities: capabilities.clone(),
-            supports: supports.clone(),
+        let inner = declaration(inner).instance();
+        let ty = &inner.ty;
+        catalog.providers.push(CatalogEntry {
+            provider: cq_lang_sequence::structures::Provider {
+                token: sharded.token.clone(),
+                ty: syn::parse_quote!(::cq_storage::sharded::Sharded<#ty, _>),
+                inner: Some(Box::new(inner)),
+                input: None,
+                radix: None,
+                construction: cq_lang_sequence::structures::stats::Construction::Ordinary,
+            },
             levels: levels.clone(),
-            elements: None,
-        });
-        catalog.providers.push(ProviderToken {
-            ty,
-            capabilities,
-            supports,
-            levels: levels.clone(),
-            elements: None,
         });
     }
+    catalog.declarations.push(sharded);
     for token in &mut catalog.codecs {
-        token.levels = levels.clone();
-    }
-    for token in &mut catalog.canons {
         token.levels = levels.clone();
     }
     catalog
 }
 
 /// Select native shareable representations through checked Structures rewrites.
+/// Host fallbacks must be retained and published before shared readers capture
+/// them, even when their underlying storage type already supports task reads.
+/// Returns the complete updated `(Physical, Structures, Sequence)` stack so that
+/// retention and provider changes remain paired with the rewritten schedule.
 pub fn select_providers(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     source: &Program,
     catalog: &cq_lang_sequence::Catalog,
-) -> syn::Result<Program> {
-    let analysis = cq_lang_sequence::contract::check(source)?;
-    let mut admitted: std::collections::BTreeSet<_> = source
-        .structures
+) -> syn::Result<(cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, Program)> {
+    let analysis = cq_lang_sequence::contract::check(physical, structures, source)?;
+    let mut admitted: std::collections::BTreeSet<_> = structures
         .structures
         .entries
         .iter()
@@ -254,67 +218,40 @@ pub fn select_providers(
         let cq_lang_sequence::Obligation::Provider {
             provider,
             capability,
-            ty,
+            instance,
             ..
         } = obligation
         else {
             continue;
         };
-        if !catalog.providers.iter().any(|token| {
-            cq_sequence_plan::matches_type(&token.ty, ty)
-                && token.capabilities.contains(capability)
-                && !token.levels.is_empty()
-                && token.elements.as_ref().is_none_or(|accepted| {
-                    analysis.structures.layouts[provider].iter().all(|column| {
-                        accepted.iter().any(|pattern| {
-                            cq_sequence_plan::matches_type(
-                                pattern,
-                                &analysis.structures.physical.rows[provider].types[column],
-                            )
-                        })
-                    })
-                })
+        if !catalog.entry(instance).is_some_and(|entry| {
+            !entry.levels.is_empty()
+                && catalog
+                    .facts(&entry.provider)
+                    .is_some_and(|facts| facts.reads(capability))
         }) {
             admitted.remove(provider);
         }
     }
     // Instantiate supported authored families before checked selection. A
     // transient retype can invalidate obligations such as exact join filters.
+    // Selection keeps a recorded instance's spelling for the same tokens.
     let mut native = catalog.clone();
     native
         .providers
-        .retain(|token| token.levels.iter().any(|level| level.len() > 1));
-    for entry in &source.structures.structures.entries {
-        let ty = match &entry.structure {
-            cq_lang_sequence::structures::Structure::Built { keyed, .. }
-            | cq_lang_sequence::structures::Structure::Host { keyed, .. } => &keyed.ty,
-            cq_lang_sequence::structures::Structure::KeySet { ty, .. }
-            | cq_lang_sequence::structures::Structure::Selection { ty, .. } => ty,
-            cq_lang_sequence::structures::Structure::JoinFilter { filter, .. } => &filter.ty,
-            _ => continue,
-        };
-        if let Some(token) = catalog.providers.iter().find(|token| {
-            token.levels.iter().any(|level| level.len() > 1)
-                && cq_sequence_plan::matches_type(&token.ty, ty)
-        }) {
-            let mut token = token.clone();
-            token.ty = ty.clone();
-            native.providers.push(token);
-        }
-    }
+        .retain(|entry| entry.levels.iter().any(|level| level.len() > 1));
     let mut target = source.clone();
-    target.structures = cq_sequence_plan::rewrites::select_from_catalog_preserving(
-        &source.structures,
+    let (target_physical, target_structures) = cq_sequence_plan::rewrites::select_from_catalog_preserving(
+        physical,
+        structures,
         &native,
         &admitted,
     )?;
-    for (old, retained) in source
-        .structures
-        .physical
+    for (old, retained) in physical
         .program
         .definitions
         .iter()
-        .zip(&target.structures.physical.program.definitions)
+        .zip(&target_physical.program.definitions)
     {
         if old.mode == retained.mode {
             continue;
@@ -353,62 +290,75 @@ pub fn select_providers(
             }
         }
     }
-    cq_lang_sequence::check_rewrite(source, &target)?;
-    Ok(target)
+    cq_lang_sequence::check_rewrite(physical, structures, source, &target_physical, &target_structures, &target)?;
+    Ok((target_physical, target_structures, target))
 }
 
+// DESIGN translator-tasks
+// Owns interpretation of checked Tasks facts (translator-decides-nothing, T-Tasks/BE-TaskProducer).
+// Source: doc/PLANNING-REDESIGN.md Architecture; doc/formal/CONFORMANCE.md Rayon/Pull rows.
+// Consume recorded producer identities, worker-local lifetimes and carrier publications.
+// DO NOT recover ownership from generated tokens, replan joins, or insert unrecorded stores/choices.
 /// Translate checked partitions into joined, owned output.
 // Formal rule T-Tasks: shared indexed task dispatch publishes ordered task-local
-// buffers before monoidal reductions and local then global canonicalization.
-pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
-    translate_with(program, analysis, Config::default())
+// buffers before monoidal reductions and whole-stream sort canonicalization.
+pub fn translate(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<syn::Expr> {
+    translate_with(physical, structures, program, analysis, Config::default())
 }
 
 /// Instrument the same checked Tasks interpretation, including worker work.
-pub fn translate_profile(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
-    translate_profile_with(program, analysis, Config::default())
+pub fn translate_profile(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<syn::Expr> {
+    translate_profile_with(physical, structures, program, analysis, Config::default())
 }
 
 /// Profile a target with explicit scheduling parameters.
 pub fn translate_profile_with(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     program: &Program,
     analysis: &Analysis,
     config: Config,
 ) -> syn::Result<syn::Expr> {
-    translate_mode(program, analysis, config, true)
+    translate_mode(physical, structures, program, analysis, config, true)
 }
 
 pub fn translate_with(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     program: &Program,
     analysis: &Analysis,
     config: Config,
 ) -> syn::Result<syn::Expr> {
-    translate_mode(program, analysis, config, false)
+    translate_mode(physical, structures, program, analysis, config, false)
 }
 
 fn translate_mode(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     program: &Program,
     analysis: &Analysis,
     config: Config,
     profile: bool,
 ) -> syn::Result<syn::Expr> {
+    let execution = analysis.task_execution.terms(program);
     let mut tiles = std::collections::BTreeMap::new();
-    let mut host_tiles = std::collections::BTreeSet::new();
     for definition in &program.sequence.definitions {
         let name = syn::ext::IdentExt::unraw(&definition.name).to_string();
         let mut nodes = Vec::new();
         tile_nodes(&definition.term, &mut nodes);
         if let Some(kinds) = analysis.tilings.get(&name) {
-            for (index, (node, kind)) in nodes.into_iter().zip(kinds).enumerate() {
+            for (node, kind) in nodes.into_iter().zip(kinds) {
                 tiles.insert(node, kind);
-                if analysis
-                    .host_tiles
-                    .get(&name)
-                    .and_then(|inputs| inputs.get(index))
-                    .is_some_and(Option::is_some)
-                {
-                    host_tiles.insert(node);
-                }
             }
         }
     }
@@ -431,9 +381,12 @@ fn translate_mode(
         cq_sequence_pull::translate_with
     };
     let mut expression = translate(
+        physical,
+        structures,
         program,
         analysis,
         syn::parse_quote!(__cq_task_workers),
+        cq_sequence_pull::CanonTarget::Parallel,
         |term: &Term,
          emitter: &mut cq_sequence_pull::Emitter<'_>,
          child: Option<&cq_sequence_pull::Value>,
@@ -460,18 +413,28 @@ fn translate_mode(
                 let binding = format_ident!("__cq_task_driver_{}", next_driver);
                 next_driver += 1;
                 let context = emitter.context();
-                let host_result = input.result.as_ref().filter(|result| {
-                    host_tiles.contains(&(term as *const Term))
-                        && context.physical_analysis.hosts.contains_key(*result)
-                        && !context.analysis.selections.contains_key(*result)
-                        && matches!(&context.physical[*result].operator,
-                        cq_lang_sequence::structures::physical::Operator::Rename(rename)
-                            if !context.carries_positions(result) || rename.constants.is_none())
-                });
+                let host_result = execution[&(term as *const Term)].borrowed_host.as_ref();
                 let positional = host_result.filter(|result| {
                     context.carries_positions(result) || context.join_filter_ids(result).is_some()
                 });
-                if let Some(result) = positional {
+                if let Some(result) = host_result.filter(|result| context.encoded.blocks.scans.contains_key(*result)) {
+                    let host = cq_print::Context::positional_host(
+                        &context.physical_analysis.hosts[result],
+                    );
+                    let range = quote!({
+                        let __cq_start = #binding * #n;
+                        __cq_start..__cq_start.saturating_add(#n).min(#host.len())
+                    });
+                    let rows = context.profile_stream(result, context.blocked_rows(result, Some(range)));
+                    partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
+                        binding,
+                        prepare: quote!(),
+                        parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+                            #host.len().div_ceil(#n), |i| i)),
+                    });
+                    output.rows = quote!(::core::iter::once(#rows));
+                } else if let Some(result) = positional {
                     let host = cq_print::Context::positional_host(
                         &context.physical_analysis.hosts[result],
                     );
@@ -482,6 +445,7 @@ fn translate_mode(
                         .unwrap_or(ids);
                     let rows = context.profile_stream(result, context.positional_rows(result, ids));
                     partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
                         binding,
                         prepare: quote!(),
                         parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
@@ -495,6 +459,7 @@ fn translate_mode(
                         context.host_scan_from(result, Some(quote!(#binding))),
                     );
                     partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
                         binding,
                         prepare: quote! {
                             use ::cq_sequence_tasks::combine::TileRows as _;
@@ -505,8 +470,13 @@ fn translate_mode(
                     });
                     output.rows = quote!(::core::iter::once(#rows));
                 } else {
+                    assert!(matches!(
+                        execution[&(term as *const Term)].staging,
+                        Some(cq_lang_sequence::task_execution::Staging::TileInput)
+                    ));
                     let source = &input.rows;
                     partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
                         binding: binding.clone(),
                         prepare: quote!(let __cq_driver = (#source).collect::<::std::vec::Vec<_>>();),
                         parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
@@ -564,7 +534,11 @@ fn translate_mode(
                 let tile = if partial {
                     partitions
                         .iter()
-                        .position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
+                        .position(|tile: &TaskTile| {
+                            execution[&(term as *const Term)]
+                                .producers
+                                .contains(&tile.producer)
+                        })
                         .map(|index| partitions.remove(index))
                 } else {
                     None
@@ -595,10 +569,11 @@ fn translate_mode(
                 } else {
                     &*output
                 };
-                if let Some(index) = partitions
-                    .iter()
-                    .position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
-                {
+                if let Some(index) = partitions.iter().position(|tile: &TaskTile| {
+                    execution[&(term as *const Term)]
+                        .producers
+                        .contains(&tile.producer)
+                }) {
                     let tile = partitions.remove(index);
                     let mut input = input.clone();
                     input.partitioned = false;
@@ -616,7 +591,7 @@ fn translate_mode(
                             .last()
                             .is_some_and(|definition| std::ptr::eq(&definition.term, term))
                         && let Some(result) = &output.result
-                        && !analysis.structures.head_dedup.contains_key(result)
+                        && !emitter.structures_analysis.head_dedup.contains_key(result)
                     {
                         local = emitter.own_task_answer(result, local);
                     }
@@ -648,9 +623,11 @@ fn translate_mode(
             }
             if matches!(term, Term::Flatten(_))
                 && output.depth == 0
-                && !partitions
-                    .iter()
-                    .any(|tile| uses_binding(&output.rows, &tile.binding))
+                && !partitions.iter().any(|tile| {
+                    execution[&(term as *const Term)]
+                        .producers
+                        .contains(&tile.producer)
+                })
             {
                 // A completed key cover is no longer a worker-local slice.
                 // Symbolic distributing tiles remain partitioned until joined.
@@ -736,10 +713,19 @@ fn translate_mode(
                 // An immutable base relation is already resident storage. The
                 // checked Store publishes that borrow; it need not clone rows.
                 output.rows = child.expect("checked base store").rows.clone();
+                // Borrowing resident rows does not discharge the recorded
+                // keysets used by downstream positional membership reads.
+                emitter
+                    .context_mut()
+                    .materialize_keysets(result, output.rows.clone());
                 immutable_sources.insert(owner.to_owned());
-                let scan = emitter.context().host_scan(result);
-                emitter.publish_length(
-                    owner,
+                let length = if emitter.analysis.representation.blocks.scans.contains_key(result) {
+                    let host = cq_print::Context::positional_host(
+                        &emitter.context().physical_analysis.hosts[result],
+                    );
+                    quote!(#host.len())
+                } else {
+                    let scan = emitter.context().host_scan(result);
                     quote!({
                         let __cq_length_rows = #scan;
                         let (__cq_minimum, __cq_maximum) = __cq_length_rows.size_hint();
@@ -748,8 +734,9 @@ fn translate_mode(
                         } else {
                             __cq_length_rows.count()
                         }
-                    }),
-                );
+                    })
+                };
+                emitter.publish_length(owner, length);
                 emitter.mark_target_published(owner);
             } else if matches!(term, Term::Store { .. })
                 && output.depth == 0
@@ -966,17 +953,10 @@ fn translate_mode(
 }
 
 pub(crate) struct TaskTile {
+    producer: cq_lang_sequence::task_execution::TermId,
     binding: syn::Ident,
     prepare: proc_macro2::TokenStream,
     parts: proc_macro2::TokenStream,
-}
-
-fn uses_binding(tokens: &proc_macro2::TokenStream, binding: &syn::Ident) -> bool {
-    tokens.clone().into_iter().any(|token| match token {
-        proc_macro2::TokenTree::Ident(ident) => ident == *binding,
-        proc_macro2::TokenTree::Group(group) => uses_binding(&group.stream(), binding),
-        _ => false,
-    })
 }
 
 fn join_tile(
@@ -986,6 +966,7 @@ fn join_tile(
     nested: bool,
 ) -> proc_macro2::TokenStream {
     let TaskTile {
+        producer: _,
         binding,
         prepare,
         parts,

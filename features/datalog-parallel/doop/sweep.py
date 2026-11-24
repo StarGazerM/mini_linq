@@ -11,7 +11,10 @@ Example (from features/datalog-parallel):
   python3 doop/sweep.py --binary /tmp/target-ext/release/doop-parallel \
       --baseline /tmp/target-baseline/release/doop
 
-The baseline must be the sequential pre-change binary from the archived source.
+The baseline must be the sequential pre-change binary from the archived source,
+rebuilt with the timing-only BENCH_CHECK_WITNESS protocol. Missing witnesses fail
+closed. Every binary/engine/thread configuration checks its first timing sample
+in full, then exact relation counts and up to 1000 seeded actual semantic tuples.
 Current mini/mini-par measurements use Fx by default; the archived baseline's
 hashing policy belongs to its source revision. Use hash_sweep.py for a paired
 Fx/keyed comparison within one current binary.
@@ -25,11 +28,18 @@ import argparse
 import csv
 from datetime import datetime, timezone
 import os
+import json
+import hashlib
 from pathlib import Path
 import platform
 import re
 import statistics
 import subprocess
+import sys
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+from bench_check import Checker
 
 APPS = ("cassandra", "avrora", "lusearch", "xalan", "tomcat", "zxing")
 BASELINE_APPS = ("cassandra", "lusearch", "xalan")
@@ -66,12 +76,30 @@ def main():
         "threads=1,2,4,5,8,15\naffinity=OS scheduled; no P/E pinning\n"
         f"repetitions={args.repetitions}\n")
 
-    def invoke(executable, app, engine, threads, label, check=False):
+    with Checker() as checker:
+        sweep(args, binary, baseline, cache, output, checker)
+
+
+def sweep(args, binary, baseline, cache, output, checker):
+    identities = {}
+    for executable in (binary, baseline):
+        digest = hashlib.sha256()
+        with executable.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        identities[executable] = digest.hexdigest()
+
+    def invoke(executable, app, engine, threads, label, check=False, plan=None):
         command = ["/usr/bin/time", "-l", str(executable), str(cache / app)]
         if executable == binary:
             command += ["--threads", str(threads)]
         command += ["--check"] if check else ["--engine", engine]
-        environment = dict(os.environ, RAYON_NUM_THREADS=str(threads))
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith("BENCH_CHECK_")}
+        environment["RAYON_NUM_THREADS"] = str(threads)
+        if plan is not None:
+            environment.update(checker.env(plan))
+            environment["BENCH_CHECK_WITNESS"] = str(output / f"{label}.witness.json")
         with (output / f"{label}.stdout").open("w") as stdout, \
                 (output / f"{label}.stderr").open("w") as stderr:
             subprocess.run(command, env=environment, stdout=stdout, stderr=stderr, check=True)
@@ -98,6 +126,15 @@ def main():
             invoke(binary, app, "", threads, f"check-{app}-t{threads}", check=True)
     print("exact equality: all 26 relations, six apps, six thread counts", flush=True)
     measurements = {}
+    # One independent Ascent reference per dataset, outside all measured loops.
+    references = {}
+    for app in APPS:
+        reference = f"raw-doop:26:{cache / app}"
+        label = f"reference-{app}"
+        invoke(binary, app, "ascent", 1, label,
+               plan={"mode": "full", "seed": 20261103, "sample_size": 1000, "sample": 0})
+        checker.register_witness(reference, output / f"{label}.witness.json")
+        references[app] = reference
     with (output / "samples.csv").open("w", newline="") as samples:
         writer = csv.writer(samples)
         writer.writerow(("app", "engine", "threads", "repetition", "compute_seconds", "rss_bytes"))
@@ -109,8 +146,24 @@ def main():
             for engine, threads, executable in jobs:
                 values = []
                 for repetition in range(args.repetitions):
+                    label = f"{app}-{engine}-t{threads}-r{repetition}"
+                    key = f"{identities[executable]}:{app}:{engine}:threads={threads}"
+                    plan = checker.plan(key, references[app], repetition)
                     value = invoke(executable, app, "mini" if engine == "baseline" else engine,
-                                   threads, f"{app}-{engine}-t{threads}-r{repetition}")
+                                   threads, label, plan=plan)
+                    start = time.monotonic()
+                    evidence = checker.check(key, references[app], repetition,
+                                             output / f"{label}.witness.json")
+                    checker_seconds = time.monotonic() - start
+                    producer = re.search(r"bench_check_witness_seconds=([0-9.]+)",
+                                         (output / f"{label}.stdout").read_text())
+                    if producer is None:
+                        raise RuntimeError(f"missing witness timing: {label}")
+                    producer_seconds = float(producer[1])
+                    (output / f"{label}.validation.json").write_text(json.dumps({
+                        "evidence": evidence, "plan": plan,
+                        "producer_seconds": producer_seconds, "checker_seconds": checker_seconds,
+                        "validation_seconds": producer_seconds + checker_seconds}, indent=2) + "\n")
                     values.append(value)
                     writer.writerow((app, engine, threads, repetition, *value))
                     samples.flush()

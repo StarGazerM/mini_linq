@@ -34,7 +34,9 @@ pub fn scan(value: u32, scratch: *mut u32) -> (u32, u32) {
         distance <<= 1;
     }
     if lane == 31 {
-        unsafe { *scratch.add(warp_index as usize) = inclusive; }
+        unsafe {
+            *scratch.add(warp_index as usize) = inclusive;
+        }
     }
     thread::sync_threads();
     if warp_index == 0 {
@@ -52,7 +54,9 @@ pub fn scan(value: u32, scratch: *mut u32) -> (u32, u32) {
             distance <<= 1;
         }
         if lane < 8 {
-            unsafe { *scratch.add(lane as usize) = sum; }
+            unsafe {
+                *scratch.add(lane as usize) = sum;
+            }
         }
     }
     thread::sync_threads();
@@ -83,7 +87,9 @@ pub fn compact(mask: [bool; 4], packed: *mut u32, scratch: *mut u32) -> u32 {
     let mut item = 0;
     while item < 4 {
         if mask[item] {
-            unsafe { *packed.add(destination as usize) = base + item as u32; }
+            unsafe {
+                *packed.add(destination as usize) = base + item as u32;
+            }
             destination += 1;
         }
         item += 1;
@@ -134,7 +140,9 @@ pub fn sort(keys: *mut u32, n: u32) {
     let mut index = tid;
     while index < width {
         if index >= n {
-            unsafe { *keys.add(index as usize) = u32::MAX; }
+            unsafe {
+                *keys.add(index as usize) = u32::MAX;
+            }
         }
         index += BLOCK_THREADS;
     }
@@ -173,8 +181,18 @@ pub fn sort(keys: *mut u32, n: u32) {
 /// partition global or shared arrays independently in each participating thread.
 #[cuda_device::device]
 #[inline(always)]
-pub fn merge_path(a: *const u32, a_len: u32, b: *const u32, b_len: u32, diagonal: u32) -> (u32, u32) {
-    let mut low = if diagonal > b_len { diagonal - b_len } else { 0 };
+pub fn merge_path(
+    a: *const u32,
+    a_len: u32,
+    b: *const u32,
+    b_len: u32,
+    diagonal: u32,
+) -> (u32, u32) {
+    let mut low = if diagonal > b_len {
+        diagonal - b_len
+    } else {
+        0
+    };
     let mut high = if diagonal < a_len { diagonal } else { a_len };
     while low < high {
         let i = low + (high - low) / 2;

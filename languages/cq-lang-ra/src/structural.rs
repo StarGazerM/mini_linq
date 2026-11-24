@@ -4,14 +4,35 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use quote::ToTokens;
 use syn::Ident;
 
-use crate::{EqualityValue, Operator, Program, Theta, contract::Schedule, symbol_name};
+use crate::{EqualityValue, Operator, Program, Theta, symbol_name};
+
+/// Structural facts of one checked RA program. DAG nodes refer to earlier
+/// nodes; a rename's identity is its content (relation, mapping, constants)
+/// with its ordinal among equal renames in definition order, shared by both
+/// programs of one comparison through [`Atoms`].
+#[derive(Default, Clone)]
+pub(crate) struct Structure {
+    pub(super) nodes: Vec<Node>,
+    pub(super) atoms: HashMap<usize, Atom>,
+    pub(super) rust_steps: Vec<Rust>,
+    pub(super) output: Option<usize>,
+    pub(super) head: String,
+    pub(super) split_nodes: Vec<(usize, usize)>,
+    pub(super) full_reads: Vec<(usize, usize)>,
+    pub(super) row_views: Vec<RowView>,
+    pub(super) view_requests: Vec<(usize, usize, bool)>,
+}
+
+/// Rename identities shared by the programs of one comparison.
+#[derive(Default)]
+pub(crate) struct Atoms(std::collections::BTreeMap<(String, usize), usize>);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Column {
     Atom(usize, String),
     Context(String, String),
     Negative(String, String),
-    Bind(usize, String),
+    Bind(String, String),
     Aggregate(String),
 }
 
@@ -56,6 +77,7 @@ pub(super) struct Node {
     domain: Option<usize>,
     origin: Option<crate::BlockOrigin>,
     rust_index: Option<usize>,
+    block: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -68,31 +90,11 @@ pub(super) struct Reduction {
     node: usize,
 }
 
-impl Reduction {
-    fn covered_by(&self, other: &Self) -> bool {
-        let mut columns = HashMap::new();
-        for (a, b) in self.equalities.iter().chain(&other.equalities) {
-            for column in [a, b] {
-                let next = columns.len();
-                columns.entry(column).or_insert(next);
-            }
-        }
-        let mut closure = UnionFind::new(columns.len());
-        for (a, b) in &other.equalities {
-            closure.union(columns[a], columns[b]);
-        }
-        self.equalities
-            .iter()
-            .all(|(a, b)| closure.root(columns[a]) == closure.root(columns[b]))
-    }
-}
-
 #[derive(Clone)]
 pub(super) struct Atom {
     relation: String,
     bindings: HashMap<String, String>,
     constants: std::collections::BTreeMap<String, String>,
-    node: usize,
 }
 
 #[derive(Clone)]
@@ -117,43 +119,26 @@ fn row_view(views: &mut Vec<RowView>, parent: Option<usize>, restricted: bool) -
     index
 }
 
-impl Schedule {
-    /// Fix a positional path table before visiting a schedule. Flat clause IDs
-    /// remain their source indices; nested paths receive sorted distinct IDs.
-    pub fn occurrence_paths(&mut self, paths: impl IntoIterator<Item = cq_syntax::Occurrence>) {
-        let paths: std::collections::BTreeSet<_> = paths.into_iter().collect();
-        let mut next = paths
-            .iter()
-            .map(|p| p.0[0].parse::<usize>().expect("checked path"))
-            .max()
-            .unwrap_or(0)
-            + 1;
-        for path in paths {
-            let id = if path.0.len() == 1 {
-                path.0[0].parse::<usize>().expect("checked path")
-            } else {
-                let id = next;
-                next += 1;
-                id
-            };
-            self.paths.insert(path, id);
-        }
+impl Structure {
+    /// A block's identity is its signature (heading, kind, arm count,
+    /// correlation) with its ordinal among equal signatures.
+    fn block_content(origin: &crate::BlockOrigin, arms: usize) -> String {
+        format!(
+            "block {} {} {} {arms} {}",
+            origin.free.to_token_stream(),
+            origin.interface.to_token_stream(),
+            origin.fallback.is_some(),
+            origin.over.is_some()
+        )
     }
-    pub fn atom_path(
-        &mut self,
-        path: &cq_syntax::Occurrence,
-        relation: &Ident,
-        mapping: &[(Ident, Ident)],
-        constants: Option<&crate::OccurrenceConstants>,
-    ) -> usize {
-        self.atom(self.paths[path], relation, mapping, constants)
-    }
+
     pub fn union_frame(
         &mut self,
         operands: &[usize],
         union: &crate::Union,
         prefix: Option<usize>,
         domain: Option<usize>,
+        block: Option<usize>,
     ) -> usize {
         let heading = self.nodes[operands[0]]
             .heading
@@ -183,11 +168,10 @@ impl Schedule {
             .origin
             .as_ref()
             .map(|origin| {
-                let path = &origin.occurrence;
                 let free = &origin.free;
                 let interface = &origin.interface;
                 format!(
-                    "{path} {} {}",
+                    "#{block:?} {} {}",
                     free.to_token_stream(),
                     interface.to_token_stream()
                 )
@@ -204,6 +188,7 @@ impl Schedule {
             correlation: prefix,
             domain,
             origin: union.origin.clone(),
+            block,
             ..Node::default()
         })
     }
@@ -272,7 +257,6 @@ impl Schedule {
                     .flat_map(|c| &c.equalities)
                     .map(|e| (symbol_name(&e.left), e.right.to_token_stream().to_string()))
                     .collect(),
-                node,
             },
         );
         node
@@ -332,9 +316,6 @@ impl Schedule {
                 == self.nodes[reducer.left_node].heading.keys().collect()
             {
                 owner = Some(reducer.left);
-                let mut reduction = reducer.clone();
-                reduction.node = self.nodes.len();
-                self.reductions.push(reduction);
                 restored = Some(reducer.left_node);
                 equalities.extend(
                     reducer
@@ -569,11 +550,6 @@ impl Schedule {
             join_node: self.nodes.len(),
             node: self.nodes.len(),
         });
-        if semijoin {
-            if let Some(reducer) = &reducer {
-                self.reductions.push(reducer.clone());
-            }
-        }
         self.push(Node {
             kind: Kind::Join(semijoin),
             heading,
@@ -590,6 +566,7 @@ impl Schedule {
             domain: None,
             origin: None,
             rust_index: None,
+            block: None,
         })
     }
 
@@ -660,6 +637,7 @@ impl Schedule {
         self.push(node)
     }
 
+    /// Formal rule RA-H-Rust: Record lexical free-variable arguments with their exact input column identities.
     fn rust(
         &mut self,
         input: usize,
@@ -669,9 +647,6 @@ impl Schedule {
         environment: Option<&crate::Environment>,
     ) -> usize {
         let source = &self.nodes[input];
-        let payload = environment
-            .and_then(|env| env.path.as_ref())
-            .map_or_else(|| payload.clone(), |path| format!("{payload} @{path}"));
         let logical = environment
             .map(|env| env.variables.iter().map(symbol_name).collect())
             .unwrap_or_else(|| source.heading.keys().cloned().collect());
@@ -684,14 +659,14 @@ impl Schedule {
         let mut origins = source.origins.clone();
         for binding in bindings {
             let name = symbol_name(binding);
-            heading.insert(name.clone(), Column::Bind(self.chain.len(), name));
+            heading.insert(name.clone(), Column::Bind(payload.clone(), name));
             let name = symbol_name(binding);
             origins.insert(
                 name.clone(),
-                HashSet::from([Column::Bind(self.chain.len(), name)]),
+                HashSet::from([Column::Bind(payload.clone(), name)]),
             );
         }
-        self.chain.push(Rust {
+        self.rust_steps.push(Rust {
             payload: payload.clone(),
             input,
             arguments,
@@ -701,7 +676,7 @@ impl Schedule {
         });
         self.push(Node {
             kind: Kind::Rust(payload),
-            rust_index: Some(self.chain.len() - 1),
+            rust_index: Some(self.rust_steps.len() - 1),
             heading,
             origins,
             operands: vec![input],
@@ -711,9 +686,6 @@ impl Schedule {
         })
     }
 
-    pub fn guard(&mut self, input: usize, filter: &crate::syntax::Filter) -> usize {
-        self.guard_in(input, filter, None)
-    }
     pub fn guard_in(
         &mut self,
         input: usize,
@@ -729,9 +701,6 @@ impl Schedule {
         )
     }
 
-    pub fn bind(&mut self, input: usize, binding: &crate::syntax::Let) -> usize {
-        self.bind_in(input, binding, None)
-    }
     pub fn bind_in(
         &mut self,
         input: usize,
@@ -745,10 +714,6 @@ impl Schedule {
             &crate::syntax::rust::bindings(&binding.pattern),
             environment,
         )
-    }
-
-    pub fn for_bind(&mut self, input: usize, binding: &crate::syntax::For) -> usize {
-        self.for_in(input, binding, None)
     }
 
     pub fn for_in(
@@ -771,52 +736,66 @@ impl Schedule {
         self.head = head.to_token_stream().to_string();
     }
 
-    pub fn from_program(program: &Program) -> syn::Result<Self> {
+    pub fn from_program(program: &Program, atoms: &mut Atoms) -> syn::Result<Self> {
         crate::contract::check(program)?;
         let mut schedule = Self::default();
-        schedule.occurrence_paths(program.plan.definitions.iter().filter_map(
-            |d| match &d.operator {
-                Operator::Rename(r) => Some(r.occurrence.clone()),
-                Operator::Union(u) => u.origin.as_ref().map(|o| o.occurrence.clone()),
-                _ => None,
-            },
-        ));
+        let mut ordinals = HashMap::<String, usize>::new();
+        let mut intern = |content: String, atoms: &mut Atoms| {
+            let ordinal = ordinals.entry(content.clone()).or_default();
+            let next = atoms.0.len();
+            let id = *atoms.0.entry((content, *ordinal)).or_insert(next);
+            *ordinal += 1;
+            id
+        };
         let mut results = HashMap::new();
         for definition in &program.plan.definitions {
             let node = match &definition.operator {
-                Operator::Union(union) => schedule.union_frame(
-                    &union
-                        .operands
-                        .iter()
-                        .map(|id| results[&symbol_name(id)])
-                        .collect::<Vec<_>>(),
-                    union,
-                    union
-                        .origin
-                        .as_ref()
+                Operator::Union(union) => {
+                    let operands: Vec<_> =
+                        union.operands.iter().map(|id| results[&symbol_name(id)]).collect();
+                    let origin = union.origin.as_ref();
+                    let prefix = origin
                         .and_then(|o| o.over.as_ref())
-                        .map(|over| results[&symbol_name(&over.prefix)]),
-                    union
-                        .origin
-                        .as_ref()
+                        .map(|over| results[&symbol_name(&over.prefix)]);
+                    let domain = origin
                         .and_then(|o| o.domain.as_ref())
-                        .map(|domain| results[&symbol_name(&domain.input)]),
-                ),
+                        .map(|domain| results[&symbol_name(&domain.input)]);
+                    let block = origin.map(|origin| {
+                        intern(Self::block_content(origin, operands.len()), atoms)
+                    });
+                    schedule.union_frame(&operands, union, prefix, domain, block)
+                }
                 Operator::Anti(anti) => schedule.anti(
                     results[&symbol_name(&anti.left)],
                     results[&symbol_name(&anti.right)],
                     &anti.columns.iter().cloned().collect::<Vec<_>>(),
                 ),
                 Operator::Unit(_) => schedule.unit(),
-                Operator::Rename(r) => schedule.atom_path(
-                    &r.occurrence,
-                    &r.relation,
-                    &r.mapping
+                Operator::Rename(r) => {
+                    let mut mapping: Vec<_> = r
+                        .mapping
                         .iter()
                         .map(|m| (m.source.clone(), m.target.clone()))
-                        .collect::<Vec<_>>(),
-                    r.constants.as_ref(),
-                ),
+                        .collect();
+                    mapping.sort_by_key(|(source, _)| symbol_name(source));
+                    let mut constants: Vec<_> = r
+                        .constants
+                        .iter()
+                        .flat_map(|c| &c.equalities)
+                        .map(|e| e.to_token_stream().to_string())
+                        .collect();
+                    constants.sort();
+                    let content = format!(
+                        "rename {} {:?} {constants:?}",
+                        r.relation,
+                        mapping
+                            .iter()
+                            .map(|(s, t)| (symbol_name(s), symbol_name(t)))
+                            .collect::<Vec<_>>()
+                    );
+                    let id = intern(content, atoms);
+                    schedule.atom(id, &r.relation, &mapping, r.constants.as_ref())
+                }
                 Operator::Group(group) => {
                     schedule.group(results[&symbol_name(&group.input)], group)
                 }
@@ -841,6 +820,7 @@ impl Schedule {
                     results[&symbol_name(&g.input)],
                     &crate::syntax::Filter {
                         if_token: g.if_token,
+                        capture: g.capture,
                         condition: g.condition.clone(),
                     },
                     g.environment.as_ref(),
@@ -872,32 +852,17 @@ impl Schedule {
         Ok(schedule)
     }
 
-    // Reverse DAG propagation assigns each fact its first observing Rust node,
-    // or the final output. Each edge is visited once; shared operands stay shared.
-    fn regions(&self) -> Vec<usize> {
-        let mut regions = vec![self.chain.len(); self.nodes.len()];
-        for (ordinal, rust) in self.chain.iter().enumerate() {
-            regions[rust.input] = regions[rust.input].min(ordinal);
-        }
-        for (index, node) in self.nodes.iter().enumerate().rev() {
-            for operand in &node.operands {
-                regions[*operand] = regions[*operand].min(regions[index]);
-            }
-        }
-        regions
-    }
-
-    fn primary_regions(&self) -> Vec<usize> {
-        let mut regions = vec![self.chain.len() + 1; self.nodes.len()];
+    fn primary_nodes(&self) -> Vec<bool> {
+        let mut primary = vec![false; self.nodes.len()];
         if let Some(output) = self.output {
-            regions[output] = self.chain.len();
+            primary[output] = true;
         }
-        for (ordinal, rust) in self.chain.iter().enumerate() {
-            regions[rust.input] = regions[rust.input].min(ordinal);
+        for rust in &self.rust_steps {
+            primary[rust.input] = true;
         }
         for (index, node) in self.nodes.iter().enumerate().rev() {
             if let Some(left) = node.range_base {
-                regions[left] = regions[left].min(regions[index]);
+                primary[left] = primary[left] || primary[index];
             } else {
                 let count = if matches!(node.kind, Kind::Join(true)) {
                     1
@@ -905,29 +870,26 @@ impl Schedule {
                     node.operands.len()
                 };
                 for operand in node.operands.iter().take(count) {
-                    regions[*operand] = regions[*operand].min(regions[index]);
+                    primary[*operand] = primary[*operand] || primary[index];
                 }
             }
         }
-        regions
+        primary
     }
 
     fn split_views(&self) -> bool {
-        let primary = self.primary_regions();
-        let regions = self.regions();
-        let mut full = HashMap::<usize, usize>::new();
-        for &(node, occurrence) in &self.full_reads {
-            if primary[node] <= self.chain.len() {
-                let region = full.entry(occurrence).or_insert(regions[node]);
-                *region = (*region).min(regions[node]);
-            }
-        }
-        if self.split_nodes.iter().any(|&(node, occurrence)| {
-            primary[node] <= self.chain.len()
-                && full
-                    .get(&occurrence)
-                    .is_none_or(|region| *region > regions[node])
-        }) {
+        let primary = self.primary_nodes();
+        let full: HashSet<_> = self
+            .full_reads
+            .iter()
+            .filter(|(node, _)| primary[*node])
+            .map(|(_, occurrence)| *occurrence)
+            .collect();
+        if self
+            .split_nodes
+            .iter()
+            .any(|&(node, occurrence)| primary[node] && !full.contains(&occurrence))
+        {
             return true;
         }
         // Clause restrictions form a forest along each named relation's left
@@ -960,104 +922,15 @@ impl Schedule {
             .iter()
             .any(|&(earlier, later, projected)| {
                 let (a, b) = (intervals[earlier], intervals[later]);
-                !(a.0 <= b.0 && b.1 <= a.1 || projected && b.0 <= a.0 && a.1 <= b.1)
+                !(a.0 <= b.0 && b.1 <= a.1
+                    || projected && b.0 <= a.0 && a.1 <= b.1)
             })
     }
 
-    /// Check the supplied schedule's structural obligations against checked RA.
-    /// Required reductions are named occurrence edges, including the equivalent
-    /// join/select/project form used when opaque Rust protects both aliases.
-    pub fn check(
-        &self,
-        target: &Self,
-        required_reductions: &[(usize, usize)],
-    ) -> Result<(), String> {
-        self.check_reductions(target, required_reductions)?;
+
+    /// Check the source structure's obligations against the target's.
+    pub fn check(&self, target: &Self) -> Result<(), String> {
         compare(self, target)
-    }
-
-    fn check_reductions(
-        &self,
-        target: &Self,
-        required_reductions: &[(usize, usize)],
-    ) -> Result<(), String> {
-        let required: HashSet<_> = required_reductions.iter().copied().collect();
-        let (source_regions, target_regions) = (self.regions(), target.regions());
-        let mut edges = HashMap::new();
-        for reduction in &target.reductions {
-            edges
-                .entry((reduction.left, reduction.right))
-                .or_insert(reduction);
-        }
-        for reduction in &self.reductions {
-            let edge = (reduction.left, reduction.right);
-            if !required.contains(&edge) {
-                continue;
-            }
-            let Some(other) = edges.get(&edge) else {
-                return Err("missing semijoin reduction between named atom occurrences".into());
-            };
-            if target_regions[other.node] > source_regions[reduction.node] {
-                return Err(format!(
-                    "reduction @{} with @{} lost a source-before occurrence edge",
-                    edge.0, edge.1
-                ));
-            }
-            // A reducer's support row is an existential read of that named
-            // occurrence. Equalities from the opposite direction or from the
-            // final prefix cannot repair missing column matches at this edge.
-            let mut columns = HashMap::new();
-            for (a, b) in reduction.equalities.iter().chain(&other.equalities) {
-                for column in [a, b] {
-                    let next = columns.len();
-                    columns.entry(column).or_insert(next);
-                }
-            }
-            let mut closure = UnionFind::new(columns.len());
-            for (a, b) in &other.equalities {
-                closure.union(columns[a], columns[b]);
-            }
-            if reduction
-                .equalities
-                .iter()
-                .any(|(a, b)| closure.root(columns[a]) != closure.root(columns[b]))
-            {
-                return Err(format!(
-                    "reduction @{} with @{} lost source-before support column matches",
-                    edge.0, edge.1
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Check a pure target through inverse dead-expansion set identities.
-    ///
-    /// This focused fallback expands supplied semijoins only when independent
-    /// demand on the expanded program proves every added column unobservable.
-    /// It then uses the unchanged structural comparison. It never elaborates
-    /// or chooses a source plan, and required reductions must already hold on
-    /// the original target, not merely on the expanded proof witness.
-    /// Independently projected witness wiring in either original schedule
-    /// remains outside this fallback, even if expansion would hide the split.
-    pub fn check_dead_expansions(
-        &self,
-        target: &Program,
-        required_reductions: &[(usize, usize)],
-    ) -> Result<(), String> {
-        let schedule = Self::from_program(target).map_err(|error| error.to_string())?;
-        self.check_reductions(&schedule, required_reductions)?;
-        // A newly exposed full read must not retroactively identify distinct
-        // projected witnesses from the supplied source or target. Their
-        // original wiring remains an obligation, not an optimization detail.
-        if self.split_views() || schedule.split_views() {
-            return Err("projection correlations require the original witness wiring".into());
-        }
-        if reductions::check_expanded(self, target) {
-            Ok(())
-        } else {
-            Err("target has no checked dead-expansion witness for the source schedule".into())
-        }
     }
 }
 
@@ -1103,91 +976,6 @@ impl UnionFind {
 
 type PredicateKey = (String, Vec<usize>);
 
-// Equality-indexed facts at a Rust input. Only predicates incident to the
-// smaller merged class are re-keyed; a fact never scans unrelated aliases.
-struct Prefix {
-    equality: UnionFind,
-    members: Vec<Vec<usize>>,
-    incidence: Vec<Vec<usize>>,
-    predicates: Vec<PredicateKey>,
-    keys: Vec<Option<PredicateKey>>,
-    available: HashMap<PredicateKey, usize>,
-    seen: Vec<usize>,
-    epoch: usize,
-}
-
-impl Prefix {
-    fn new(columns: usize, predicates: Vec<PredicateKey>) -> Self {
-        let mut incidence = vec![Vec::new(); columns];
-        for (index, (_, arguments)) in predicates.iter().enumerate() {
-            for column in arguments {
-                incidence[*column].push(index);
-            }
-        }
-        let count = predicates.len();
-        Self {
-            equality: UnionFind::new(columns),
-            members: (0..columns).map(|c| vec![c]).collect(),
-            incidence,
-            predicates,
-            keys: vec![None; count],
-            available: HashMap::new(),
-            seen: vec![0; count],
-            epoch: 0,
-        }
-    }
-    fn key(&mut self, predicate: &PredicateKey) -> PredicateKey {
-        (
-            predicate.0.clone(),
-            predicate.1.iter().map(|c| self.equality.root(*c)).collect(),
-        )
-    }
-    fn insert(&mut self, index: usize) {
-        let predicate = self.predicates[index].clone();
-        let key = self.key(&predicate);
-        *self.available.entry(key.clone()).or_default() += 1;
-        self.keys[index] = Some(key);
-    }
-    fn contains(&mut self, predicate: &PredicateKey) -> bool {
-        let key = self.key(predicate);
-        self.available.contains_key(&key)
-    }
-    fn union(&mut self, a: usize, b: usize) {
-        let (mut a, mut b) = (self.equality.root(a), self.equality.root(b));
-        if a == b {
-            return;
-        }
-        if self.members[a].len() < self.members[b].len() {
-            std::mem::swap(&mut a, &mut b);
-        }
-        self.epoch += 1;
-        let mut affected = Vec::new();
-        for column in &self.members[b] {
-            for &predicate in &self.incidence[*column] {
-                if self.keys[predicate].is_some() && self.seen[predicate] != self.epoch {
-                    self.seen[predicate] = self.epoch;
-                    affected.push(predicate);
-                }
-            }
-        }
-        for &predicate in &affected {
-            let key = self.keys[predicate].take().unwrap();
-            let count = self.available.get_mut(&key).unwrap();
-            *count -= 1;
-            if *count == 0 {
-                self.available.remove(&key);
-            }
-        }
-        self.equality.parent[b] = a;
-        self.equality.canonical[a] = self.equality.canonical[a].min(self.equality.canonical[b]);
-        let members = std::mem::take(&mut self.members[b]);
-        self.members[a].extend(members);
-        for predicate in affected {
-            self.insert(predicate);
-        }
-    }
-}
-
 // Unordered local facts have an order-independent hash and exact set equality;
 // hash collisions never establish equality. This avoids sorting wide headings.
 #[derive(PartialEq, Eq)]
@@ -1216,12 +1004,12 @@ struct Wiring {
     correlation: Option<usize>,
 }
 
-fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<usize, String> {
+fn wiring(schedule: &Structure, intern: &mut HashMap<Wiring, usize>) -> Result<usize, String> {
     let output = schedule.output.ok_or("schedule has no output")?;
     Ok(wiring_ids(schedule, intern)[output])
 }
 
-fn wiring_ids(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Vec<usize> {
+fn wiring_ids(schedule: &Structure, intern: &mut HashMap<Wiring, usize>) -> Vec<usize> {
     #[derive(Clone, Copy)]
     struct Wired {
         id: usize,
@@ -1334,7 +1122,7 @@ fn wiring_ids(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Vec<u
 // fallback branch labels. Intern their entire negative operand exactly while
 // leaving the positive prefix free to reorder under the ordinary proof.
 fn native_antis(
-    schedule: &Schedule,
+    schedule: &Structure,
     intern: &mut HashMap<Wiring, usize>,
 ) -> Vec<(usize, Predicate)> {
     if !schedule.nodes.iter().any(|node| {
@@ -1348,7 +1136,7 @@ fn native_antis(
     if let Some(output) = schedule.output {
         reachable[output] = true;
     }
-    for rust in &schedule.chain {
+    for rust in &schedule.rust_steps {
         reachable[rust.input] = true;
     }
     for (index, node) in schedule.nodes.iter().enumerate().rev() {
@@ -1391,11 +1179,11 @@ fn native_antis(
 /// the barrier, without letting final output demand erase valuation columns.
 /// General DAGs containing folds retain exact wiring (modulo local set laws);
 /// the positive-CQ equality closure cannot prove laws across a fold.
-fn compare_groups(source: &Schedule, target: &Schedule) -> Result<(), String> {
+fn compare_groups(source: &Structure, target: &Structure) -> Result<(), String> {
     let source_output = source.output.ok_or("source schedule has no output")?;
     let target_output = target.output.ok_or("target schedule has no output")?;
     let (s, t) = (&source.nodes[source_output], &target.nodes[target_output]);
-    let terminal = |schedule: &Schedule, output: usize| {
+    let terminal = |schedule: &Structure, output: usize| {
         matches!(schedule.nodes[output].kind, Kind::Group(_))
             && output + 1 == schedule.nodes.len()
             && schedule
@@ -1409,7 +1197,7 @@ fn compare_groups(source: &Schedule, target: &Schedule) -> Result<(), String> {
         if s.kind != t.kind {
             return Err("grouping keys or aggregate bindings differ from source".into());
         }
-        let prefix = |schedule: &Schedule, output: usize| {
+        let prefix = |schedule: &Structure, output: usize| {
             let mut prefix = schedule.clone();
             prefix.output = Some(schedule.nodes[output].operands[0]);
             prefix.nodes.truncate(output);
@@ -1422,15 +1210,6 @@ fn compare_groups(source: &Schedule, target: &Schedule) -> Result<(), String> {
         )
         .map_err(|error| format!("group valuation domain differs: {error}"));
     }
-    if source.chain.len() != target.chain.len()
-        || source
-            .chain
-            .iter()
-            .zip(&target.chain)
-            .any(|(s, t)| s.payload != t.payload)
-    {
-        return Err("Rust chain differs across group barriers".into());
-    }
     let mut intern = HashMap::new();
     if wiring(source, &mut intern)? != wiring(target, &mut intern)? {
         return Err("group barrier, aggregate bindings or valuation domain differs".into());
@@ -1438,7 +1217,8 @@ fn compare_groups(source: &Schedule, target: &Schedule) -> Result<(), String> {
     Ok(())
 }
 
-fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
+/// RA rewrite check: equal head, rename multiset, equality closure, bindings modulo equality, predicate shapes and Rust payloads with bindings.
+fn compare(source: &Structure, target: &Structure) -> Result<(), String> {
     if source.head != target.head {
         return Err("output head differs from source".into());
     }
@@ -1469,22 +1249,20 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     {
         return blocks::check(source, target);
     }
-    if source.chain.len() != target.chain.len()
-        || source
-            .chain
+    let mut source_rust: Vec<_> = source.rust_steps.iter().collect();
+    let mut target_rust: Vec<_> = target.rust_steps.iter().collect();
+    source_rust.sort_by(|a, b| a.payload.cmp(&b.payload));
+    target_rust.sort_by(|a, b| a.payload.cmp(&b.payload));
+    if source_rust.len() != target_rust.len()
+        || source_rust
             .iter()
-            .zip(&target.chain)
+            .zip(&target_rust)
             .any(|(s, t)| s.payload != t.payload)
     {
-        return Err("Rust chain differs in order, payload or bindings".into());
+        return Err("Rust expressions differ in payload or bindings".into());
     }
     if source.split_views() || target.split_views() {
-        // Independent projected reads of a single occurrence are outside the
-        // ordinary one-row contract. Preserve their structural wiring modulo
-        // local semijoin identities, including which witness owns a predicate.
-        // There is no equivalence search; DAG nodes are interned topologically.
-        let mut intern = HashMap::new();
-        if wiring(source, &mut intern)? != wiring(target, &mut intern)? {
+        if !views::equivalent(source, target)? {
             return Err("projection correlations differ from source".into());
         }
     }
@@ -1495,13 +1273,11 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
             columns.entry(column.clone()).or_insert(next);
         }
     }
-    let (sr, tr) = (source.regions(), target.regions());
-    let (sp, tp) = (source.primary_regions(), target.primary_regions());
-    let closure = |schedule: &Schedule| {
+    let closure = |schedule: &Structure| {
         let mut uf = UnionFind::new(columns.len());
-        let primary = schedule.primary_regions();
+        let primary = schedule.primary_nodes();
         for (index, node) in schedule.nodes.iter().enumerate() {
-            if primary[index] > schedule.chain.len() {
+            if !primary[index] {
                 continue;
             }
             for (a, b) in &node.equalities {
@@ -1537,12 +1313,6 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
                 ));
             }
         }
-        if tr[other.node] > sr[atom.node] {
-            return Err(format!(
-                "Rust step {} lost source-before atom occurrence @{occurrence}",
-                sr[atom.node]
-            ));
-        }
     }
     let key = |p: &Predicate, uf: &mut UnionFind| -> PredicateKey {
         (
@@ -1553,7 +1323,7 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     let mut negative_intern = HashMap::new();
     let source_antis = native_antis(source, &mut negative_intern);
     let target_antis = native_antis(target, &mut negative_intern);
-    let predicates = |schedule: &Schedule, uf: &mut UnionFind| {
+    let predicates = |schedule: &Structure, uf: &mut UnionFind| {
         let mut facts = HashSet::new();
         for node in &schedule.nodes {
             for predicate in &node.predicates {
@@ -1576,151 +1346,51 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     if sf != tf {
         return Err("relational constraints or projection correlations differ from source".into());
     }
-    let mut buckets = vec![Vec::new(); source.chain.len() + 1];
-    let mut requests = vec![Vec::new(); buckets.len()];
-    for (index, node) in target.nodes.iter().enumerate() {
-        if tp[index] >= buckets.len() {
-            continue;
+    for (source, target) in source_rust.iter().zip(&target_rust) {
+        if source.arguments.len() != target.arguments.len()
+            || source.arguments.iter().any(|(name, column)| {
+                target
+                    .arguments
+                    .get(name)
+                    .is_none_or(|other| su.label(columns[column]) != tu.label(columns[other]))
+            })
+        {
+            return Err("Rust expression input bindings differ".into());
         }
-        buckets[tp[index]].extend(
-            node.equalities
-                .iter()
-                .map(|(a, b)| (columns[a], columns[b])),
-        );
-    }
-    for (index, node) in source.nodes.iter().enumerate() {
-        if sp[index] >= requests.len() {
-            continue;
-        }
-        requests[sp[index]].extend(
-            node.equalities
-                .iter()
-                .map(|(a, b)| (columns[a], columns[b])),
-        );
-    }
-    let mut predicate_requests = vec![Vec::new(); buckets.len()];
-    for (node, region) in source.nodes.iter().zip(&sr) {
-        for predicate in &node.predicates {
-            let arguments: Vec<_> = predicate.columns.iter().map(|c| columns[c]).collect();
-            // Never deduplicate Before obligations using the final closure:
-            // two arguments may only become equal after this Rust region.
-            predicate_requests[*region].push((predicate.shape.clone(), arguments));
-        }
-    }
-    for (index, predicate) in &source_antis {
-        predicate_requests[sr[*index]].push((
-            predicate.shape.clone(),
-            predicate.columns.iter().map(|c| columns[c]).collect(),
-        ));
-    }
-    for (ordinal, (s, t)) in source.chain.iter().zip(&target.chain).enumerate() {
-        if s.arguments.keys().collect::<HashSet<_>>() != t.arguments.keys().collect() {
-            return Err("Rust chain input bindings differ".into());
-        }
-        requests[ordinal].extend(
-            s.arguments
-                .iter()
-                .map(|(name, c)| (columns[c], columns[&t.arguments[name]])),
-        );
     }
     let so = &source.nodes[source.output.ok_or("source schedule has no output")?].heading;
     let to = &target.nodes[target.output.ok_or("target schedule has no output")?].heading;
     if so.keys().collect::<HashSet<_>>() != to.keys().collect() {
         return Err("output heading differs from source".into());
     }
-    requests[source.chain.len()]
-        .extend(so.iter().map(|(name, c)| (columns[c], columns[&to[name]])));
-    let mut additions = vec![Vec::new(); buckets.len()];
-    let mut target_predicates = Vec::new();
-    for (node, region) in target.nodes.iter().zip(&tr) {
-        for predicate in &node.predicates {
-            additions[*region].push(target_predicates.len());
-            target_predicates.push((
-                predicate.shape.clone(),
-                predicate.columns.iter().map(|c| columns[c]).collect(),
-            ));
-        }
-    }
-    for (index, predicate) in &target_antis {
-        additions[tr[*index]].push(target_predicates.len());
-        target_predicates.push((
-            predicate.shape.clone(),
-            predicate.columns.iter().map(|c| columns[c]).collect(),
-        ));
-    }
-    let mut before = Prefix::new(columns.len(), target_predicates);
-    let mut reductions = vec![Vec::new(); buckets.len()];
-    for reduction in &source.reductions {
-        let region = sr[reduction.node];
-        if region < source.chain.len() {
-            reductions[region].push(reduction);
-        }
-    }
-    let mut target_reductions = HashMap::new();
-    for reduction in &target.reductions {
-        let edge = (reduction.left, reduction.right);
-        let entry = target_reductions.entry(edge).or_insert(reduction);
-        if tr[reduction.node] < tr[entry.node] {
-            *entry = reduction;
-        }
-    }
-    for region in 0..buckets.len() {
-        for &(a, b) in &buckets[region] {
-            before.union(a, b);
-        }
-        for &predicate in &additions[region] {
-            before.insert(predicate);
-        }
-        for reduction in &reductions[region] {
-            let edge = (reduction.left, reduction.right);
-            let direct = target_reductions
-                .get(&edge)
-                .is_some_and(|other| tr[other.node] <= region && reduction.covered_by(other));
-            let joined = tr[target.atoms[&reduction.right].node] <= region
-                && reduction.equalities.iter().all(|(a, b)| {
-                    before.equality.root(columns[a]) == before.equality.root(columns[b])
-                });
-            if !direct && !joined {
-                return Err(format!(
-                    "Rust step {region} lost source-before reduction @{} with @{} column matches",
-                    edge.0, edge.1
-                ));
-            }
-        }
-        if requests[region]
-            .iter()
-            .any(|&(a, b)| before.equality.root(a) != before.equality.root(b))
-            || predicate_requests[region]
-                .iter()
-                .any(|predicate| !before.contains(predicate))
-        {
-            return Err(if region < source.chain.len() {
-                format!("Rust step {region} lost a source-before relational constraint or binding")
-            } else {
-                "output relational bindings differ from source".into()
-            });
-        }
+    if so
+        .iter()
+        .any(|(name, column)| su.label(columns[column]) != tu.label(columns[&to[name]]))
+    {
+        return Err("output relational bindings differ from source".into());
     }
     Ok(())
 }
 
 mod blocks;
+mod views;
 mod reductions;
 
 pub(super) fn check_reduction_rewrite(
     source: &Program,
     target: &Program,
-    schedule: &Schedule,
+    schedule: &Structure,
+    atoms: &mut Atoms,
 ) -> bool {
-    reductions::check(source, target, schedule)
+    reductions::check(source, target, schedule, atoms)
 }
 
 #[cfg(test)]
 mod group_tests {
     use super::*;
 
-    fn grouped(valuation: &[&str], group: cq_syntax::algebra::Group) -> Schedule {
-        let mut schedule = Schedule::default();
+    fn grouped(valuation: &[&str], group: cq_syntax::algebra::Group) -> Structure {
+        let mut schedule = Structure::default();
         let input = schedule.atom(
             0,
             &syn::parse_quote!(R),
@@ -1747,13 +1417,13 @@ mod group_tests {
             &["key", "value", "witness"],
             syn::parse_quote!(group input by [key] { total: i32 = sum(value); }),
         );
-        assert!(source.check(&source, &[]).is_ok());
+        assert!(source.check(&source).is_ok());
         let projected = grouped(
             &["key", "value"],
             syn::parse_quote!(group input by [key] { total: i32 = sum(value); }),
         );
-        assert!(source.check(&projected, &[]).is_err());
-        assert!(projected.check(&source, &[]).is_err());
+        assert!(source.check(&projected).is_err());
+        assert!(projected.check(&source).is_err());
     }
 
     #[test]
@@ -1769,13 +1439,13 @@ mod group_tests {
             syn::parse_quote!(group input by [key] { total: i64 = sum(value); }),
         ] {
             let target = grouped(&["key", "value", "witness"], group);
-            assert!(source.check(&target, &[]).is_err());
+            assert!(source.check(&target).is_err());
         }
     }
 
     #[test]
     fn group_accepts_equivalent_set_reordering_below_barrier() {
-        let mut source = Schedule::default();
+        let mut source = Structure::default();
         let left = source.atom(
             0,
             &syn::parse_quote!(R),
@@ -1796,7 +1466,7 @@ mod group_tests {
         let target_output = target.group(target_input, &group);
         source.finish(source_output, &syn::parse_quote!(Out(key, total)));
         target.finish(target_output, &syn::parse_quote!(Out(key, total)));
-        assert!(source.check(&target, &[]).is_ok());
+        assert!(source.check(&target).is_ok());
     }
 }
 
@@ -1806,7 +1476,7 @@ mod global_group_tests {
 
     #[test]
     fn global_count_is_not_a_projection_or_a_count_of_arguments() {
-        let mut source = Schedule::default();
+        let mut source = Structure::default();
         let input = source.atom(
             0,
             &syn::parse_quote!(R),
@@ -1817,11 +1487,11 @@ mod global_group_tests {
         let group = syn::parse_quote!(group input by [] { total: usize = count(); });
         let output = source.group(input, &group);
         source.finish(output, &syn::parse_quote!(Out(total)));
-        assert!(source.check(&source, &[]).is_ok());
+        assert!(source.check(&source).is_ok());
 
         let projected = target.project(input, &[]);
         let output = target.group(projected, &group);
         target.finish(output, &syn::parse_quote!(Out(total)));
-        assert!(source.check(&target, &[]).is_err());
+        assert!(source.check(&target).is_err());
     }
 }

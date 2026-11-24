@@ -1,8 +1,10 @@
 //! TPC-H-derived Q19 with a positive join, relational comparison predicates and exact SUM.
 //! Part keys are unique in dbgen; retaining the lineitem primary key preserves
 //! SQL multiplicity even when different lineitems have equal revenues.
+//! Text columns use load-time sorted dictionary codes; query literals translate
+//! through the declared column domains.
 
-use cq_load::Decimal;
+use cq_load::{Decimal, StringCode};
 use std::{error::Error, path::Path};
 
 pub const NAME: &str = "tpch_q19";
@@ -31,28 +33,48 @@ pub const CONFIGS: &[&str] = &[
     "le_runs",
 ];
 
-::mini_linq::relation_loaders! {
+::cq_load::interned_relation_loaders! {
     relation Lineitem(
         l_partkey: i64, l_orderkey: i64, l_linenumber: i64,
         l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
-        l_shipmode: String, l_shipinstruct: String
+        l_shipmode: StringCode, l_shipinstruct: StringCode
     );
-    relation Part(p_partkey: i64, p_brand: String, p_container: String, p_size: i32);
+    relation Part(p_partkey: i64, p_brand: StringCode, p_container: StringCode, p_size: i32);
 }
 
-type LineitemRow = (i64, i64, i64, Decimal, Decimal, Decimal, String, String);
+type LineitemRow = (
+    i64,
+    i64,
+    i64,
+    Decimal,
+    Decimal,
+    Decimal,
+    StringCode,
+    StringCode,
+);
 pub struct Data {
     lineitem: Vec<LineitemRow>,
-    part: Vec<(i64, String, String, i32)>,
+    part: Vec<(i64, StringCode, StringCode, i32)>,
+    dictionaries: cq_load::Dictionaries,
 }
 
 /// Coefficient at scale four; None is the SQL SUM result for empty input.
 pub type Answer = Option<i128>;
 
 pub fn load(root: &Path, _config: &str) -> Result<Data, Box<dyn Error>> {
+    let mut dictionaries = cq_load::Dictionaries::default();
     Ok(Data {
-        lineitem: LineitemLoader::parquet(root.join("lineitem.parquet"), Default::default())?,
-        part: PartLoader::parquet(root.join("part.parquet"), Default::default())?,
+        lineitem: LineitemLoader::parquet_interned(
+            root.join("lineitem.parquet"),
+            Default::default(),
+            &mut dictionaries,
+        )?,
+        part: PartLoader::parquet_interned(
+            root.join("part.parquet"),
+            Default::default(),
+            &mut dictionaries,
+        )?,
+        dictionaries,
     })
 }
 
@@ -74,23 +96,25 @@ macro_rules! query_body {
                 relation lineitem(
                     partkey: i64, orderkey: i64, linenumber: i64,
                     quantity: Decimal, price: Decimal, discount: Decimal,
-                    shipmode: String, shipinstruct: String
+                    shipmode: StringCode in (data.dictionaries.domain("l_shipmode")),
+                    shipinstruct: StringCode in (data.dictionaries.domain("l_shipinstruct"))
                 );
-                relation part(partkey: i64, brand: String, container: String, size: i32);
+                relation part(partkey: i64, brand: StringCode in (data.dictionaries.domain("p_brand")),
+                    container: StringCode in (data.dictionaries.domain("p_container")), size: i32);
                 rows(group, orderkey, linenumber, amount) :-
                     lineitem(partkey, orderkey, linenumber, quantity, price, discount, shipmode, shipinstruct),
                     part(partkey, brand, container, size),
-                    if *shipmode == "AIR" || *shipmode == "AIR REG",
-                    if *shipinstruct == "DELIVER IN PERSON",
-                    if (*brand == "Brand#12"
-                        && (*container == "SM CASE" || *container == "SM BOX" || *container == "SM PACK" || *container == "SM PKG")
-                        && *quantity >= q1_low && *quantity <= q1_high && *size >= 1 && *size <= 5)
-                    || (*brand == "Brand#23"
-                        && (*container == "MED BAG" || *container == "MED BOX" || *container == "MED PKG" || *container == "MED PACK")
-                        && *quantity >= q2_low && *quantity <= q2_high && *size >= 1 && *size <= 10)
-                    || (*brand == "Brand#34"
-                        && (*container == "LG CASE" || *container == "LG BOX" || *container == "LG PACK" || *container == "LG PKG")
-                        && *quantity >= q3_low && *quantity <= q3_high && *size >= 1 && *size <= 15),
+                    where shipmode == "AIR" || shipmode == "AIR REG",
+                    where shipinstruct == "DELIVER IN PERSON",
+                    where (brand == "Brand#12"
+                        && (container == "SM CASE" || container == "SM BOX" || container == "SM PACK" || container == "SM PKG")
+                        && quantity >= q1_low && quantity <= q1_high && size >= 1 && size <= 5)
+                    || (brand == "Brand#23"
+                        && (container == "MED BAG" || container == "MED BOX" || container == "MED PKG" || container == "MED PACK")
+                        && quantity >= q2_low && quantity <= q2_high && size >= 1 && size <= 10)
+                    || (brand == "Brand#34"
+                        && (container == "LG CASE" || container == "LG BOX" || container == "LG PACK" || container == "LG PKG")
+                        && quantity >= q3_low && quantity <= q3_high && size >= 1 && size <= 15),
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * (100 - i128::from(discount.scaled()));
             }};
@@ -142,19 +166,19 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     }
 }
 
+pub fn canonical_row(value: &Answer) -> Vec<String> {
+    vec![value.map_or_else(
+        || "\\N".into(),
+        |value| {
+            let sign = if value < 0 { "-" } else { "" };
+            let magnitude = value.unsigned_abs();
+            format!("{sign}{}.{:04}", magnitude / 10_000, magnitude % 10_000)
+        },
+    )]
+}
+
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter()
-        .map(|value| {
-            vec![value.map_or_else(
-                || "\\N".into(),
-                |value| {
-                    let sign = if value < 0 { "-" } else { "" };
-                    let magnitude = value.unsigned_abs();
-                    format!("{sign}{}.{:04}", magnitude / 10_000, magnitude % 10_000)
-                },
-            )]
-        })
-        .collect()
+    rows.iter().map(canonical_row).collect()
 }
 
 #[cfg(test)]
@@ -163,7 +187,13 @@ mod tests {
 
     #[test]
     fn branches_boundaries_and_equal_valued_lines_preserve_sql_sum() {
+        use cq_storage::domain::exact;
         let decimal = |value| Decimal::from_scaled(value).unwrap();
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("p_brand", ["Brand#12", "Brand#23", "Brand#34"]);
+        dictionaries.insert("p_container", ["SM CASE", "MED BAG", "LG PKG"]);
+        dictionaries.insert("l_shipmode", ["AIR", "AIR REG", "SHIP"]);
+        dictionaries.insert("l_shipinstruct", ["DELIVER IN PERSON", "NONE"]);
         let row = |key, number, quantity, mode: &str, instruction: &str| {
             (
                 key,
@@ -172,16 +202,36 @@ mod tests {
                 decimal(quantity),
                 decimal(10_000),
                 decimal(5),
-                mode.into(),
-                instruction.into(),
+                exact(dictionaries.domain("l_shipmode"), mode),
+                exact(dictionaries.domain("l_shipinstruct"), instruction),
             )
         };
         let data = Data {
             part: vec![
-                (1, "Brand#12".into(), "SM CASE".into(), 5),
-                (2, "Brand#23".into(), "MED BAG".into(), 10),
-                (3, "Brand#34".into(), "LG PKG".into(), 15),
-                (4, "Brand#12".into(), "SM CASE".into(), 6),
+                (
+                    1,
+                    exact(dictionaries.domain("p_brand"), "Brand#12"),
+                    exact(dictionaries.domain("p_container"), "SM CASE"),
+                    5,
+                ),
+                (
+                    2,
+                    exact(dictionaries.domain("p_brand"), "Brand#23"),
+                    exact(dictionaries.domain("p_container"), "MED BAG"),
+                    10,
+                ),
+                (
+                    3,
+                    exact(dictionaries.domain("p_brand"), "Brand#34"),
+                    exact(dictionaries.domain("p_container"), "LG PKG"),
+                    15,
+                ),
+                (
+                    4,
+                    exact(dictionaries.domain("p_brand"), "Brand#12"),
+                    exact(dictionaries.domain("p_container"), "SM CASE"),
+                    6,
+                ),
             ],
             lineitem: vec![
                 row(1, 1, 100, "AIR", "DELIVER IN PERSON"),
@@ -197,6 +247,7 @@ mod tests {
                 row(4, 11, 100, "AIR", "DELIVER IN PERSON"),
                 row(5, 12, 100, "AIR", "DELIVER IN PERSON"),
             ],
+            dictionaries,
         };
         for config in CONFIGS {
             assert_eq!(run(&data, config), [Some(5_700_000)]);
@@ -205,7 +256,8 @@ mod tests {
                 run(
                     &Data {
                         lineitem: vec![],
-                        part: vec![]
+                        part: vec![],
+                        dictionaries: cq_load::Dictionaries::default(),
                     },
                     config
                 ),

@@ -11,6 +11,30 @@ have been removed. Maintained frozen/leveled indexes have no Sequence term.
 See the [Sequence workspace](../experiments/gpu/README.md) for the active
 backend's supported contracts and commands.
 
+The removed maintained-index backend is not today's GPU Datalog runtime.
+Current Datalog records ordinary `DeviceRadixRun<W, u64, ()>` full-key state
+and typed `RadixLayout` views (`radix_relation` / `NativeAbi::RadixRelation`),
+with read-only `fresh` admission and separate `append_sorted` publication.
+Offset, construction, prefix-read, directory and launch facts are checked
+independently; see P4-GPU slice D for the contract, not a new gate result.
+GPU Datalog runs each round's waves in order on one device stream. See
+[storage ownership](STORAGE.md#132-gpu-provider-ownership-p3d-c1c2).
+
+## Rust and relational predicates
+
+Every `if`, `let` and `for` expression is opaque, pure and total by premise.
+The compiler emits it unchanged for cuda-oxide; a row-dependent expression
+may run on device only when all columns it reads have recorded identity
+representations and its other inputs are closed captures. Unknown or
+codec-encoded row inputs require host Rust execution. CPU task levels support
+host Rust through the machine's `host_rust` capability.
+
+Only `where` has relational comparison, membership and range semantics.
+Closed operands are evaluated once on the host and encoded with the compared
+column's recorded codec. No arithmetic recognition, wrapping rewrite or host
+type-name whitelist determines meaning or placement.
+
+
 ## Measurements and provenance
 
 Performance is workload-, plan-, representation- and tuning-specific. Exact
@@ -21,7 +45,8 @@ Observed timing differences alone establish neither a causal explanation nor
 global optimality. In particular, best-of-tested-order results are not an
 optimality claim.
 
-Historical H05 summary (RTX 6000 Ada; the original design's recorded values,
+Historical H05 summary (RTX 6000 Ada; preserved in this document at
+`7e187597`, 2026-11-02, with the committed samples linked below;
 not new measurements):
 
 | System | SF1 ms | SF10 ms |
@@ -49,6 +74,14 @@ Canonical evidence, rather than duplicate specification and tuning narratives:
 - [Historical triangle samples](../experiments/gpu/compare/gpu_triangles.results.json):
   directed set triangles, excluding host edge sort/dedup and upload from GPU
   timing. These archived samples are not evidence for the current translator.
+
+Latest recorded DOOP evidence is the 2026-10-31
+[P6b checkpoint](PLANNING-REDESIGN.md): `srd-doop-gpu` with four lanes
+measured xalan **0.905 s**, batik **1.580 s**. The retained SRD fullclock
+reference is **1.01–1.02 s / 1.82–2.10 s** in the dated
+[profile report](../experiments/gpu/compare/p3b-profile/01-doop-report.md).
+Those historical references have different clock/configuration boundaries;
+they are not a fresh paired comparison or a claim about current-tree timing.
 
 Immutable sorted batches and cursor merges are useful reference mechanisms
 from Differential Dataflow, but its logical timestamp compaction is not

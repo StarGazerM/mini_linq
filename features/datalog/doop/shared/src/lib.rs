@@ -6,6 +6,7 @@ pub mod ascent_engine;
 pub mod harness;
 pub mod interner;
 mod loader;
+mod manifest;
 pub mod mini_engine;
 
 pub use interner::IStr;
@@ -51,46 +52,53 @@ pub struct Facts {
 
 impl Facts {
     pub fn load(directory: &Path) -> io::Result<Self> {
-        let methods = loader::load(&directory.join("Method.facts"))?;
+        let manifest = std::env::var_os("DOOP_SET_MANIFEST").map(std::path::PathBuf::from);
+        Self::load_with_manifest(directory, manifest.as_deref())
+    }
+
+    /// Load with an explicit certificate path, or discover doop-set-manifest.json.
+    /// Invalid or absent certificates retain full-row deduplication.
+    pub fn load_with_manifest(directory: &Path, path: Option<&Path>) -> io::Result<Self> {
+        let manifest = manifest::Manifest::load(directory, path);
+        macro_rules! load {
+            ($name:literal) => { loader::load(&directory.join($name), &manifest) };
+        }
+        let methods = load!("Method.facts")?;
         let method_descriptor = loader::method_descriptors(&methods);
         Ok(Self {
-            directsuperclass: loader::load(&directory.join("DirectSuperclass.facts"))?,
-            directsuperinterface: loader::load(&directory.join("DirectSuperinterface.facts"))?,
-            mainclass: loader::load(&directory.join("MainClass.facts"))?,
-            formalparam: loader::load(&directory.join("FormalParam.facts"))?,
-            componenttype: loader::load(&directory.join("ComponentType.facts"))?,
-            assignreturnvalue: loader::load(&directory.join("AssignReturnValue.facts"))?,
-            actualparam: loader::load(&directory.join("ActualParam.facts"))?,
-            method_modifier: loader::load(&directory.join("Method-Modifier.facts"))?,
-            var_type: loader::load(&directory.join("Var-Type.facts"))?,
-            _classtype: loader::load(&directory.join("ClassType.facts"))?,
-            _arraytype: loader::load(&directory.join("ArrayType.facts"))?,
-            _interfacetype: loader::load(&directory.join("InterfaceType.facts"))?,
-            _var_declaringmethod: loader::load(&directory.join("Var-DeclaringMethod.facts"))?,
-            _applicationclass: loader::load(&directory.join("ApplicationClass.facts"))?,
-            _thisvar: loader::load(&directory.join("ThisVar.facts"))?,
-            _normalheap: loader::load(&directory.join("NormalHeap.facts"))?,
-            _stringconstant: loader::load(&directory.join("StringConstant.facts"))?,
-            _assignheapallocation: loader::load(&directory.join("AssignHeapAllocation.facts"))?,
-            _assignlocal: loader::load(&directory.join("AssignLocal.facts"))?,
-            _assigncast: loader::load(&directory.join("AssignCast.facts"))?,
-            _field: loader::load(&directory.join("Field.facts"))?,
-            _staticmethodinvocation: loader::load(&directory.join("StaticMethodInvocation.facts"))?,
-            _specialmethodinvocation: loader::load(
-                &directory.join("SpecialMethodInvocation.facts"),
-            )?,
-            _virtualmethodinvocation: loader::load(
-                &directory.join("VirtualMethodInvocation.facts"),
-            )?,
+            directsuperclass: load!("DirectSuperclass.facts")?,
+            directsuperinterface: load!("DirectSuperinterface.facts")?,
+            mainclass: load!("MainClass.facts")?,
+            formalparam: load!("FormalParam.facts")?,
+            componenttype: load!("ComponentType.facts")?,
+            assignreturnvalue: load!("AssignReturnValue.facts")?,
+            actualparam: load!("ActualParam.facts")?,
+            method_modifier: load!("Method-Modifier.facts")?,
+            var_type: load!("Var-Type.facts")?,
+            _classtype: load!("ClassType.facts")?,
+            _arraytype: load!("ArrayType.facts")?,
+            _interfacetype: load!("InterfaceType.facts")?,
+            _var_declaringmethod: load!("Var-DeclaringMethod.facts")?,
+            _applicationclass: load!("ApplicationClass.facts")?,
+            _thisvar: load!("ThisVar.facts")?,
+            _normalheap: load!("NormalHeap.facts")?,
+            _stringconstant: load!("StringConstant.facts")?,
+            _assignheapallocation: load!("AssignHeapAllocation.facts")?,
+            _assignlocal: load!("AssignLocal.facts")?,
+            _assigncast: load!("AssignCast.facts")?,
+            _field: load!("Field.facts")?,
+            _staticmethodinvocation: load!("StaticMethodInvocation.facts")?,
+            _specialmethodinvocation: load!("SpecialMethodInvocation.facts")?,
+            _virtualmethodinvocation: load!("VirtualMethodInvocation.facts")?,
             _method: methods,
             method_descriptor,
-            _storeinstancefield: loader::load(&directory.join("StoreInstanceField.facts"))?,
-            _loadinstancefield: loader::load(&directory.join("LoadInstanceField.facts"))?,
-            _storestaticfield: loader::load(&directory.join("StoreStaticField.facts"))?,
-            _loadstaticfield: loader::load(&directory.join("LoadStaticField.facts"))?,
-            _storearrayindex: loader::load(&directory.join("StoreArrayIndex.facts"))?,
-            _loadarrayindex: loader::load(&directory.join("LoadArrayIndex.facts"))?,
-            _return: loader::load(&directory.join("Return.facts"))?,
+            _storeinstancefield: load!("StoreInstanceField.facts")?,
+            _loadinstancefield: load!("LoadInstanceField.facts")?,
+            _storestaticfield: load!("StoreStaticField.facts")?,
+            _loadstaticfield: load!("LoadStaticField.facts")?,
+            _storearrayindex: load!("StoreArrayIndex.facts")?,
+            _loadarrayindex: load!("LoadArrayIndex.facts")?,
+            _return: load!("Return.facts")?,
         })
     }
 }
@@ -126,6 +134,54 @@ pub struct Results {
 }
 
 impl Results {
+    /// Timing-only semantic witness. Canonicalize typed rows before counting;
+    /// resolve dictionary strings only for the actual rows selected by policy.
+    pub fn witness(&mut self, policy: bench_check::Policy) -> bench_check::Witness {
+        let mut witness = bench_check::Witness::new();
+        macro_rules! relation {
+            ($name:literal, $field:ident, $($column:tt),+) => {{
+                self.$field.sort_unstable();
+                self.$field.dedup();
+                witness.insert($name.into(), bench_check::make_witness(
+                    $name,
+                    self.$field.len(),
+                    |index| {
+                        let row = &self.$field[index];
+                        vec![$(interner::res(row.$column).to_string()),+]
+                    },
+                    policy,
+                ));
+            }};
+        }
+        relation!("MainClass", mainclass, 0);
+        relation!("Method_SimpleName", method_simplename, 0, 1);
+        relation!("Method_DeclaringType", method_declaringtype, 0, 1);
+        relation!("Method_Modifier", method_modifier, 0, 1);
+        relation!("Method_ParamTypes", method_paramtypes, 0, 1);
+        relation!("Method_ReturnType", method_returntype, 0, 1);
+        relation!("Method_Descriptor", method_descriptor, 0, 1);
+        relation!("MethodLookup", methodlookup, 0, 1, 2, 3);
+        relation!("MethodImplemented", methodimplemented, 0, 1, 2, 3);
+        relation!("DirectSubclass", directsubclass, 0, 1);
+        relation!("Subclass", subclass, 0, 1);
+        relation!("Superclass", superclass, 0, 1);
+        relation!("Superinterface", superinterface, 0, 1);
+        relation!("SubtypeOf", subtypeof, 0, 1);
+        relation!("SupertypeOf", supertypeof, 0, 1);
+        relation!("SubtypeOfDifferent", subtypeofdifferent, 0, 1);
+        relation!("MainMethodDeclaration", mainmethoddeclaration, 0);
+        relation!("ClassInitializer", classinitializer, 0, 1);
+        relation!("InitializedClass", initializedclass, 0);
+        relation!("Assign", assign, 0, 1);
+        relation!("VarPointsTo", varpointsto, 0, 1);
+        relation!("InstanceFieldPointsTo", instancefieldpointsto, 0, 1, 2);
+        relation!("StaticFieldPointsTo", staticfieldpointsto, 0, 1);
+        relation!("CallGraphEdge", callgraphedge, 0, 1);
+        relation!("ArrayIndexPointsTo", arrayindexpointsto, 0, 1);
+        relation!("Reachable", reachable, 0);
+        witness
+    }
+
     pub fn print_sizes(&self) {
         println!("MainClass	{}", self.mainclass.len());
         println!("Method_SimpleName	{}", self.method_simplename.len());
@@ -444,5 +500,77 @@ impl Results {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod witness_tests {
+    use super::*;
+    use bench_check::{Mode, Policy};
+
+    fn empty_results() -> Results {
+        Results {
+            mainclass: Vec::new(),
+            method_simplename: Vec::new(),
+            method_declaringtype: Vec::new(),
+            method_modifier: Vec::new(),
+            method_paramtypes: Vec::new(),
+            method_returntype: Vec::new(),
+            method_descriptor: Vec::new(),
+            methodlookup: Vec::new(),
+            methodimplemented: Vec::new(),
+            directsubclass: Vec::new(),
+            subclass: Vec::new(),
+            superclass: Vec::new(),
+            superinterface: Vec::new(),
+            subtypeof: Vec::new(),
+            supertypeof: Vec::new(),
+            subtypeofdifferent: Vec::new(),
+            mainmethoddeclaration: Vec::new(),
+            classinitializer: Vec::new(),
+            initializedclass: Vec::new(),
+            assign: Vec::new(),
+            varpointsto: Vec::new(),
+            instancefieldpointsto: Vec::new(),
+            staticfieldpointsto: Vec::new(),
+            callgraphedge: Vec::new(),
+            arrayindexpointsto: Vec::new(),
+            reachable: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn full_witness_uses_semantic_strings_and_logical_counts() {
+        let mut result = empty_results();
+        let heap = interner::sym("semantic-heap");
+        let variable = interner::sym("semantic-variable");
+        result.varpointsto = vec![(heap, variable), (heap, variable)];
+        let witness = result.witness(Policy::full());
+        assert_eq!(witness.len(), 26);
+        assert_eq!(witness["VarPointsTo"].count, 1);
+        assert_eq!(witness["VarPointsTo"].rows,
+                   vec![vec!["semantic-heap".to_string(), "semantic-variable".to_string()]]);
+        assert_eq!(witness["Reachable"].count, 0);
+        assert!(witness["Reachable"].rows.is_empty());
+    }
+
+    #[test]
+    fn sampled_witness_contains_distinct_actual_semantic_rows() {
+        let mut result = empty_results();
+        result.reachable = (0..1501)
+            .map(|index| (interner::sym(&format!("reachable-method-{index}")),))
+            .collect();
+        result.reachable.push(result.reachable[0]);
+        let policy = Policy { mode: Mode::Sampled, seed: 17, sample_size: 1000 };
+        let witness = result.witness(policy);
+        let relation = &witness["Reachable"];
+        assert_eq!(relation.count, 1501);
+        assert_eq!(relation.rows.len(), 1000);
+        assert_eq!(relation.rows.iter().collect::<std::collections::BTreeSet<_>>().len(), 1000);
+        assert!(relation.rows.iter().all(|row| row.len() == 1
+            && row[0].strip_prefix("reachable-method-")
+                .and_then(|suffix| suffix.parse::<usize>().ok())
+                .is_some_and(|index| index < 1501)));
+        assert_eq!(relation.rows, result.witness(policy)["Reachable"].rows);
     }
 }

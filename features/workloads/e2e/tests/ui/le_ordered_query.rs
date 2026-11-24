@@ -1,5 +1,5 @@
-// D85's accepted Written/Coarse merge+HashMap witness exposes a native
-// unordered unary host read with LE. Both callers must retain OrderedRead.
+// LE merges use selected ordered fallbacks on HashMap hosts, with and
+// without the sorted-runs rewrite; empty inputs produce no answers.
 macro_rules! d85_unordered_merge {
     ($($runs:path,)*) => {
         fn main() {
@@ -11,20 +11,20 @@ macro_rules! d85_unordered_merge {
             let RetailD85CustomerAddress = HashMap::<(i32,), Vec<()>>::new();
             let RetailD85DateDim = HashMap::<(i32,), Vec<()>>::new();
             let RetailD85Reason = HashMap::<(i32,), Vec<()>>::new();
-            let _ = mini_linq::compile! {
+            let count = mini_linq::compile! {
                 pipeline {
                     plan = cq_planners::order(le);
                     physical = [cq_rewrites::canon_prefixes, cq_rewrites::lazy_semijoins, cq_rewrites::merge_joins];
-                    structures = [cq_workload_passes::ordered_dedup, $($runs,)* cq_workload_passes::sorted_payload];
+                    structures = [$($runs,)* cq_workload_passes::sorted_payload];
                 }
                 pub struct RetailD85Program;
-                relation RetailD85WebSales(c0: i32, c1: i32, c2: i32, c3: i32);
-                relation RetailD85WebReturns(c0: i32, c1: i32, c2: i32, c3: i32, c4: i32, c5: i32);
-                relation RetailD85WebPage(c0: i32);
-                relation RetailD85CustomerDemo(c0: i32);
-                relation RetailD85CustomerAddress(c0: i32);
-                relation RetailD85DateDim(c0: i32);
-                relation RetailD85Reason(c0: i32);
+                relation RetailD85WebSales(c0: i32, c1: i32, c2: i32, c3: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85WebReturns(c0: i32, c1: i32, c2: i32, c3: i32, c4: i32, c5: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85WebPage(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85CustomerDemo(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85CustomerAddress(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85DateDim(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85Reason(c0: i32) host [c0] reads [exact, membership, ordered];
                 retail_d85_result(order_number, item_key, reason_key) :-
                     RetailD85WebSales(order_number, item_key, web_page, sold_date),
                     RetailD85WebReturns(order_number, item_key, refunded_demo, returning_demo, address_key, reason_key),
@@ -35,6 +35,7 @@ macro_rules! d85_unordered_merge {
                     RetailD85DateDim(sold_date),
                     RetailD85Reason(reason_key);
             }.count();
+            assert_eq!(count, 0);
         }
     };
 }

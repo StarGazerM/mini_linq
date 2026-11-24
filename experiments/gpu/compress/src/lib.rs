@@ -14,11 +14,22 @@
 //! its size, ID width and inverse map.
 //!
 //! Build scripts use the dependency-free `gpu-compress-host` schema crate.
+//!
+//! DESIGN contract8-gpu-codecs
+//! Contract 8 §§8/12: scan-column and index-run roles are recorded facts, not loader policy.
+//! Sources: doc/STORAGE.md §§4,6,8,12; BtrBlocks SchemePicker.hpp; DuckDB column_data_checkpointer.cpp.
+//! Measured (STORAGE §12.6, E1): FOR beats plain and size-selected FastLanes DELTA on GPU
+//! TPC-H base columns, including this catalog (H05); `compress_with` keeps the others as options.
+//! DO NOT promote compressed defaults from byte savings alone; plain is the evidence-free default.
+//! Require per-target M/E measurements before codec/role rules; index runs remain byte-addressable.
+//! DO NOT conflate scan codec selection with lookup/expand layout or infer either from type spelling.
 use gpu_compress_host::{Kind, Schema};
 use gpu_device_columns::{
-    Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, OutputCount, Pool, Table,
+    BaseLayout, Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn,
+    OutputCount, Pool, Table,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc};
 
 pub type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
@@ -31,30 +42,57 @@ pub struct Source {
     texts: BTreeMap<String, Vec<String>>,
     declared_bytes: usize,
     manifest: Value,
+    verified_keys: BTreeMap<String, Vec<Vec<String>>>,
 }
 
 impl Source {
     /// Read `manifest.json` and its little-endian column files.
     pub fn load_manifest(dir: &Path) -> Result<Self> {
-        let manifest: Value = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
+        let path = std::env::var_os("TPCH_GPU_MANIFEST")
+            .map(std::path::PathBuf::from).unwrap_or_else(|| dir.join("manifest.json"));
+        Self::load_with_manifest(dir, &path)
+    }
+
+    pub fn load_with_manifest(dir: &Path, path: &Path) -> Result<Self> {
+        let manifest: Value = serde_json::from_slice(&fs::read(path)?)?;
         let mut columns = BTreeMap::new();
         let mut texts_by_column = BTreeMap::new();
         let mut declared_bytes = 0;
-        for (relation, meta) in manifest["relations"].as_object().ok_or("relations missing")? {
+        let mut verified_keys = BTreeMap::new();
+        for (relation, meta) in manifest["relations"]
+            .as_object()
+            .ok_or("relations missing")?
+        {
             let rows = meta["rows"].as_u64().ok_or("row count missing")? as usize;
             if rows >= u32::MAX as usize {
                 return Err(format!("{relation}: row count exceeds the u32 row-ID domain").into());
             }
+            let mut hashes = BTreeMap::new();
             for column in meta["columns"].as_array().ok_or("columns missing")? {
                 let name = column["name"].as_str().ok_or("column name missing")?;
-                let bytes = fs::read(dir.join(column["file"].as_str().ok_or("column file missing")?))?;
+                let bytes =
+                    fs::read(dir.join(column["file"].as_str().ok_or("column file missing")?))?;
                 let width = match column["type"].as_str().ok_or("column type missing")? {
                     "i64" => 8,
                     "i32" => 4,
-                    other => return Err(format!("{relation}.{name}: unsupported declared type {other}").into()),
+                    other => {
+                        return Err(
+                            format!("{relation}.{name}: unsupported declared type {other}").into(),
+                        )
+                    }
                 };
                 if bytes.len() != rows * width {
-                    return Err(format!("{relation}.{name}: byte length does not match its declared type").into());
+                    return Err(format!(
+                        "{relation}.{name}: byte length does not match its declared type"
+                    )
+                    .into());
+                }
+                if column["encoding"] == "plain"
+                    && meta["verified_keys"].as_array().is_some_and(|keys| keys.iter().any(|key| {
+                        key["set"] == "verified" && key["columns"].get(name).is_some()
+                    }))
+                {
+                    hashes.insert(name.to_owned(), format!("{:x}", Sha256::digest(&bytes)));
                 }
                 let values: Vec<i64> = bytes
                     .chunks_exact(width)
@@ -70,19 +108,48 @@ impl Source {
                 let qualified = format!("{relation}.{name}");
                 let dictionary = dir.join(format!("{qualified}.dict.txt"));
                 if dictionary.is_file() {
-                    let texts: Vec<String> = fs::read_to_string(dictionary)?.lines().map(str::to_owned).collect();
-                    if values.iter().any(|&id| id < 0 || id as usize >= texts.len()) {
+                    let texts: Vec<String> = fs::read_to_string(dictionary)?
+                        .lines()
+                        .map(str::to_owned)
+                        .collect();
+                    if values
+                        .iter()
+                        .any(|&id| id < 0 || id as usize >= texts.len())
+                    {
                         return Err(format!("{qualified}: text ID outside its dictionary").into());
                     }
                     texts_by_column.insert(qualified.clone(), texts);
                 }
                 columns.insert(qualified, values);
             }
+            let keys = meta["verified_keys"].as_array().into_iter().flatten()
+                .filter_map(|key| {
+                    let columns = key["columns"].as_object()?;
+                    let valid = key["set"] == "verified" && key["rows"] == meta["rows"]
+                        && !columns.is_empty() && columns.iter().all(|(name, expected)| {
+                            hashes.get(name).map(String::as_str) == expected.as_str()
+                                && meta["columns"].as_array().unwrap().iter().any(|column| {
+                                    column["name"] == name.as_str() && column["encoding"] == "plain"
+                                        && key["types"][name] == column["type"]
+                                })
+                        });
+                    valid.then(|| columns.keys().cloned().collect())
+                }).collect();
+            verified_keys.insert(relation.clone(), keys);
         }
-        Ok(Self { columns, texts: texts_by_column, declared_bytes, manifest })
+        Ok(Self {
+            columns,
+            texts: texts_by_column,
+            declared_bytes,
+            manifest,
+            verified_keys,
+        })
     }
     pub fn col(&self, name: &str) -> Result<&[i64]> {
-        self.columns.get(name).map(Vec::as_slice).ok_or_else(|| format!("missing column {name}").into())
+        self.columns
+            .get(name)
+            .map(Vec::as_slice)
+            .ok_or_else(|| format!("missing column {name}").into())
     }
     pub fn declared_bytes(&self) -> usize {
         self.declared_bytes
@@ -107,7 +174,10 @@ impl Domain {
         if values.len() >= u32::MAX as usize {
             return Err(format!("domain {name} exceeds the u32 ID domain").into());
         }
-        Ok(Self { name: name.to_string(), values })
+        Ok(Self {
+            name: name.to_string(),
+            values,
+        })
     }
     pub fn name(&self) -> &str {
         &self.name
@@ -120,12 +190,24 @@ impl Domain {
     }
     /// Bits of an ID: ceil(log2(len)).
     pub fn bits(&self) -> u32 {
-        if self.len() <= 1 { 0 } else { 64 - ((self.len() - 1) as u64).leading_zeros() }
+        if self.len() <= 1 {
+            0
+        } else {
+            64 - ((self.len() - 1) as u64).leading_zeros()
+        }
     }
     pub fn bounds(&self) -> Bounds {
-        if self.is_empty() { Bounds::Empty } else { Bounds::Inclusive { min: 0, max: self.len() as i64 - 1 } }
+        if self.is_empty() {
+            Bounds::Empty
+        } else {
+            Bounds::Inclusive {
+                min: 0,
+                max: self.len() as i64 - 1,
+            }
+        }
     }
     /// Source value of an ID (answer decoding).
+    // DECODE ?: source-key ordinal inversion serves answer decoding and generic DomainMap callers; require caller read evidence.
     pub fn value(&self, id: u32) -> i64 {
         self.values[id as usize]
     }
@@ -133,8 +215,10 @@ impl Domain {
     pub fn id(&self, value: i64) -> Option<u32> {
         self.values.binary_search(&value).ok().map(|id| id as u32)
     }
-    fn ids(&self, column: &[i64]) -> Vec<u32> {
-        column.iter().map(|v| self.values.binary_search(v).expect("value in its domain") as u32).collect()
+    fn ids(&self, column: impl Iterator<Item = i64>) -> Vec<u32> {
+        column
+            .map(|v| self.values.binary_search(&v).expect("value in its domain") as u32)
+            .collect()
     }
 }
 
@@ -159,58 +243,119 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Intern every domain, then FOR-pack and upload every table column.
+    /// Canonicalize complete schema projections, then FOR-pack and upload their columns.
     pub fn compress(pool: &Arc<Pool>, source: &Source, schema: &Schema) -> Result<Self> {
+        Self::compress_with(pool, source, schema, BaseLayout::For)
+    }
+
+    /// As [`Self::compress`], storing every column in `layout`; `For` is the
+    /// default device FOR path.
+    pub fn compress_with(
+        pool: &Arc<Pool>,
+        source: &Source,
+        schema: &Schema,
+        layout: BaseLayout,
+    ) -> Result<Self> {
         let mut domains = BTreeMap::new();
         for (name, members) in &schema.domains {
-            let columns = members.iter().map(|m| source.col(m)).collect::<Result<Vec<_>>>()?;
+            let columns = members
+                .iter()
+                .map(|m| source.col(m))
+                .collect::<Result<Vec<_>>>()?;
             domains.insert(name.clone(), Domain::new(name, &columns)?);
         }
         let mut tables = BTreeMap::new();
         let mut stored_texts = BTreeMap::new();
         for (table, columns) in &schema.tables {
-            let mut rows = None;
-            let mut stored = Vec::new();
-            for (column, kind) in columns {
+            let projected = columns
+                .iter()
+                .map(|(column, _)| source.col(&format!("{table}.{column}")))
+                .collect::<Result<Vec<_>>>()?;
+            let source_rows = projected.first().map_or(0, |column| column.len());
+            // Formal rule IO-GpuCatalogKey: injective domain encoding preserves a hash-verified source key.
+            let certified = source.verified_keys.get(table).is_some_and(|keys| keys.iter().any(|key| {
+                key.iter().all(|name| columns.iter().any(|(column, _)| column == name))
+            }));
+            let selected = if certified { None } else {
+                gpu_compress_host::unique_rows(&projected, source_rows)?
+            };
+            let rows = selected.as_ref().map_or(source_rows, Vec::len);
+            let mut stored = Vec::with_capacity(columns.len());
+            for ((column, kind), values) in columns.iter().zip(projected) {
                 let qualified = format!("{table}.{column}");
-                let values = source.col(&qualified)?;
-                if *rows.get_or_insert(values.len()) != values.len() {
-                    return Err(format!("{qualified}: row count differs within {table}").into());
-                }
-                let encoded = match kind {
-                    Kind::Id(domain) => {
-                        let domain = domains.get(domain).ok_or_else(|| format!("{qualified}: unknown domain {domain}"))?;
-                        if !schema.domains.iter().any(|(d, members)| d == domain.name() && members.contains(&qualified)) {
-                            return Err(format!("{qualified} is not a member of domain {}", domain.name()).into());
+                let values = (0..rows).map(|row| {
+                    values[selected.as_ref().map_or(row, |indices| indices[row] as usize)]
+                });
+                let encoded =
+                    match kind {
+                        Kind::Id(domain) => {
+                            let domain = domains
+                                .get(domain)
+                                .ok_or_else(|| format!("{qualified}: unknown domain {domain}"))?;
+                            if !schema.domains.iter().any(|(d, members)| {
+                                d == domain.name() && members.contains(&qualified)
+                            }) {
+                                return Err(format!(
+                                    "{qualified} is not a member of domain {}",
+                                    domain.name()
+                                )
+                                .into());
+                            }
+                            EncodedColumn::from_host_layout(pool.clone(), &domain.ids(values), layout)?
                         }
-                        EncodedColumn::from_host(pool.clone(), &domain.ids(values), Codec::For)?
-                    }
-                    Kind::I32 => {
-                        let values = values.iter().map(|&v| Ok(i32::try_from(v)?)).collect::<Result<Vec<i32>>>()?;
-                        EncodedColumn::from_host(pool.clone(), &values, Codec::For)?
-                    }
-                };
-                stored.push(CompressedColumn { name: column.clone(), kind: kind.clone(), column: Arc::new(encoded) });
+                        Kind::I32 => {
+                            let values = values
+                                .map(|v| Ok(i32::try_from(v)?))
+                                .collect::<Result<Vec<i32>>>()?;
+                            EncodedColumn::from_host_layout(pool.clone(), &values, layout)?
+                        }
+                    };
+                stored.push(CompressedColumn {
+                    name: column.clone(),
+                    kind: kind.clone(),
+                    column: Arc::new(encoded),
+                });
                 if let Some(texts) = source.texts.get(&qualified) {
                     stored_texts.insert(qualified, texts.clone());
                 }
             }
-            tables.insert(table.clone(), CompressedTable { rows: rows.unwrap_or(0), columns: stored });
+            tables.insert(
+                table.clone(),
+                CompressedTable {
+                    rows,
+                    columns: stored,
+                },
+            );
         }
-        Ok(Self { pool: pool.clone(), domains, tables, texts: stored_texts })
+        Ok(Self {
+            pool: pool.clone(),
+            domains,
+            tables,
+            texts: stored_texts,
+        })
     }
     /// Stored `i32` ID of `text` in the interned text column `table.column`:
     /// the value a query constant must have to compare with that column.
     pub fn text_id(&self, column: &str, text: &str) -> Result<i32> {
-        let texts = self.texts.get(column).ok_or_else(|| format!("{column} is not a stored text column"))?;
-        let id = texts.iter().position(|t| t == text).ok_or_else(|| format!("{column}: {text:?} is not in its dictionary"))?;
+        let texts = self
+            .texts
+            .get(column)
+            .ok_or_else(|| format!("{column} is not a stored text column"))?;
+        let id = texts
+            .iter()
+            .position(|t| t == text)
+            .ok_or_else(|| format!("{column}: {text:?} is not in its dictionary"))?;
         Ok(i32::try_from(id)?)
     }
     pub fn domain(&self, name: &str) -> Result<&Domain> {
-        self.domains.get(name).ok_or_else(|| format!("unknown domain {name}").into())
+        self.domains
+            .get(name)
+            .ok_or_else(|| format!("unknown domain {name}").into())
     }
     pub fn table(&self, name: &str) -> Result<&CompressedTable> {
-        self.tables.get(name).ok_or_else(|| format!("unknown table {name}").into())
+        self.tables
+            .get(name)
+            .ok_or_else(|| format!("unknown table {name}").into())
     }
     pub fn column(&self, table: &str, column: &str) -> Result<&CompressedColumn> {
         self.table(table)?
@@ -228,7 +373,11 @@ impl Catalog {
     }
     /// Encoded bytes of every resident column.
     pub fn bytes(&self) -> usize {
-        self.tables.values().flat_map(|t| &t.columns).map(|c| c.column.bytes()).sum()
+        self.tables
+            .values()
+            .flat_map(|t| &t.columns)
+            .map(|c| c.column.bytes())
+            .sum()
     }
     pub fn tables(&self) -> impl Iterator<Item = (&String, &CompressedTable)> {
         self.tables.iter()
@@ -236,10 +385,24 @@ impl Catalog {
     /// Bind a stored table as a resident relation for compiled queries. `Row`
     /// is the tuple of stored types (domain ID newtypes and `i32`). Setup only:
     /// the column descriptors and row count are uploaded synchronously.
-    pub fn device_columns<Row>(&self, table: &str) -> Result<DeviceColumns<'static, Row, gpu_device_columns::For>> {
+    pub fn device_columns<Row>(
+        &self,
+        table: &str,
+    ) -> Result<DeviceColumns<'static, Row, gpu_device_columns::For>> {
         let stored = self.table(table)?;
-        let views: Vec<ColumnView> = stored.columns.iter().map(|c| unsafe { c.column.view() }).collect();
-        let metadata = Buffer::from_host(self.pool.clone(), &[OutputCount { rows: stored.rows as u64, error: 0, padding: 0 }])?;
+        let views: Vec<ColumnView> = stored
+            .columns
+            .iter()
+            .map(|c| unsafe { c.column.view() })
+            .collect();
+        let metadata = Buffer::from_host(
+            self.pool.clone(),
+            &[OutputCount {
+                rows: stored.rows as u64,
+                error: 0,
+                padding: 0,
+            }],
+        )?;
         let table = Table {
             columns: stored.columns.iter().map(|c| c.column.clone()).collect(),
             views: Arc::new(Buffer::from_host(self.pool.clone(), &views)?),
@@ -251,6 +414,8 @@ impl Catalog {
         // SAFETY: every column belongs to this pool and was initialized by
         // `compress`; the views and count are owned by `table`; bounds are the
         // columns' own. The string dictionary is unused by integer domains.
-        Ok(unsafe { DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), self.pool.clone()) })
+        Ok(unsafe {
+            DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), self.pool.clone())
+        })
     }
 }

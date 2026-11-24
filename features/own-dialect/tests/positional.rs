@@ -22,14 +22,16 @@ macro_rules! compare_reduced {
 }
 #[test]
 fn retained_masks_reuse_payloads_on_vec_slice_array_and_partial_zone_blocks() {
-    let left = vec![(1_i64, 10_i64), (1, 10), (1, 20), (2, 30), (3, 40), (5, 15)];
-    let right = vec![(1_i64, 1_i64), (1, 1), (2, 0), (3, 1), (9, 1)];
+    let mut left = vec![(1_i64, 10_i64), (1, 10), (1, 20), (2, 30), (3, 40), (5, 15)];
+    let mut right = vec![(1_i64, 1_i64), (1, 1), (2, 0), (3, 1), (9, 1)];
+    cq_load::canonicalize(&mut left);
+    cq_load::canonicalize(&mut right);
     let expected = BTreeSet::from([(1, 10), (1, 20)]);
     assert_eq!(compare_reduced!(left, right), expected);
     assert_eq!(
         cq_storage::counters::snapshot().rows_copied,
-        3,
-        "only the three surviving occurrences enter the payload index; no retained tuple buffer"
+        2,
+        "only the two surviving input rows enter the payload index; no retained tuple buffer"
     );
     assert_eq!(
         compare_reduced!(left.as_slice(), right.as_slice()),
@@ -80,19 +82,19 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
     let __push_position_r1 = 2_i64;
     let rows = [(1_i64,), (2,), (3,)];
     macro_rules! run {
-        ($($printer:ident)::+) => {
+        ($endpoint:ident, $($printer:ident)::+) => {
             mini_linq::compile! {
-                pipeline { print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
+                pipeline { print_input = $endpoint; print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
                 struct GuardHygiene;
                 relation r(x:i64) = (rows);
-                answer(x) :- r(x), if *x >= 1, if keep(x, __cq_r1_predicate), if keep(x, __push_position_r1);
+                answer(x) :- r(x), where x >= 1, if keep(x, __cq_r1_predicate), if keep(x, __push_position_r1);
             }
             .map(|(x,)| *x)
             .collect()
         };
     }
-    let values: Vec<_> = run!(mini_linq::passes::translate_pull);
-    let pushed: Vec<_> = run!(own_push::push);
+    let values: Vec<_> = run!(sequence, mini_linq::passes::translate_pull);
+    let pushed: Vec<_> = run!(structures, own_push::push);
     assert_eq!(values, pushed);
     assert_eq!(values, vec![1]);
 }
@@ -105,17 +107,17 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                 pipeline { $($($passes),*)? };
                 physical {
                     relation L(a:i64) = ($left); relation R(b:i64) = ($right);
-                    l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x};
+                    l = pipe rename L {a -> x}; r = pipe rename R {b -> x};
                     s = let project r keep {x};
-                    out = pipe canon $operator eager [x] l,s;
+                    out = let canon $operator eager [x] l,s;
                     return out as answer(x);
                 }
-                structures {
-                    l host scan = ::core::iter::Map<_,_> [];
-                    r host scan = ::core::iter::Map<_,_> [];
-                    s rows = ::std::vec::Vec<_>;
-                    s keyset = ::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,$budget> [x] borrowed base R lineage{x -> b};
-                    out canon = ::std::collections::HashSet<_>;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+                    l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    s rows = @vec as ::std::vec::Vec<_>;
+                    s keyset = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,$budget> [x] borrowed base R lineage{x -> b};
+                    out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                 }
             }.map(|(x,)| *x).collect::<BTreeSet<_>>()
         };
@@ -134,8 +136,8 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
             assert_eq!(push, $expected);
         }};
     }
-    let left = [(1_i64,), (1,), (2,), (3,), (i64::MAX,)];
-    let right = [(1_i64,), (1,), (3,)];
+    let left = [(1_i64,), (2,), (3,), (i64::MAX,)];
+    let right = [(1_i64,), (3,)];
     let empty: [(i64,); 0] = [];
     compare!(semi, 64, left, right, BTreeSet::from([1, 3]));
     compare!(anti, 64, left, right, BTreeSet::from([2, i64::MAX]));
@@ -149,24 +151,28 @@ fn borrowed_scalar_point_and_range_parameters_agree() {
     let rows = [(1_i64,), (2,), (3,)];
     let cutoff = &&2_i64;
     macro_rules! run {
-        ($printer:path, $comparison:tt) => {
+        ($endpoint:ident, $printer:path, $comparison:tt) => {
             mini_linq::compile! {
                 pipeline {
                     select = mini_linq::passes::select(positional(R));
+                    print_input = $endpoint;
                     print = $printer;
                 }
                 struct BorrowedParameter;
                 relation R(x:i64) = (rows);
-                answer(x) :- R(x), if *x $comparison cutoff;
+                answer(x) :- R(x), where x $comparison cutoff;
             }
             .map(|(x,)| *x)
             .collect::<Vec<_>>()
         };
     }
-    assert_eq!(run!(mini_linq::passes::translate_pull, ==), [2]);
-    assert_eq!(run!(own_push::push, ==), [2]);
-    assert_eq!(run!(mini_linq::passes::translate_pull, >=), [2, 3]);
-    assert_eq!(run!(own_push::push, >=), [2, 3]);
+    assert_eq!(run!(sequence, mini_linq::passes::translate_pull, ==), [2]);
+    assert_eq!(run!(structures, own_push::push, ==), [2]);
+    assert_eq!(
+        run!(sequence, mini_linq::passes::translate_pull, >=),
+        [2, 3]
+    );
+    assert_eq!(run!(structures, own_push::push, >=), [2, 3]);
 }
 
 #[test]
@@ -179,22 +185,22 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
                 context { consumer = canonical };
                 pipeline { $($pass),* };
                 physical {
-                    relation R(a:i64,b:i64) = ($source);
+                    relation R(a:i64,b:i64,witness:i64) = ($source);
                     consumer canonical;
-                    r = pipe rename R@0 {a -> x,b -> y};
+                    r = pipe rename R {a -> x,b -> y,witness -> witness};
                     first = $mode range select r if (x >= 1);
                     projected = pipe project first keep {x,y};
                     second = pipe range select projected if (y < 20);
                     last = let range select second if (x < 4);
                     return last as answer(x,y);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
-                    first read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; selection = ::cq_storage::Selection<_> { reads [positions], build typed, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    first read = positional base R lineage{x -> a,y -> b,witness -> witness} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     second read = positional base R lineage{x -> a,y -> b} column b marker ::cq_load::ColumnAt<1> predicate physical;
                     last read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     $($extra)*
-                    last selection = ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                    last selection = @selection as ::cq_storage::Selection<_>  base R lineage{x -> a,y -> b} summary per_block;
                 }
             }.inspect(|_| occurrences += 1).map(|(x,y)| (*x,*y)).collect();
             (rows, cq_storage::counters::snapshot(), occurrences)
@@ -217,11 +223,11 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
             let retained = run!(
                 [mini_linq::passes::sequential, mini_linq::passes::translate_pull]
                 mini_linq::passes::sequence, $source, let, {
-                    first selection = ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                    first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b,witness -> witness} summary per_block;
                 }
             );
             let retained_push = run!([] own_push::push, $source, let, {
-                first selection = ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b,witness -> witness} summary per_block;
             });
             assert_eq!(retained, retained_push);
             assert_eq!(retained.0, piped.0);
@@ -230,19 +236,20 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
             assert_eq!(retained.1.rows_copied, 0);
         }};
     }
-    let mut data = vec![(1_i64, 10_i64), (1, 10), (2, 30), (3, 15), (4, 10)];
-    data.extend(std::iter::repeat_n((0, 0), 252));
+    // Distinct host rows retain duplicate projected answers without violating input set semantics.
+    let mut data = vec![(1_i64, 10_i64, 0_i64), (1, 10, 1), (2, 30, 2), (3, 15, 3), (4, 10, 4)];
+    data.extend((5..257).map(|witness| (0, 0, witness)));
     let expected = BTreeSet::from([(1, 10), (3, 15)]);
     compare!(data.as_slice(), data.len(), 1usize, expected);
     for block_size in [1, 3, 63, 64, 65, 130] {
-        let host = ZoneRows::from_rows::<(MinMax<i64>, MinMax<i64>)>(
+        let host = ZoneRows::from_rows::<(MinMax<i64>, MinMax<i64>, MinMax<i64>)>(
             data.clone(),
             NonZeroUsize::new(block_size).unwrap(),
         );
         compare!(host, data.len(), data.len().div_ceil(block_size), expected);
     }
-    let empty: [(i64, i64); 0] = [];
+    let empty: [(i64, i64, i64); 0] = [];
     compare!(empty, 0usize, 0usize, BTreeSet::<(i64, i64)>::new());
 }
 
-cq_testkit::positional_cases!(own_push::push);
+cq_testkit::positional_cases!(structures; own_push::push);

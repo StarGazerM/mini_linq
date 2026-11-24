@@ -3,21 +3,74 @@
 use cq_lang_sequence::{LevelNode, Machine};
 
 mod arena;
+// DESIGN gpu-provider-records
+// P3d/T-Gpu: select once into GPU analysis; check recorded facts and print them.
+// Runtime layout algorithms belong to the selected provider, never the emitter.
+mod bindings;
 mod capture;
 pub mod constants;
-pub mod runs;
+mod domains;
 mod emit;
+mod grouping;
+mod handles;
 pub mod layout;
+pub mod providers;
+mod realize;
 mod reduce;
 mod rows;
+mod tiles;
+pub mod runs;
 
-pub use emit::translate;
-pub use arena::translate_arena;
+pub use arena::{translate_arena, translate_arena_head};
+pub use emit::{translate, translate_with_origins};
+pub use handles::{CaptureHandle, DeviceCaptureBindings};
+
+/// Select target-owned accumulator providers before checking GPU Structures.
+/// The only grouping selection site: pipelines reach it through `stage`, the
+/// TPC-H build before Sequence lowering, and authored fixtures explicitly.
+pub fn bind_structures(
+    physical: &cq_lang_structures::physical::Program,
+    source: &cq_lang_structures::Program,
+) -> syn::Result<cq_lang_structures::Program> {
+    grouping::bind(physical, source)
+}
+
+/// Validate the Structures boundary without selecting CPU batching.
+/// GPU batching and storage scheduling are recorded later in Sequence.
+pub fn check_structures(
+    physical: &cq_lang_structures::physical::Program,
+    _source: &cq_lang_structures::Program,
+    analysis: &cq_lang_structures::Analysis,
+) -> syn::Result<()> {
+    // PH-Smallest is admitted here; GPU-Smallest realization records it or
+    // rejects it before printing (never as a First probe).
+    grouping::check(physical, analysis)?;
+    if !analysis.witnesses.is_empty()
+        || !analysis.stages.is_empty()
+        || !analysis.join_filters.is_empty()
+    {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "T-Gpu: Structures witnesses, staging and join filters are not realized by this target; use supported Sequence scheduling or a native terminal",
+        ));
+    }
+    Ok(())
+}
+
+/// Collective block width of every generated CUDA template.
+pub(crate) const BLOCK_THREADS: u32 = 256;
 
 /// Host publication over separated, dynamically scheduled device blocks.
 /// Each block is collaborative; lanes are sequential leaves (no warp level).
 pub fn machine() -> Machine {
     Machine {
+        gpu: Some(cq_lang_sequence::gpu::Machine {
+            block_threads: BLOCK_THREADS,
+            reserve_rows: 256,
+            retain_prefix_rows: 65536,
+            bindings: bindings::select,
+            realize: realize::select,
+        }),
         name: syn::parse_quote!(gpu),
         items: 4,
         key_partition_threshold: 65536,
@@ -25,24 +78,28 @@ pub fn machine() -> Machine {
         layout: Some(layout::shared_bytes),
         root: LevelNode {
             name: syn::parse_quote!(host),
+            host_rust: true,
             collaborative: false,
             dynamic: false,
             width: None,
             shared_bytes: None,
             children: vec![LevelNode {
                 name: syn::parse_quote!(device),
+                host_rust: false,
                 collaborative: false,
                 dynamic: true,
                 width: None,
                 shared_bytes: None,
                 children: vec![LevelNode {
                     name: syn::parse_quote!(block),
+                    host_rust: false,
                     collaborative: true,
                     dynamic: false,
                     width: Some(256),
                     shared_bytes: Some(101_376),
                     children: vec![LevelNode {
                         name: syn::parse_quote!(lane),
+                        host_rust: false,
                         collaborative: false,
                         dynamic: false,
                         width: None,
@@ -58,10 +115,11 @@ pub fn machine() -> Machine {
 /// Resident range reads, order-preserving codes and flat packed publication.
 ///
 /// The tokens name runtime implementations without importing the runtime into
-/// this compile-time target. Canonicalization runs at a separated publication,
-/// not inside a collaborative block or lane.
+/// this compile-time target. Distinct providers type a canon result's rows
+/// record; their build (sort/unique) runs at a separated publication, not
+/// inside a collaborative block or lane.
 pub fn catalog() -> cq_lang_sequence::Catalog {
-    use cq_lang_sequence::{CanonToken, Capability, Catalog, CodecToken, ProviderToken};
+    use cq_lang_sequence::{Catalog, CodecToken};
 
     let levels = vec![
         vec!["host".into(), "device".into()],
@@ -73,65 +131,53 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             "lane".into(),
         ],
     ];
-    Catalog {
-        providers: vec![
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                elements: Some(vec![
-                    syn::parse_quote!(i8),
-                    syn::parse_quote!(i16),
-                    syn::parse_quote!(i32),
-                    syn::parse_quote!(i64),
-                    syn::parse_quote!(u8),
-                    syn::parse_quote!(u16),
-                    syn::parse_quote!(u32),
-                    syn::parse_quote!(bool),
-                ]),
-                levels: levels.clone(),
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<_, _>),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                // The declared layout checks primitives and Symbol<T, Codec>
-                // columns; logical symbol types do not appear in device rows.
-                elements: None,
-                levels: levels.clone(),
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_storage::SortedRun<_, _>),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                elements: None,
-                levels: vec![vec!["host".into()]],
-            },
-        ],
-        codecs: [
-            syn::parse_quote!(::cq_storage::sequence::Identity),
-            syn::parse_quote!(::cq_gpu_sequence_runtime::DenseDictionary<'_>),
-        ]
-        .into_iter()
-        .map(|ty| CodecToken {
-            ty,
-            ordered: true,
-            levels: std::iter::once(vec!["host".into()])
-                .chain(levels.iter().cloned())
-                .collect(),
-        })
-        .collect(),
-        canons: vec![
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-                levels: levels.clone(),
-                max_packed_bits: Some(128),
-            },
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-                levels,
-                max_packed_bits: None,
-            },
-        ],
+    let mut catalog = Catalog {
+        declarations: Vec::new(),
+        providers: Vec::new(),
+        codecs: Vec::new(),
+    };
+    // Range providers consume the recorded scalar/code carrier, not logical
+    // type spellings. Native Scalar bounds and explicit codec declarations
+    // establish the publication representation.
+    catalog.register(providers::declaration("range_provider"), levels.clone());
+    // Input schema and codecs are recorded by the provider's producer;
+    // runtime trait obligations check the opaque storage spellings.
+    catalog.register(providers::declaration("radix_relation"), levels.clone());
+    // Formal rule GPU-RadixAdvice: grouped radix indices are selected only by
+    // authored instances carrying their advice; registered after the existing
+    // tokens, so unadvised catalog choices are unchanged.
+    catalog.register(providers::declaration("radix_layout"), levels.clone());
+    catalog.register(
+        cq_lang_structures::provider::base::declaration("sorted_run"),
+        vec![vec!["host".into()]],
+    );
+    catalog.register(
+        cq_lang_structures::provider::base::declaration("selection"),
+        vec![vec!["host".into()]],
+    );
+    // Formal rule PL-Distinct: the device sort/unique build of a canonical
+    // rows record. Its scan is the publication itself.
+    catalog.register(providers::declaration("radix_set"), levels.clone());
+    // `None` is the identity representation of columns without a declared codec.
+    catalog.codecs = vec![CodecToken {
+        codec_id: None,
+        codec: None,
+        ordered: true,
+        levels: std::iter::once(vec!["host".into()])
+            .chain(levels.iter().cloned())
+            .collect(),
+    }];
+    catalog
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_catalog_only_authorizes_identity() {
+        let catalog = super::catalog();
+        assert_eq!(catalog.codecs.len(), 1);
+        assert_eq!(catalog.codecs[0].codec_id, None);
+        assert_eq!(catalog.codecs[0].codec, None);
+        assert!(catalog.codecs[0].ordered);
     }
 }

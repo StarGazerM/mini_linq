@@ -1,0 +1,17 @@
+// elimination_coarse_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*,
+// passes.tex I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner elimination,coarse.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// H-MCSTie: maximum-cardinality search starts and breaks ties by first written
+// variable occurrence. Coarse reverses MCS; Fine uses the forward MCS sequence.
+// MCS from a: a,b,c,d; E=[d,c,b,a]; e_0=2, e_1=1, e_2=0.
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // B={}: least e_i = 0 -> c2
+    Edge @ 2 (d , c) ;
+    // B={c,d}: c1 connected (c), c0 disconnected -> c1
+    Edge @ 1 (b , c) ;
+    // c0 connected via b; last
+    Edge @ 0 (a , b) ;
+}

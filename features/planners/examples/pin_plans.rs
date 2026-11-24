@@ -19,7 +19,7 @@ fn main() {
                 continue;
             }
             let stem = format!("{}_{fixture}", planner.name());
-            let valuation = compile_valuation(&source, planner).unwrap();
+            let (_, valuation) = compile_valuation(&source, planner).unwrap();
             let algebra = compile(&source, planner).unwrap();
             std::fs::write(
                 root.join(format!("{stem}.vo")),
@@ -41,7 +41,7 @@ fn main() {
         let source =
             syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.cq"))).unwrap())
                 .unwrap();
-        let valuation = compile_valuation(&source, Planner::Le).unwrap();
+        let (_, valuation) = compile_valuation(&source, Planner::Le).unwrap();
         let algebra = compile(&source, Planner::Le).unwrap();
         std::fs::write(
             root.join(format!("{stem}.vo")),

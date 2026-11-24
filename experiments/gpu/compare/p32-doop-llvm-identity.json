@@ -1,0 +1,11 @@
+{
+  "reference": "/tmp/doop-after-advice.ll; raw identity with prior counter-disabled baseline recorded in local://p3-counter-llvm-identity.json",
+  "reference_bytes": 6250872,
+  "final_bytes": 6250872,
+  "reference_sha256": "66f800a2c7f46a4d91ed23ca80f94f3cbcd032fb5ac45059157055c5eb3b411d",
+  "final_sha256": "1edc73f921560b466a301fe50ed1a918e2a37da22ad0b88f85d8f9707fdd1ce7",
+  "normalized_equal": true,
+  "reference_normalized_sha256": "9effb6a4a997a1a4b276a8a3e48e2db187349383b7988af78ea15fa058d12d1f",
+  "final_normalized_sha256": "9effb6a4a997a1a4b276a8a3e48e2db187349383b7988af78ea15fa058d12d1f",
+  "normalization": "Rust Cs crate disambiguators; CUDA TID hashes; dynamic shared-memory hash; sort whole functions/globals/declarations/attributes without changing instruction order; normalize reqntid IDs and retain nvvm.annotations reference count"
+}

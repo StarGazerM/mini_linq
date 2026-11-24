@@ -25,6 +25,27 @@ class Reexports(unittest.TestCase):
         data["index"]["0"]["inner"]["module"]["items"].remove(5)
         self.assertIn("demo::Alias::budget", snapshot(data))
 
+    def test_tuple_field_ids_are_stable_without_changing_tuple_types(self):
+        def dump(offset):
+            def item(name, kind, value):
+                return {"name": name, "crate_id": 0, "visibility": "public", "inner": {kind: value}}
+            return {"root": offset, "paths": {}, "index": {
+                str(offset): item("demo", "module", {"items": [offset + 1, offset + 3, offset + 6]}),
+                str(offset + 1): item("Pair", "struct", {"kind": {"tuple": [offset + 2, None]}, "impls": []}),
+                str(offset + 2): item(None, "struct_field", {"primitive": "usize"}),
+                str(offset + 3): item("Choice", "enum", {"variants": [offset + 4], "impls": []}),
+                str(offset + 4): item("Some", "variant", {"kind": {"tuple": [offset + 5]}}),
+                str(offset + 5): item(None, "struct_field", {"primitive": "u32"}),
+                str(offset + 6): item("Tuple", "type_alias", {"type": {"tuple": [{"primitive": "u8"}, {"primitive": "u16"}]}}),
+            }}
+        original = snapshot(dump(0))
+        self.assertEqual(original, snapshot(dump(7000)))
+        self.assertIn("demo::Pair::0", original)
+        self.assertIn("demo::Choice::Some::0", original)
+        changed = dump(7000)
+        changed["index"]["7006"]["inner"]["type_alias"]["type"]["tuple"][0] = {"primitive": "u32"}
+        self.assertNotEqual(original, snapshot(changed))
+
 
 if __name__ == "__main__":
     unittest.main()

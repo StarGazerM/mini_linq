@@ -8,7 +8,7 @@ fn sugar_expands_independently_and_mutations_fail() {
         relation Input(o:Option<(i32,(i32,i32))>,k:Kind) = (input);
         relation Out(x:i32,y:i32); output Out;
         Out(x,y) :- Input(o,k), if let Some((x,(y,_))) = *o,
-            if let Kind::A = *k, if x < y;
+            if let Kind::A = *k, where x < y;
     };
     let expected: Program = syn::parse_quote! {
         struct Matched;
@@ -22,7 +22,7 @@ fn sugar_expands_independently_and_mutations_fail() {
             for () in match *k {
                 Kind::A => ::core::option::Option::Some(()),
                 _ => ::core::option::Option::None,
-            }, if x < y;
+            }, where x < y;
     };
     check(&source, &expected.to_token_stream()).unwrap();
     let target = compile(&source).unwrap();
@@ -53,7 +53,7 @@ fn sugar_expands_independently_and_mutations_fail() {
 }
 #[test]
 fn untouched_source_is_checked_identity() {
-    let source = quote!(struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), if *x > 0;);
+    let source = quote!(struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), where x > 0;);
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
     let before: Program = syn::parse2(source).unwrap();

@@ -5,34 +5,35 @@ use cq_lang_physical::{self as physical, Choice, Operator};
 use cq_testkit::{Rows, harness, structures};
 use generated_support::{Inputs, Run, binary, fan, generic, oracle};
 
-fn captured(rewritten: bool) -> structures::Program {
+fn captured(rewritten: bool) -> (physical::Program, structures::Program) {
     let text = if rewritten {
         triangle! {
             r,s,t;
             plan = cq_planners::order(written, fine);
             physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
-            print = cq_rewrite_test_driver::capture_structures;
+            print_input = structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     } else {
         triangle! {
             r,s,t;
             plan = cq_planners::order(written, fine);
-            print = cq_rewrite_test_driver::capture_structures;
+            print_input = structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     };
-    syn::parse_str(text).unwrap()
+    cq_testkit::corpus::parse_structures_capture(text).unwrap()
 }
 
 #[test]
 fn generated_fine_triangle_and_fan_have_active_smallest_intersections() {
     let source = captured(false);
     let target = captured(true);
-    physical::contract::check(&source.physical).unwrap();
-    physical::contract::check(&target.physical).unwrap();
-    physical::check_rewrite(&source.physical, &target.physical).unwrap();
-    structures::contract::check(&target).unwrap();
-    let smallest: Vec<_> = target
-        .physical
+    physical::contract::check(&source.0).unwrap();
+    physical::contract::check(&target.0).unwrap();
+    physical::check_rewrite(&source.0, &target.0).unwrap();
+    structures::contract::check(&target.0, &target.1).unwrap();
+    let smallest: Vec<_> = target.0
         .program
         .definitions
         .windows(2)
@@ -46,7 +47,7 @@ fn generated_fine_triangle_and_fan_have_active_smallest_intersections() {
         1,
         "generated fine plan needs an active choice"
     );
-    let facts = physical::contract::check(&target.physical).unwrap();
+    let facts = physical::contract::check(&target.0).unwrap();
     for pair in smallest {
         assert!(physical::binary_intersection(&pair[0], &pair[1], &facts).is_some());
     }
@@ -57,18 +58,17 @@ fn generated_fine_triangle_and_fan_have_active_smallest_intersections() {
 }
 
 #[test]
-fn generated_triangle_and_fan_answers_match_cq_oracle_with_duplicates_and_empty_inputs() {
+fn generated_triangle_and_fan_answers_match_cq_oracle_with_set_and_empty_inputs() {
     let triangle: Inputs = [
-        vec![(1, 10), (1, 10), (1, 11), (2, 20), (3, 30)],
-        vec![(10, 100), (10, 100), (11, 101), (20, 200), (30, 300)],
-        vec![(1, 100), (1, 100), (2, 200), (9, 900)],
+        vec![(1, 10), (1, 11), (2, 20), (3, 30)],
+        vec![(10, 100), (11, 101), (20, 200), (30, 300)],
+        vec![(1, 100), (2, 200), (9, 900)],
     ];
-    let mut duplicated_fan = fan(7);
-    for rows in &mut duplicated_fan {
-        rows.extend(rows.clone());
+    let mut reversed_fan = fan(7);
+    for rows in &mut reversed_fan {
         rows.reverse();
     }
-    for inputs in [triangle, fan(6), duplicated_fan] {
+    for inputs in [triangle, fan(6), reversed_fan] {
         let expected = oracle(&inputs);
         assert!(!expected.is_empty());
         for run in [binary as Run, generic] {
@@ -82,6 +82,69 @@ fn generated_triangle_and_fan_answers_match_cq_oracle_with_duplicates_and_empty_
             }
         }
     }
+}
+
+macro_rules! three_way_query {
+    ($seed:ident, $r:ident, $s:ident, $t:ident; $($options:tt)*) => {
+        mini_linq::compile! {
+            pipeline {
+                plan = mini_linq::passes::plan(no_reduce, order(
+                    Seed, R@1(a,x), S@2(a,x), T@3(a,x), R@1, S@2, T@3
+                ));
+                $($options)*
+            }
+            struct ThreeWayAdvice;
+            relation Seed(a:i32) = ($seed);
+            relation R(a:i32,x:i32,y:i32) = ($r);
+            relation S(a:i32,x:i32,z:i32) = ($s);
+            relation T(a:i32,x:i32,w:i32) = ($t);
+            answer(a,x,y,z,w) :- Seed(a), R(a,x,y), S(a,x,z), T(a,x,w);
+        }
+    };
+}
+
+#[test]
+fn step_order_and_occurrence_smallest_advice_reach_three_provider_execution() {
+    let source = cq_testkit::corpus::parse_structures_capture(three_way_query! {
+        seed,r,s,t;
+        print_input = structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
+    }).unwrap();
+    let target = cq_testkit::corpus::parse_structures_capture(three_way_query! {
+        seed,r,s,t;
+        physical = [cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3))];
+        print_input = structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
+    }).unwrap();
+    physical::check_rewrite(&source.0, &target.0).unwrap();
+    let facts = structures::contract::check(&target.0, &target.1).unwrap();
+    assert!(physical::candidate_prefixes(&source.0, &facts.physical).is_empty());
+    let sites = physical::candidate_prefixes(&target.0, &facts.physical);
+    assert_eq!(sites.len(), 1);
+    assert_eq!(sites[0].sides.len(), 3);
+    let seed = [(1,)];
+    let r = [(1, 7, 10), (1, 7, 11), (1, 8, 12)];
+    let s = [(1, 7, 20), (1, 9, 21)];
+    let t = [(1, 7, 30), (1, 7, 31), (1, 10, 32)];
+    let expected: Rows = [
+        vec![1, 7, 10, 20, 30],
+        vec![1, 7, 10, 20, 31],
+        vec![1, 7, 11, 20, 30],
+        vec![1, 7, 11, 20, 31],
+    ]
+    .into_iter()
+    .collect();
+    let baseline: Rows = three_way_query! { seed,r,s,t; }
+        .map(|(a, x, y, z, w)| vec![*a, *x, *y, *z, *w])
+        .collect();
+    let advised: Rows = three_way_query! {
+        seed,r,s,t;
+        physical = [cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3))];
+    }
+    .map(|(a, x, y, z, w)| vec![*a, *x, *y, *z, *w])
+    .collect();
+    assert_eq!(baseline, expected);
+    assert_eq!(advised, expected);
 }
 
 fn nonzero(value: &i32) -> bool {
@@ -125,22 +188,24 @@ fn partial_target(inputs: &Inputs) -> Rows {
     .collect()
 }
 
-fn captured_partial(rewritten: bool) -> structures::Program {
+fn captured_partial(rewritten: bool) -> (physical::Program, structures::Program) {
     let text = if rewritten {
         partial_triangle! {
             inputs;
             plan = cq_planners::order(written, fine);
             physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
-            print = cq_rewrite_test_driver::capture_structures;
+            print_input = structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     } else {
         partial_triangle! {
             inputs;
             plan = cq_planners::order(written, fine);
-            print = cq_rewrite_test_driver::capture_structures;
+            print_input = structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     };
-    syn::parse_str(text).unwrap()
+    cq_testkit::corpus::parse_structures_capture(text).unwrap()
 }
 
 #[test]
@@ -157,12 +222,12 @@ fn generated_hoist_pins_opaque_rust_and_refines_written_execution() {
             .map(|(position, d)| (position, d.clone()))
             .collect::<Vec<_>>()
     };
-    let source_rust = rust(&source.physical);
+    let source_rust = rust(&source.0);
     assert_eq!(source_rust.len(), 3);
-    assert_eq!(source_rust, rust(&target.physical));
-    physical::check_rewrite(&source.physical, &target.physical).unwrap();
-    structures::contract::check(&target).unwrap();
-    assert_eq!(target.physical.program.definitions.iter().filter(|d| {
+    assert_eq!(source_rust, rust(&target.0));
+    physical::check_rewrite(&source.0, &target.0).unwrap();
+    structures::contract::check(&target.0, &target.1).unwrap();
+    assert_eq!(target.0.program.definitions.iter().filter(|d| {
         matches!(&d.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_))))
     }).count(), 1);
 

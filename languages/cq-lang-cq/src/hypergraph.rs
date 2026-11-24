@@ -10,8 +10,7 @@
 //! by normalization therefore preserve the original join graph. The analysis
 //! expands each equality class in its incident edges while retaining actual
 //! variable spellings for scheduling. Rust guards and bindings add no edges;
-//! their opaque partial-function chain has denotation `bottom + Set X` and is
-//! checked by the valuation contract. Other effects are outside that meaning.
+//! their free variables determine placement and they are total by premise.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,11 +56,104 @@ pub struct Analysis {
     pub elimination_order: Vec<String>,
 }
 
+/// One relational predicate of a scope with the positive occurrences it
+/// restricts: a `where` constraint, one of its E-Domain implied domains, or a
+/// literal equality. Variable identities are never occurrence predicates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalPredicate {
+    /// The written clause stating the predicate (or its implying constraint).
+    pub clause: usize,
+    /// The written predicate, a literal equality in constraint form, or an
+    /// implied domain.
+    pub predicate: cq_syntax::Constraint,
+    /// False for an implied domain, which is never a prefix step.
+    pub written: bool,
+    /// Clause indices of the positive atoms the predicate restricts.
+    pub targets: BTreeSet<usize>,
+}
+
+impl LocalPredicate {
+    /// `(target, predicate, written)` for each target, as [`filter_ranks`] reads them.
+    pub fn restrictions(&self) -> impl Iterator<Item = (usize, &cq_syntax::Constraint, bool)> {
+        self.targets
+            .iter()
+            .map(|&target| (target, &self.predicate, self.written))
+    }
+}
+
+/// The local relational predicates of one scope and their target occurrences.
+///
+/// A target is a positive atom of the scope, written before or after the
+/// predicate, whose variables include every predicate variable. Predicates
+/// over let- or for-bound names have no target.
+/// Formal rule H-Local: Target each relational predicate and implied domain at every covering positive atom of its scope, excluding Rust-bound names.
+pub fn local_predicates(body: &super::CommaList<BodyItem>) -> Vec<LocalPredicate> {
+    let let_bound: BTreeSet<String> = body
+        .iter()
+        .flat_map(|item| match item {
+            BodyItem::Let(binding) => crate::rust::bindings(&binding.pattern),
+            BodyItem::For(binding) => crate::rust::bindings(&binding.pattern),
+            _ => Vec::new(),
+        })
+        .map(|name| symbol_name(&name))
+        .collect();
+    let targets = |predicate: &cq_syntax::Constraint| -> BTreeSet<usize> {
+        let variables: BTreeSet<String> = predicate.variables().map(symbol_name).collect();
+        if variables.is_empty() || !variables.is_disjoint(&let_bound) {
+            return BTreeSet::new();
+        }
+        body.iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                matches!(item, BodyItem::Positive { atom }
+                    if variables.is_subset(&atom.variables().map(symbol_name).collect()))
+            })
+            .map(|(clause, _)| clause)
+            .collect()
+    };
+    let mut result = Vec::new();
+    for (clause, item) in body.iter().enumerate() {
+        let written = match item {
+            BodyItem::Equality(e) if matches!(e.right, super::EqualityValue::Literal(_)) => {
+                cq_syntax::Constraint::from_equality(e)
+            }
+            BodyItem::Constraint(c) => match c.equality() {
+                Some(e) if matches!(e.right, super::EqualityValue::Variable(_)) => continue,
+                _ => c.clone(),
+            },
+            _ => continue,
+        };
+        let implied = if written.equality().is_none() {
+            written.implied_domains()
+        } else {
+            Vec::new()
+        };
+        for (predicate, is_written) in std::iter::once((written, true))
+            .chain(implied.into_iter().map(|domain| (domain, false)))
+        {
+            result.push(LocalPredicate {
+                clause,
+                targets: targets(&predicate),
+                predicate,
+                written: is_written,
+            });
+        }
+    }
+    result
+}
+
 /// Static occurrence priorities, never estimates of data cardinality.
 /// Smaller ranks mean point, range, derived/total/block, then unfiltered.
-/// Opaque Rust filters are deliberately excluded.
-/// Formal rule H-FilterRank: Rank local total predicates through equality classes, without data statistics.
-pub fn filter_ranks(body: &super::CommaList<BodyItem>, graph: &Analysis) -> BTreeMap<usize, u8> {
+/// Opaque Rust filters are deliberately excluded. `restrictions` lists
+/// `(target clause, predicate, written)`: the H-Local targets of a producer
+/// ([`LocalPredicate::restrictions`]) or a VO scope's recorded restrictions;
+/// an implied domain (`written == false`) ranks as a derived domain.
+/// Formal rule H-FilterRank: Rank occurrences by the predicates that restrict them, without data statistics.
+pub fn filter_ranks<'a>(
+    body: &super::CommaList<BodyItem>,
+    graph: &Analysis,
+    restrictions: impl IntoIterator<Item = (usize, &'a cq_syntax::Constraint, bool)>,
+) -> BTreeMap<usize, u8> {
     use cq_syntax::constraint::{Comparison, Constraint, Term};
     let mut ranks: BTreeMap<_, _> = graph
         .clauses
@@ -81,50 +173,28 @@ pub fn filter_ranks(body: &super::CommaList<BodyItem>, graph: &Analysis) -> BTre
             )
         })
         .collect();
-    let mut apply = |variables: Vec<String>, rank: u8| {
-        if variables.is_empty() {
-            return;
-        }
-        for (&clause, columns) in &graph.clauses {
-            if variables
-                .iter()
-                .all(|v| columns.iter().any(|c| graph.equivalent(c, v)))
-            {
-                ranks.entry(clause).and_modify(|r| *r = (*r).min(rank));
-            }
-        }
-    };
-    for item in body {
-        match item {
-            BodyItem::Equality(e) if !matches!(e.right, super::EqualityValue::Variable(_)) => {
-                apply(vec![symbol_name(&e.left)], 0);
-            }
-            BodyItem::Constraint(c) => {
-                let rank = match c {
-                    Constraint::Compare {
-                        left,
-                        comparison: Comparison::Eq(_),
-                        right,
-                    } if left.constant() || right.constant() => 0,
-                    Constraint::Compare {
-                        left,
-                        comparison,
-                        right,
-                    } if comparison.ordered() && (left.constant() || right.constant()) => 1,
-                    Constraint::Between {
-                        term: Term::Variable(_),
-                        low,
-                        high,
-                    } if low.constant() && high.constant() => 1,
-                    _ => 2,
-                };
-                apply(c.variables().map(symbol_name).collect(), rank);
-                for domain in c.implied_domains() {
-                    apply(domain.variables().map(symbol_name).collect(), 2);
-                }
-            }
-            _ => (),
-        }
+    for (target, predicate, written) in restrictions {
+        // Formal rule H-FilterStrength: Written constant equality ranks zero, ordered bounds one, and all other written or derived predicates two.
+        let rank = match predicate {
+            _ if !written => 2,
+            Constraint::Compare {
+                left,
+                comparison: Comparison::Eq(_),
+                right,
+            } if left.constant() || right.constant() => 0,
+            Constraint::Compare {
+                left,
+                comparison,
+                right,
+            } if comparison.ordered() && (left.constant() || right.constant()) => 1,
+            Constraint::Between {
+                term: Term::Variable(_),
+                low,
+                high,
+            } if low.constant() && high.constant() => 1,
+            _ => 2,
+        };
+        ranks.entry(target).and_modify(|r| *r = (*r).min(rank));
     }
     ranks
 }
@@ -138,6 +208,16 @@ impl Analysis {
         Self::of_body(&module.query.body, &BTreeSet::new())
     }
     pub fn of_body(body: &super::CommaList<BodyItem>, context: &BTreeSet<String>) -> Analysis {
+        Self::of_body_excluding(body, context, &BTreeSet::new())
+    }
+
+    /// Analyze a scope without occurrences unavailable as independent relations.
+    /// Excluded clauses still contribute their written binders to later scopes.
+    pub fn of_body_excluding(
+        body: &super::CommaList<BodyItem>,
+        context: &BTreeSet<String>,
+        excluded: &BTreeSet<usize>,
+    ) -> Analysis {
         let mut analysis = Analysis::default();
         let mut prefix = context.clone();
         let mut clauses = BTreeMap::new();
@@ -146,11 +226,13 @@ impl Analysis {
                 BodyItem::Positive { atom } => {
                     let columns: Vec<_> = atom.variables().map(symbol_name).collect();
                     prefix.extend(columns.iter().cloned());
-                    clauses.insert(clause, columns);
+                    if !excluded.contains(&clause) {
+                        clauses.insert(clause, columns);
+                    }
                 }
                 BodyItem::Block(block) => {
                     let facts = block.analyze(&prefix);
-                    if !facts.rust {
+                    if !excluded.contains(&clause) {
                         clauses.insert(
                             clause,
                             facts
@@ -181,15 +263,22 @@ impl Analysis {
             .iter()
             .map(|name| (name.clone(), name.clone()))
             .collect();
-        for item in body {
-            if let BodyItem::Equality(super::Equality {
+        fn equalities(item: &BodyItem) -> Vec<super::Equality> {
+            match item {
+                BodyItem::Equality(equality) => vec![equality.clone()],
+                BodyItem::Constraint(constraint) => constraint.equalities(),
+                _ => Vec::new(),
+            }
+        }
+        for equality in body.iter().flat_map(equalities) {
+            if let super::Equality {
                 left,
                 right: super::EqualityValue::Variable(right),
                 ..
-            }) = item
+            } = equality
             {
-                let left = symbol_name(left);
-                let right = symbol_name(right);
+                let left = symbol_name(&left);
+                let right = symbol_name(&right);
                 let a = analysis.canonical_names.get(&left).unwrap_or(&left).clone();
                 let b = analysis
                     .canonical_names
@@ -341,6 +430,7 @@ impl Analysis {
     }
 
     /// Maximum-cardinality search; fills `elimination_order`.
+    /// Formal rule H-MCSTie: Maximize numbered primal neighbours; start and break ties by first written variable occurrence, then reverse the numbering.
     fn eliminate(&mut self) {
         let mut numbered: Vec<String> = Vec::new();
         let mut unnumbered: Vec<&String> = self.variables.iter().collect();

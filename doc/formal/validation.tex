@@ -19,10 +19,10 @@ against an independent bag oracle (\code{runtime/cq-storage/tests}).\\
 Answer oracles & \code{testkit/cq-testkit}: an independent relational semantics
 and a written-order Rust reference; the corpus runs every planner, rewrite, host
 type and printer configuration.\\
-Differential fuzzing & Seeded random queries (constants, guards, lets, partial
-arithmetic, blocks of both kinds, duplicates, empty relations) compiled under
-random pipelines; total cases compared with DuckDB, partial cases checked for
-refinement against the written reference.\\
+Differential fuzzing & Seeded queries with constants, explicit relational
+predicates, opaque pure-total Rust, blocks, duplicates and empty relations.
+Reference comparisons require answer equality under the premises; a panic is
+a contract violation rather than an accepted refinement case.\\
 TPC-derived kernels & Exact answer comparison with DuckDB at scale factors 0.1
 and 1; timing and counters are reported, never asserted.\\
 \bottomrule

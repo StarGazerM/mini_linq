@@ -17,8 +17,8 @@
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
 //! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! its existing recognition. Only fallback construction proves union arms
+//! disjoint; literal values prove nothing, and no data keys or constraints are assumed.
 //!
 use std::collections::BTreeSet;
 
@@ -325,7 +325,7 @@ pub fn with_query(
     declarations: &[RelationDecl],
     query: Query,
     output: Option<RelationDecl>,
-) -> Program {
+) -> syn::Result<Program> {
     let mut hole = source.clone();
     hole.declarations = declarations
         .iter()
@@ -335,8 +335,9 @@ pub fn with_query(
     if let Some(output) = output {
         hole.declarations.push(output);
     }
+    cq_syntax::intern_logical_types(&mut hole.declarations)?;
     hole.query = query;
-    hole
+    Ok(hole)
 }
 
 #[cfg(test)]
@@ -365,7 +366,7 @@ mod tests {
         );
         assert!(quotation(&quote!(owned!{opaque} extra), "owned").is_err());
         let result = surface(quote!(pipeline {}; struct Q;), |_, _| Ok(None));
-        assert!(result.to_string().contains("requires a remaining pipeline"));
+        assert!(result.to_string().contains("compile_error"));
     }
     #[test]
     fn source_capture_and_aliases_are_rejected() {

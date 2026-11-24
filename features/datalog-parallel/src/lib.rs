@@ -4,16 +4,18 @@
 //! Checked Storage/Round refinements precede all CQ hole expansion.
 //! Opt into internally parallel keyed IDB layouts with
 //! `storage_rewrites = [cq_datalog_parallel::shard_storage(layouts(sharded))];`.
-//! The default shards only admission; unit-key and EDB layouts stay native.
-//! Select sorted-run keyed IDB layouts with `shard_storage(layouts(runs))`,
-//! sorted-run admission with `shard_storage(seen(runs))`, or both with
-//! `shard_storage(layouts(runs), seen(runs))`. These options are independent;
-//! `layouts(sharded)` and `layouts(runs)` are mutually exclusive. Run layouts
-//! require ordered keys and payloads; run admission requires ordered rows.
+//! The default shards only each IDB's canonical layout (its all-column-keyed
+//! admission layout, a key set, becomes `ShardedLayout<K, (), S>`); other
+//! keyed IDB layouts, unit-key and EDB layouts stay native. Admission subtracts
+//! the committed canonical layout from each candidate chunk and builds the
+//! round's NEW canonical version from the survivors.
+//! Select sorted-run keyed IDB layouts, canonical included, with
+//! `shard_storage(layouts(runs))`; `layouts(sharded)` and `layouts(runs)` are
+//! mutually exclusive. Run layouts require ordered keys and payloads.
 //! Run layouts accept only the default source layout hasher
 //! `BuildHasherDefault<cq_datalog::rustc_hash::FxHasher>`; custom/keyed layout
 //! hashers are rejected rather than silently erased. Unit-key and EDB layouts
-//! remain native, and omitting `seen(runs)` retains sharded admission.
+//! remain native.
 //! Eligible rule holes replace the entire standard `sequence -> sequential ->
 //! translate_pull` tail with the registered Structures `print_push` terminal,
 //! feeding the task collector directly. The checker preserves the preceding
@@ -25,11 +27,15 @@
 //!
 //! # Validation commands
 //!
-//! Run from `features/datalog-parallel`, one command at a time:
+//! Run from the repository root, one command at a time, selecting this feature group:
 //!
-//! ```text
-//! cargo test --workspace --locked
-//! cargo test --workspace --all-features --locked
+//! ```sh
+//! packages="-p cq-datalog-parallel -p cq-datalog-partition -p cq-datalog-rayon-print
+//! -p cq-datalog-parallel-runtime -p cq-datalog-parallel-test-passes
+//! -p datalog-parallel-oracle -p oracle-ascent-par -p oracle-mini-par
+//! -p datalog-parallel-doop -p doop-ascent-par -p doop-mini-par -p doop-mini-par-keyed"
+//! cargo test $packages --locked
+//! cargo test $packages --all-features --locked
 //! cargo test --locked -p cq-datalog-parallel --features counters --test counters -- --nocapture
 //! cargo run --release --locked -p datalog-parallel-oracle -- golden
 //! cargo run --release --locked -p datalog-parallel-oracle --no-default-features --features mini-par,counters -- counters
@@ -52,7 +58,7 @@
 //! Parallel implementations live in `doop/engines/{mini-par,mini-par-keyed,ascent-par}`
 //! as `doop-mini-par`, `doop-mini-par-keyed`, and `doop-ascent-par`. Optional
 //! sequential features depend directly on `doop-mini`, `doop-mini-keyed`, and
-//! `doop-ascent` from the base Datalog workspace, never on its CLI package.
+//! `doop-ascent` from the base Datalog feature group, never on its CLI package.
 //! Both CLIs share facts, interning, loading, engine-source macros, and the
 //! common harness through `doop-shared` in `features/datalog/doop/shared`.
 //! `phase-timing` forwards instrumentation only to enabled engines, without
@@ -63,8 +69,8 @@
 //! CQ holes discharge result canonicalization to admission and negation key
 //! sets rather than allocating separate answer-dedup sets. Fx is unkeyed: for
 //! adversarial inputs select `cq_datalog_hasher::hasher(keyed)` before
-//! `shard_storage` and `cq_datalog_hasher::hasher_round(keyed)` before `partition`
-//! when not selecting `layouts(runs)`. Hash iteration order is not an output guarantee.
+//! `shard_storage` when not selecting `layouts(runs)`; it also selects the
+//! recorded negation key sets. Hash iteration order is not an output guarantee.
 use proc_macro::TokenStream;
 
 #[proc_macro]

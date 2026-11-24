@@ -14,7 +14,7 @@ pub fn check(scenario: Scenario) {
         struct SurfaceSelfJoin;
         relation R(x: i32, y: i32);
         relation answer(c0: i32, c1: i32);
-        answer(*x, *z + 1) :- R(x, y), R(y, z), if *x < *z;
+        answer(*x, *z + 1) :- R(x, y), R(y, z), where x < z;
     };
     let actual = result
         .map(|(column_0, column_1)| vec![column_0, column_1])

@@ -7,20 +7,29 @@ Grammars and precise contracts live in crate `//!` documentation;
 
 ## Meaning
 
-Queries compose in the Kleisli category for `T X = bottom + Set X`: one panic
-aborts the whole evaluation. Embedded Rust binds and guards are opaque partial
-functions of shared-reference inputs and host captures. I/O, mutation, and
-evaluation counts are outside this meaning.
+Queries compose in the finite-set monad. Every embedded `if`, `let` or `for`
+expression is opaque, pure and total by premise: a panic means the plan is
+wrong. The compiler preserves the expression unchanged and places it where
+its free variables are bound (the whole environment for lexically opaque
+syntax). There is no Rust recognition, splitting, arithmetic rewriting, type
+classification or written-order dependency beyond those free variables.
+I/O, mutation and evaluation counts are outside the meaning.
 
-The reference evaluates the desugared body in written order. Whenever it
-returns, a target must return the same set without panic, under the premises
-below; guard motion additionally rests on the totality of the moved predicate,
-which only the language's relational vocabulary supplies (comparisons and
-`&& || !` under the Eq/Ord premises; negation as an anti-join). Relational steps may
-move earlier across Rust steps; Rust steps keep their relative order, binders,
-and source-before relational requirements. Relational equality assumes Leibniz
-identity; ordered comparisons assume a total, consistent order. Rust trait
-bounds cannot prove these semantic premises for arbitrary implementations.
+Only explicit `where P` has relational predicate semantics: representation
+equality/order, membership, ranges, conjunction and disjunction over query
+variables, literals and closed Rust operands. Closed operands are stored as
+`Term::Closed(syn::Expr)` and evaluated once on the host. Only `where` supplies
+predicate-derived reads, filter ranks, reduction supports, domains and join
+equalities; atom literals remain occurrence restrictions. Rust trait bounds
+enforce operations, not representation laws. Types belong to rustc; sizes and
+encodings come from recorded provider and codec facts.
+
+The written reference and planned query return the same set under these
+premises. CQ → VO owns placement and join decisions; downstream passes refine
+representations without moving predicates or changing joins. Device Rust is
+emitted verbatim for cuda-oxide only when its read columns have identity device
+representations and other inputs are closed captures; otherwise it runs at
+host. Codec-encoded comparisons use `where` with host-encoded closed operands.
 
 `{ B1 } | { B2 }` is union; `{ B1 } else { B2 }` is ordered fallback. Union
 combines both sets and permits sibling reordering as refinement. Fallback uses
@@ -36,8 +45,8 @@ hoist to a derived relation over F ∪ I when no branch contains Rust; a finite
 prefix domain supplies free columns without branch generators. If those columns
 come from prefix lets, reductions wait for that context and filter its retained
 prefix; the positions are recorded in VO. Other blocks use
-per-row arms with one prefix stream. Rust Before sets extend into arms and include
-fallback anti steps. Union siblings are unordered; fallback siblings are ordered.
+per-row arms with one prefix stream. Free-variable bindings extend into arms;
+union siblings are unordered and fallback siblings are ordered.
 Rust environment packets record lexical names and written source paths, so
 a positive context semijoin can reference prefix Rust without making it arm Rust.
 Positive semijoins distribute into arms while negative operands remain the
@@ -47,31 +56,47 @@ Normalization leaves literals in body atoms, makes their other arguments distinc
 variables, inserts positioned equalities and Rust binds, and turns computed heads
 into final binds. A literal such as `R(a, 7)` reads the relation of matching rows
 with the literal column dropped; it is not the guard `R(a,b), if b == 7`.
-Elaboration records `rename R@0 {a -> a} constants {b = 7}`. Expressions such as
+Elaboration records `rename R {a -> a} constants {b = 7}`. Expressions such as
 `meta.asia` still use positioned binds. Ordering records
 valuation order and coarse/fine granularity in VO; reduction records relational
 tree semijoins; elaboration writes RA′. IX adds exact demand descriptors without
 changing RA′. Physical records operators, modes, intersection choices, semijoin
 eagerness, and canonical boundaries. Structures adds concrete build, host
 fallback, retained-row, and dedup types. Later passes consume those decisions.
+The written reference is `cq_order::compile_written`, followed by
+`cq_relational_lowering::compile`; relational lowering does not own reference scheduling.
+Host builds print direct `Build::build` calls. Neither a `build!` dispatch macro
+nor `AutoDense` capability selection remains. Closed capture values are owned
+plainly; `cq_print::own_captures` clones only the values read by each move
+closure, including nested closures, rather than inserting `Arc` handles.
 
 ## Programs and storage
 
-Every IR is a complete program that parses, prints, and checks independently.
-VO contains CQ, IX contains RA′, and Structures contains Physical. RA′ and
-Physical stand alone over `cq-syntax`; neither carries its producer's IR.
+Programs parse, print, and check independently; annotations parse and check
+against separately supplied base programs. VO annotates CQ's occurrences,
+Structures annotates Physical, and Sequence annotates their realization.
+IX contains RA′. RA′ and Physical stand alone over `cq-syntax`.
+
+IX correspondence checks each keyed RA read against a recorded requirement,
+rejects unused descriptors, and verifies `iN` naming in first-use order without
+replaying index construction. Its checked read-to-requirement association lets
+Physical lowering consume recorded Const/Range supply and join key ordinals;
+lowering does not rediscover selection classes or intersect join headings.
+The independent Physical correspondence check still verifies keyed-read demands.
 
 Declarations supply ordered columns and optional leaf expressions. Declaration
-order fixes host layout; types and runtime traits determine native access.
-Leading-prefix stream reads use native traits when available. A single
-nonleading borrowed-key read may use `IndexedColumn<N>` for its checked
-declaration slot, preserving the original payload-column order. Unsupported
-slots or capabilities use a recorded fallback built lazily once. Const/range
-reads use direct access or scan/filter without building an index. Those predicate reads are distinct from
-literal-bearing atom occurrences: every index for such an occurrence holds only
-its filtered, projected data, including retained rows when it is a stream source.
-Building that data uses native leading-prefix point lookup when available,
-falling back to a host scan and filter, without changing the retained relation.
+order fixes host layout. Native keyed access requires explicit `host [k..]
+reads [...]` declarations and a matching per-reader Structures record; rustc
+checks the selected runtime trait. A single nonleading read may use
+`IndexedColumn<N>` for its declared slot, preserving payload-column order.
+Without a matching declaration, selection records a fallback built lazily
+once. A declared native capability that the Rust type lacks is an error,
+not an autoref fallback. Const/range reads use their recorded native read or
+scan/filter. Those predicate reads are distinct from literal-bearing atom
+occurrences: every index for such an occurrence holds only its filtered,
+projected data, including retained rows when it is a stream source.
+Building that data uses recorded native point access or a host scan/filter,
+without changing the retained relation.
 Only the occurrence's row source is constant-specific. Its ordinary `let`
 entries, retained rows, and indexes use the same selection and build machinery
 as every other retained relation; no occurrence-specific `payload/constants`
@@ -93,13 +118,14 @@ The back end separates representation **R**, evaluation unit **E**, and control
 **C** ([formal model](formal/backend.tex)). R records tuples or base-occurrence
 positions with owned computed columns; its contract checks lineage coverage,
 while storage laws require every operation to commute with its bag abstraction.
-E records scalar or batched demand on total, indexable pipe segments, with a
-selection boundary before partial Rust. Absent R/E entries mean tuples/scalar;
-the default staging pass records the former fixed 128-row probe lookahead.
+E records scalar or batched demand on representable, indexable pipe segments.
+Absent R/E entries mean tuples/scalar; the default staging pass records the
+former fixed 128-row probe lookahead. Unsupported batch representations may
+end a stage without making Rust partial.
 C is the emitter's pull/unfold or push/fold realization of one stream algebra:
-exhaustion preserves the bag and lawful early stopping may only remove panics.
-Canonical boundaries still establish sets, and pinned Rust Before sets remain
-obligations in all three layers.
+exhaustion preserves the bag and answer-determined stopping preserves answers.
+Canonical boundaries establish sets; every layer retains the recorded plan,
+original Rust payloads and free-variable bindings.
 
 A point or range `let` used only by keyed probes and semijoins on one shared
 key records one index, for example `filtered = HashIndex [b] payload [b,c]
@@ -116,10 +142,11 @@ realization follows that recorded decision without inferring retention.
 
 ## Checks and evidence
 
-A language contract checks one program and returns facts its consumers use.
-A pass's independent `check(source, target)` checks both contracts and its
-erasure, refinement, demand, or representation obligations without rerunning
-`compile`. Free admissible choices remain free. A printer has no independent
+A language contract checks a program against any separately supplied base
+programs and returns facts its consumers use. A pass's independent
+`check(source, target)` checks both contracts and its erasure, refinement,
+demand, or representation obligations without rerunning `compile`.
+Free admissible choices remain free. A printer has no independent
 Rust semantic checker: rustc trait checks, expansion fixtures, and executed
 oracle agreement supply distinct evidence.
 
@@ -166,29 +193,66 @@ arguments packet is omitted when empty. An authored IR can start directly at
 a compatible macro with an explicit queue.
 
 Use `cq_stage::pass::<In, Out>` for a language-changing pass and
-`cq_stage::rewrite::<L>` for a same-language rewrite. Languages implement
-`Parse`, `ToTokens`, and `cq_stage::Language`. The protocol checks source and
-target contracts and queue shape; a changing pass supplies its own independent
-correspondence check. `rewrite` also invokes `Language::check_rewrite`.
+`cq_stage::rewrite::<L>` for a same-language rewrite. Flat languages implement
+`Parse`, `ToTokens`, and `cq_stage::Language`; annotation layers implement
+`cq_stage::Annotation<Base>` and `ToTokens`. Structures uses `Base = &P`;
+Sequence uses `Base = (&P, &S)`. Their carriers implement `Language`.
+The protocol checks source and target contracts and queue shape; a changing
+pass supplies its own independent correspondence check. `rewrite` also invokes
+`Language::check_rewrite`, which passes both base stacks to an annotation's
+rewrite checker.
 Only a terminal Rust printer can end the queue. Failures become
 `compile_error!`. Pass arguments record choices in target IR; subsequent passes
 receive complete programs.
+
+VO continuations carry `ordering { cq { ... } vo { valuation ... } }`.
+`cq_stage::Valuation::<C, V>::pass` receives `(cq, vo, args)` and its
+`rewrite` returns `(C, V)`. The VO printer emits only the valuation annotation;
+its `Annotation<&CQ>` contract checks the explicitly supplied normalized CQ.
+Planning returns that normalized CQ alongside VO rather than reconstructing it
+at a consumer.
+
+Physical continuations carry the Physical program. After selection they carry
+`realization { physical { ... } structures { ... } }`; after Sequence lowering
+they also carry `sequence { ... }`. Each member is independently printed.
+Use `cq_stage::Structures::<P, S>::rewrite` with a `(physical, structures, args)`
+closure returning `(P, S)`, or `cq_stage::Sequence::<P, S, Q>::rewrite` with a
+`(physical, structures, sequence, args)` closure returning `(P, S, Q)`.
+Their `pass::<Out>` methods give consumers the same separate arguments.
+Language-changing passes construct target carriers with `Structures::new` or
+`Sequence::new`. Flat CQ/RA/IX/Physical and Datalog APIs are unchanged.
+ST-Realization checks each annotation's references and obligations against the
+actual separate base programs, not token-prefix equality. Authored entry parses
+Physical first, then Structures against Physical, then (when present) Sequence
+against Physical and Structures. Neither annotation embeds its base programs.
+Checked continuations use the realization envelope above.
+
+Observers receive only the selected printed IR, never the transport envelope.
+
+The root Cargo workspace groups portable core, all feature consumers, formal
+examples and fixtures, and CPU benchmarks for shared compilation and lock
+resolution. Membership is not a dependency permission: core-to-feature edges
+remain forbidden and are checked independently. GPU/oxide and Metal packages
+retain separate workspaces at `experiments/gpu` and `experiments/mac`;
+external-packaging fixtures intentionally retain standalone topology.
 
 Features are external consumers, with versioned public core dependencies and
 local development paths. `python3 tools/check_external.py` packages every core
 crate, relocates every feature and its sibling consumer dependencies outside
 the checkout, substitutes packaged core sources, and builds all targets and
-runs workspace tests. Vendoring includes every repository feature's locked
-third-party closure rather than relying on accidental core dependencies.
+runs consumer tests. Vendoring includes every repository feature's third-party
+closure from the owning workspace lock rather than accidental core dependencies.
 Escapes are checked using canonical filesystem paths, including symlinked
 temporary directories. Positive, sibling-closure, and in-tree-only negative
 fixtures always run.
+Consumer tests own byte-identical mirrors of any core test fixtures they use in
+their own `tests/fixtures/`; they must not include fixtures through core-tree paths.
 
 The public API gate compares reviewed rustdoc-derived signatures.
 
 External printers preserve recorded operators and representations or reject
 unsupported choices. Their emitted Rust must refine written-order answers,
-retain opaque Rust ancestry and borrowed columns, respect pipe consumption and
+retain original Rust expressions and their free-variable bindings, respect pipe consumption and
 ordered-read requirements, and keep hosts immutable for a run. External
 surface extensions compose checked queries in ordinary Rust.
 

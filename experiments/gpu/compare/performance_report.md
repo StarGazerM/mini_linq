@@ -1,5 +1,7 @@
 # CQ TPC-H-shaped performance comparison
 
+> Point-in-time measurement: collection through 2026-10-25 (report `400fc2c6`; parallel/spotcheck environment records identify `5b9edfb1`, while no single source revision covers every retained run). **Superseded by:** [PLANNING-REDESIGN](../../../doc/PLANNING-REDESIGN.md) Progress/P3e/P4 for later per-workload measurements; this complete cross-engine matrix has not been re-measured since.
+
 ## Scope and methodology
 
 These are the **27 authored CQ-shaped catalog queries**, not full standard TPC-H coverage: 26 GPU-suite queries plus **h14, CPU-only**, at SF1 and SF10. GPU name `hXX`/`dXX` maps to CPU catalog name `retail_hXX`/`retail_dXX`. Numerical results require exact answers; no timeout is interpreted as an execution time. All times are milliseconds, lower is better.

@@ -171,7 +171,7 @@ fn absorbed_and_bound_variables_keep_the_tree_and_the_facts_honest() {
         struct Q;
         relation R(a: i32, b: i32, c: i32);
         relation S(b: i32, c: i32, e: i32);
-        answer(a, d) :- R(a, b, c), S(b, c, e), if a > 0, let d: i32 = a + c;
+        answer(a, d) :- R(a, b, c), S(b, c, e), where a > 0, let d: i32 = a + c;
     });
     assert_eq!(analysis.variables, names(&["a", "b", "c", "e"]));
     assert!(analysis.acyclic);
@@ -222,7 +222,7 @@ fn literal_columns_are_not_hypergraph_vertices() {
     assert_eq!(normal, module);
     assert_eq!(analysis.clauses[&0], ["x"]);
     assert_eq!(
-        cq::hypergraph::filter_ranks(&normal.query.body, &analysis)[&0],
+        cq::hypergraph::filter_ranks(&normal.query.body, &analysis, [])[&0],
         0
     );
     assert!(analysis.acyclic);
@@ -256,7 +256,41 @@ fn constant_only_atoms_keep_their_occurrence_and_point_rank() {
     let graph = Analysis::of(&source);
     assert!(graph.clauses[&0].is_empty());
     assert_eq!(graph.clauses[&1], ["x"]);
-    let ranks = cq::hypergraph::filter_ranks(&source.query.body, &graph);
+    let ranks = cq::hypergraph::filter_ranks(&source.query.body, &graph, []);
     assert_eq!(ranks[&0], 0);
     assert_eq!(ranks[&1], 3);
+}
+
+#[test]
+fn local_predicates_target_every_covering_atom_and_rank_through_them() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);
+        answer(x,y,z) :- R(x,y), where y < 5, S(z), where x == 3,
+            where (z == 1 && x > 0) || z == 2, T(x,z);
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let body = &normal.query.body;
+    let local = cq::hypergraph::local_predicates(body);
+    let targets = |clause: usize, written: bool| -> Vec<usize> {
+        let entry = local
+            .iter()
+            .find(|entry| entry.clause == clause && entry.written == written)
+            .unwrap();
+        entry.targets.iter().copied().collect()
+    };
+    // Covering atoms written before and after a predicate are its targets.
+    assert_eq!(targets(1, true), [0]);
+    assert_eq!(targets(3, true), [0, 5]);
+    // The disjunction restricts the later `T`; its implied domain of `z`
+    // restricts `S` and `T`.
+    assert_eq!(targets(4, true), [5]);
+    assert_eq!(targets(4, false), [2, 5]);
+    let ranks = cq::hypergraph::filter_ranks(
+        body,
+        &Analysis::of(&normal),
+        local
+            .iter()
+            .flat_map(cq::hypergraph::LocalPredicate::restrictions),
+    );
+    assert_eq!((ranks[&0], ranks[&2], ranks[&5]), (0, 2, 0));
 }

@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h11.rs, query literal 1.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct PerPart ; relation Stock (part_key : i64 , supplier_key : i64 , quantity : i64 , cost_units : i64) ; relation answer (part_key : i64 , value : i64) ; answer (part_key , sum (value)) :- Stock (part_key , supplier_key , quantity , cost_units) , let value : i64 = * quantity * * cost_units ;

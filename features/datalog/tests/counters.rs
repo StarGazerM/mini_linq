@@ -35,17 +35,20 @@ fn reach_reuses_indexes_across_every_round() {
 
 #[test]
 fn shared_owned_delta_layouts_probe_without_core_fallback_builds() {
-    let edges: Vec<_> = [("a", "b"), ("b", "c"), ("c", "a"), ("a", "b")]
-        .into_iter()
-        .map(|(x, y)| (x.to_owned(), y.to_owned()))
-        .collect();
+    let (a, b, c) = (vec![1_i64], vec![2_i64], vec![3_i64]);
+    let edges = vec![
+        (a.clone(), b.clone()),
+        (b.clone(), c.clone()),
+        (c.clone(), a.clone()),
+        (a.clone(), b.clone()),
+    ];
     let flags = [(7_i32,), (7,)];
     cq_storage::counters::reset();
     let (rows, flags) = cq_datalog::datalog! {
         struct IndexedRuns;
-        relation Edge(x:String,y:String) = (&edges);
+        relation Edge(x:Vec<i64>,y:Vec<i64>) = (&edges);
         relation FlagInput(flag:i32) = (&flags);
-        relation Reach(x:String,y:String);
+        relation Reach(x:Vec<i64>,y:Vec<i64>);
         relation Flag(flag:i32);
         output Reach, Flag;
         Reach((*x).clone(),(*y).clone()) :- Edge(x,y);
@@ -53,22 +56,23 @@ fn shared_owned_delta_layouts_probe_without_core_fallback_builds() {
         Reach((*x).clone(),(*z).clone()) :- Edge(x,y), Reach(y,z);
         Reach((*x).clone(),(*z).clone()) :- Edge(y,z), Reach(x,y);
         Reach((*x).clone(),(*y).clone()) :- Edge(x,y), Reach(x,y);
-        Reach((*x).clone(),(*y).clone()) :- Flag(f), if *f == 7, Reach(x,y);
+        Reach((*x).clone(),(*y).clone()) :- Flag(f), where f == 7, Reach(x,y);
         Flag(*f) :- FlagInput(f), Reach(x,y);
     };
     let rows: Vec<_> = rows.collect();
     let flags: Vec<_> = flags.collect();
     let cost = cq_storage::counters::snapshot();
     assert_eq!(rows.len(), 9);
+    let nodes = [a, b, c];
     assert_eq!(
         rows.into_iter().collect::<std::collections::BTreeSet<_>>(),
-        ["a", "b", "c"]
-            .into_iter()
-            .flat_map(|x| ["a", "b", "c"].map(|y| (x.to_owned(), y.to_owned())))
+        nodes
+            .iter()
+            .flat_map(|x| nodes.iter().map(|y| (x.clone(), y.clone())))
             .collect()
     );
     assert_eq!(flags, [(7,)]);
-    // The same borrowed String key is probed by several holes; reversed,
+    // The same borrowed non-Copy key is probed by several holes; reversed,
     // all-column, and later key-zero layouts are native grouped hosts too.
     assert_eq!(cost.index_builds, 0);
 }
@@ -102,16 +106,17 @@ fn alternating_empty_delta_indexes_never_fall_back_to_vec_builds() {
 
 #[test]
 fn borrowed_negative_keys_use_membership_without_building_indexes() {
-    let domain: Vec<_> = (0..128_i32).map(|id| (id, format!("key-{id}"))).collect();
+    // Non-Copy keys: negation probes borrow them.
+    let domain: Vec<_> = (0..128_i32).map(|id| (id, vec![i64::from(id)])).collect();
     let blocked: Vec<_> = (0..128_i32)
         .filter(|id| id % 3 == 0)
-        .map(|id| (format!("key-{id}"),))
+        .map(|id| (vec![i64::from(id)],))
         .collect();
     cq_storage::counters::reset();
     let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
         struct NegativeKeys;
-        relation Domain(id:i32,key:String) = (&domain);
-        relation Blocked(key:String) = (&blocked);
+        relation Domain(id:i32,key:Vec<i64>) = (&domain);
+        relation Blocked(key:Vec<i64>) = (&blocked);
         relation Allowed(id:i32);
         output Allowed;
         Allowed(*id) :- Domain(id,key), !Blocked(key);
@@ -154,12 +159,14 @@ fn recursive_negation_reuses_completed_keys_across_rounds() {
 #[test]
 fn empty_negative_keys_test_existence_without_building_indexes() {
     let domain: Vec<_> = (0..128_i32).map(|id| (id,)).collect();
-    for blocked in [&[][..], &[(String::from("blocked"),)][..]] {
+    let keys = cq_load::StringDictionary::new(["blocked"]);
+    let present = [(cq_storage::domain::exact(&keys, "blocked"),)];
+    for blocked in [&[][..], &present[..]] {
         cq_storage::counters::reset();
         let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
             struct NegativeExistence;
             relation Domain(id:i32) = (&domain);
-            relation Blocked(key:String) = (blocked);
+            relation Blocked(key:cq_load::StringCode) = (blocked);
             relation Allowed(id:i32);
             output Allowed;
             Allowed(*id) :- Domain(id), !Blocked(_);
@@ -178,26 +185,33 @@ fn empty_negative_keys_test_existence_without_building_indexes() {
 
 #[test]
 fn repeated_negative_variables_and_constants_use_prepared_keys_without_builds() {
-    let domain: Vec<_> = (0..128_i32).map(|id| (id, format!("key-{id}"))).collect();
+    use cq_storage::domain::exact;
+    let names: Vec<_> = (0..128_i32)
+        .flat_map(|id| [format!("key-{id}"), format!("other-{id}")])
+        .collect();
+    let keys = cq_load::StringDictionary::new(names.iter().map(String::as_str));
+    let kinds = cq_load::StringDictionary::new(["blocked", "ignored"]);
+    let key = |id: i32| exact(&keys, &format!("key-{id}"));
+    let domain: Vec<_> = (0..128_i32).map(|id| (id, key(id))).collect();
     let blocked: Vec<_> = (0..128_i32)
         .flat_map(|id| {
-            let left = format!("key-{id}");
+            let left = key(id);
             let right = if id % 3 == 0 {
-                left.clone()
+                left
             } else {
-                format!("other-{id}")
+                exact(&keys, &format!("other-{id}"))
             };
             [
-                (String::from("blocked"), left.clone(), right, id),
-                (String::from("ignored"), left.clone(), left, id),
+                (exact(&kinds, "blocked"), left, right, id),
+                (exact(&kinds, "ignored"), left, left, id),
             ]
         })
         .collect();
     cq_storage::counters::reset();
     let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
         struct RepeatedNegativeKeys;
-        relation Domain(id:i32,key:String) = (&domain);
-        relation Blocked(kind:String,left:String,right:String,extra:i32) = (&blocked);
+        relation Domain(id:i32,key:cq_load::StringCode) = (&domain);
+        relation Blocked(kind:cq_load::StringCode in (kinds),left:cq_load::StringCode,right:cq_load::StringCode,extra:i32) = (&blocked);
         relation Allowed(id:i32);
         output Allowed;
         Allowed(*id) :- Domain(id,key), !Blocked(String::from("blocked"),key,key,_);
@@ -210,4 +224,231 @@ fn repeated_negative_variables_and_constants_use_prepared_keys_without_builds() 
     );
     assert_eq!(cost.index_builds, 0);
     assert_eq!(cost.lookups, domain.len() as u64);
+}
+
+/// SRDatalog DOOP `HeapAllocHelper` as a Datalog rule: the hole's CQ carries
+/// head dereferences and a captured-constant selection written last. The
+/// default hole plan must stay output-bounded (see doc/PLANNING-REDESIGN.md
+/// and facade/mini-linq/tests/doop_heapalloc.rs for the core route).
+#[test]
+fn heapalloc_helper_hole_work_is_bounded_by_input_plus_output() {
+    struct Constants {
+        c_object_array: i32,
+        c_string_array: i32,
+    }
+    const OBJECT_ARRAY: i32 = 1;
+    const STRING_ARRAY: i32 = 2;
+    const INT_ARRAY: i32 = 3;
+    const ELEMENT: [i32; 3] = [11, 12, 13];
+    let mut alloc = Vec::new();
+    let mut heap = 0;
+    for (ty, count) in [
+        (OBJECT_ARRAY, 100),
+        (STRING_ARRAY, 100),
+        (INT_ARRAY, 20),
+        (ELEMENT[0], 100),
+        (ELEMENT[1], 100),
+        (ELEMENT[2], 100),
+    ] {
+        for _ in 0..count {
+            alloc.push((heap, ty));
+            heap += 1;
+        }
+    }
+    let component = vec![
+        (OBJECT_ARRAY, ELEMENT[0]),
+        (STRING_ARRAY, ELEMENT[1]),
+        (INT_ARRAY, ELEMENT[2]),
+    ];
+    let supertype: Vec<_> = ELEMENT
+        .iter()
+        .map(|&e| (e, e))
+        .chain([(ELEMENT[2], OBJECT_ARRAY)])
+        .collect();
+    let constants = Constants {
+        c_object_array: OBJECT_ARRAY,
+        c_string_array: STRING_ARRAY,
+    };
+    cq_storage::counters::reset();
+    let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
+        struct Heaps;
+        relation Alloc(h: i32, t: i32) = (alloc);
+        relation Component(a: i32, c: i32) = (component);
+        relation Super(c: i32, t: i32) = (supertype);
+        relation Compat(h: i32, b: i32);
+        output Compat;
+        HeapAllocHelper: Compat(*heap, *baseheap) :-
+            Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
+            Component(baseheaptype, comptype), Super(comptype, heaptype),
+            where baseheaptype != constants.c_object_array && baseheaptype != constants.c_string_array;
+    }
+    .collect();
+    let cost = cq_storage::counters::snapshot();
+    assert_eq!(rows.len(), 4000);
+    let input = (alloc.len() + component.len() + supertype.len()) as u64;
+    let output = rows.len() as u64;
+    let work = cost.rows_tested
+        + cost.rows_enumerated
+        + cost.cursor_steps
+        + cost.lookups
+        + cost.distinct_insertions;
+    let bound = 8 * (input + output);
+    assert!(
+        work <= bound,
+        "work {work} exceeds 8 x (input {input} + output {output}) = {bound}; {cost:?}"
+    );
+}
+
+#[test]
+fn authored_connected_rule_order_is_the_hole_plan() {
+    use mini_linq::passes::plan as renamed_planner;
+    // Explicit advice keeps its connected introducing order and drains ready
+    // filters. Disconnected cross-product advice is rejected by VO-Order.
+    const OBJECT_ARRAY: i32 = 1_000;
+    const STRING_ARRAY: i32 = 1_001;
+    let alloc: Vec<(i32, i32)> = (0..200).map(|h| (h, h % 20)).collect();
+    let component: Vec<(i32, i32)> = (0..20).map(|t| (t, t / 2)).collect();
+    let supertype: Vec<(i32, i32)> = (0..20).map(|t| (t / 2, t)).collect();
+    struct Constants {
+        c_object_array: i32,
+        c_string_array: i32,
+    }
+    let constants = Constants {
+        c_object_array: OBJECT_ARRAY,
+        c_string_array: STRING_ARRAY,
+    };
+    macro_rules! program {
+        ($($pipeline:tt)*) => {
+            cq_datalog::datalog! {
+                $($pipeline)*
+                struct Heaps;
+                relation Alloc(h: i32, t: i32) = (alloc);
+                relation Component(a: i32, c: i32) = (component);
+                relation Super(c: i32, t: i32) = (supertype);
+                relation Compat(h: i32, b: i32);
+                output Compat;
+                HeapAllocHelper: Compat(*heap, *baseheap) :-
+                    Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
+                    Component(baseheaptype, comptype), Super(comptype, heaptype),
+                    where baseheaptype != constants.c_object_array
+                        && baseheaptype != constants.c_string_array;
+            }
+            .collect::<std::collections::BTreeSet<_>>()
+        };
+    }
+    cq_storage::counters::reset();
+    let planned = program!();
+    let planned_cost = cq_storage::counters::snapshot();
+    cq_storage::counters::reset();
+    let advised = program!(pipeline {
+        cq = pipeline { plan = renamed_planner; };
+        incremental = cq_datalog::passes::incremental(
+            plan(HeapAllocHelper, order(Alloc@0, Super, Component, Alloc@1));
+        );
+    });
+    let advised_cost = cq_storage::counters::snapshot();
+    assert_eq!(planned, advised);
+    let work = |cost: cq_storage::counters::Snapshot| {
+        cost.rows_tested + cost.rows_enumerated + cost.cursor_steps + cost.lookups
+    };
+    let bound = 8 * (alloc.len() + component.len() + supertype.len() + planned.len()) as u64;
+    for (route, cost) in [("default", planned_cost), ("authored connected", advised_cost)] {
+        let work = work(cost);
+        assert!(work <= bound, "{route}: work {work} exceeds bound {bound}");
+    }
+}
+
+#[test]
+fn in_plan_admission_prunes_known_heads_before_the_trailing_expansion() {
+    // `y` binds at Edge (level 2); Fan(y, z) is a trailing expansion (DL-Fanout
+    // `multiply`), so the default places the committed anti-join in plan at
+    // level 2, as advice can: a known `y` is rejected before Fan is read. Under
+    // known(admit) every candidate reaches Fan and is rejected at admission.
+    let n = 400_i32;
+    let edges: Vec<(i32, i32)> = (0..n)
+        .flat_map(|x| [1, 2, 3].map(|d| (x, (x + d) % n)))
+        .collect();
+    let fan: Vec<(i32, i32)> = (0..n).flat_map(|y| (0..64).map(move |z| (y, z))).collect();
+    let seed = [(0_i32,)];
+    macro_rules! program {
+        ($($pipeline:tt)*) => {
+            cq_datalog::datalog! {
+                $($pipeline)*
+                struct Pruned;
+                relation Edge(x: i32, y: i32) = (edges);
+                relation Fan(y: i32, z: i32) = (fan);
+                relation Seed(x: i32) = (seed);
+                relation Reach(x: i32);
+                output Reach;
+                Reach(*x) :- Seed(x);
+                Step: Reach(*y) :- Reach(x), Edge(x, y), Fan(y, z);
+            }
+            .collect::<std::collections::BTreeSet<_>>()
+        };
+    }
+    cq_storage::counters::reset();
+    let in_plan = program!(pipeline {
+        incremental = cq_datalog::passes::incremental(plan(Step, order(Reach, Edge, Fan), known(at(level 2))););
+    });
+    let in_plan_cost = cq_storage::counters::snapshot();
+    cq_storage::counters::reset();
+    let default = program!();
+    let default_cost = cq_storage::counters::snapshot();
+    cq_storage::counters::reset();
+    let admit = program!(pipeline {
+        incremental = cq_datalog::passes::incremental(plan(Step, known(admit)););
+    });
+    let admit_cost = cq_storage::counters::snapshot();
+    assert_eq!(in_plan, admit);
+    assert_eq!(in_plan, (0..n).map(|x| (x,)).collect());
+    assert_eq!(default, admit);
+    let work = |cost: cq_storage::counters::Snapshot| {
+        cost.rows_tested + cost.rows_enumerated + cost.cursor_steps + cost.lookups
+    };
+    let (in_plan_work, admit_work) = (work(in_plan_cost), work(admit_cost));
+    assert_eq!(work(default_cost), in_plan_work);
+    println!("in_plan {in_plan_work} admit {admit_work}");
+    // Of the 3n Edge candidates only n - 1 are new; each known one skips its
+    // 64-row Fan expansion (measured: about 801 * 64 rows saved).
+    assert!(
+        admit_work - in_plan_work > 64 * n as u64,
+        "in-plan admission {in_plan_work} vs admission-time {admit_work}"
+    );
+}
+
+use std::collections::BTreeSet;
+
+#[test]
+fn push_zero_key_reads_scan_host_and_retained_operands() {
+    let left = [(1_i32,), (2,)];
+    for right in [vec![], vec![(3_i32,), (4,)]] {
+        macro_rules! run {
+            ($mode:ident) => {{
+                cq_storage::counters::reset();
+                let rows: BTreeSet<_> = mini_linq::passes::select! {
+                    pipeline { own_push::push };
+                    physical {
+                        relation L(x:i32) = (&left);
+                        relation R(y:i32) = (&right);
+                        l = pipe rename L {x -> x};
+                        r = $mode rename R {y -> y};
+                        nonempty = pipe semi eager [] l,r;
+                        product = pipe probe first [] nonempty,r;
+                        out = let canon project product keep {x,y};
+                        return out as answer(x,y);
+                    }
+                }
+                .map(|(x, y)| (*x, *y))
+                .collect();
+                assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+                rows
+            }};
+        }
+        let expected: BTreeSet<_> = left
+            .iter()
+            .flat_map(|&(x,)| right.iter().map(move |&(y,)| (x, y)))
+            .collect();
+        assert_eq!(run!(pipe), expected);
+        assert_eq!(run!(let), expected);
+    }
 }

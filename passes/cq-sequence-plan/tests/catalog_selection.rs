@@ -1,54 +1,72 @@
-use cq_lang_sequence::{CanonToken, Capability, Catalog, ProviderToken, structures};
+use cq_lang_sequence::{Catalog, structures};
 use cq_sequence_plan::select_from_catalog;
-use structures::Structure;
+use structures::{Capability, Declaration, Provider, Structure};
+#[macro_use]
+mod support;
 
-fn h05() -> structures::Program {
-    syn::parse_str(include_str!("fixtures/h05.structures")).unwrap()
+fn h05() -> (structures::physical::Program, structures::Program) {
+    syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream<'_>| {
+            let physical = input.parse()?;
+            let structures = structures::Program::parse(input, &physical)?;
+            Ok((physical, structures))
+        },
+        include_str!("fixtures/h05.structures"),
+    ).unwrap()
 }
 
 // Target tokens are data, not a dependency on a GPU implementation. These are
-// the provider/canon tokens exported by the GPU Sequence target's catalog.
+// the provider tokens exported by the GPU Sequence target's catalog, including
+// its Distinct providers of canonical rows records.
 fn gpu_catalog() -> Catalog {
-    let levels = vec![vec!["host".into(), "device".into()]];
-    Catalog {
-        providers: vec![ProviderToken {
-            supports: Vec::new(),
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
-            elements: None,
-            capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-            levels: levels.clone(),
-        }],
-        canons: vec![
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-                levels: levels.clone(),
-                max_packed_bits: Some(128),
-            },
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-                levels,
-                max_packed_bits: None,
-            },
-        ],
-        codecs: vec![],
+    let declared: structures::Providers = syn::parse_quote!(providers {
+        range_provider = ::cq_gpu_sequence_runtime::RangeProvider {
+            reads [exact, range, membership], build inferred
+        };
+        radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> {
+            reads [distinct], build inferred
+        };
+    });
+    let mut catalog = Catalog::default();
+    for declaration in declared.declarations {
+        catalog.register(declaration, vec![vec!["host".into(), "device".into()]]);
     }
+    catalog
 }
 
-fn provider_type(structure: &Structure) -> Option<&syn::Type> {
+fn declaration<'a>(catalog: &'a mut Catalog, token: &str) -> &'a mut Declaration {
+    catalog
+        .declarations
+        .iter_mut()
+        .find(|declaration| declaration.token == token)
+        .unwrap()
+}
+
+/// Register `declaration` at the range provider's levels, `index` in catalog order.
+fn insert(catalog: &mut Catalog, index: usize, declaration: Declaration) {
+    let levels = catalog.providers[0].levels.clone();
+    catalog.register(declaration, levels);
+    let entry = catalog.providers.pop().unwrap();
+    catalog.providers.insert(index, entry);
+}
+
+fn provider(structure: &Structure) -> Option<&Provider> {
     match structure {
-        Structure::Built { keyed, .. } => Some(&keyed.ty),
-        Structure::Rows { ty, .. } | Structure::Dedup { ty, .. } => Some(ty),
+        Structure::Built { keyed, .. } => Some(&keyed.provider),
+        Structure::Rows { provider, .. } => Some(provider),
         _ => None,
     }
 }
 
 #[test]
 fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
-    let authored = h05();
-    let defaults = cq_structure_selection::compile(&authored.physical).unwrap();
-    let selected = select_from_catalog(&defaults, &gpu_catalog()).unwrap();
-    structures::check_rewrite(&defaults, &selected).unwrap();
-    assert_eq!(selected.physical, defaults.physical);
+    let (physical, authored) = h05();
+    let defaults = cq_structure_selection::compile(&physical).unwrap();
+    // No type-width guessing: the full-row set token accepts the recorded
+    // packed row codec regardless of its eventual lane count.
+    let (selected_physical, selected) = select_from_catalog(&physical, &defaults, &gpu_catalog()).unwrap();
+    structures::check_rewrite(&physical, &defaults, &selected_physical, &selected).unwrap();
+    assert_eq!(selected_physical, physical);
     let mut count = 0;
     for (before, after) in defaults
         .structures
@@ -56,7 +74,7 @@ fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
         .iter()
         .zip(&selected.structures.entries)
     {
-        if let Some(ty) = provider_type(&after.structure) {
+        if let Some(selected) = provider(&after.structure) {
             let expected = authored
                 .structures
                 .entries
@@ -68,8 +86,8 @@ fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
                 })
                 .unwrap();
             assert_eq!(
-                Some(ty),
-                provider_type(&expected.structure),
+                Some(selected),
+                provider(&expected.structure),
                 "{}",
                 after.name
             );
@@ -83,22 +101,26 @@ fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
 
 #[test]
 fn selection_is_deterministic_and_uses_first_satisfying_token() {
-    let source = cq_structure_selection::compile(&h05().physical).unwrap();
+    let (physical, _) = h05();
+    let source = cq_structure_selection::compile(&physical).unwrap();
     let mut catalog = gpu_catalog();
-    let mut wrong_level = catalog.providers[0].clone();
-    wrong_level.ty = syn::parse_quote!(WrongLevel);
-    wrong_level.levels.clear();
-    let mut membership = catalog.providers[0].clone();
-    membership.ty = syn::parse_quote!(MembershipOnly);
-    membership.capabilities = vec![Capability::Membership];
-    let mut later = catalog.providers[0].clone();
-    later.ty = syn::parse_quote!(Later);
-    catalog.providers.insert(0, membership);
-    catalog.providers.insert(0, wrong_level);
-    catalog.providers.push(later);
-    let selected = select_from_catalog(&source, &catalog).unwrap();
-    assert_eq!(selected, select_from_catalog(&source, &catalog).unwrap());
-    assert_eq!(selected, select_from_catalog(&selected, &catalog).unwrap());
+    insert(
+        &mut catalog,
+        0,
+        syn::parse_quote!(membership_only = MembershipOnly { reads [membership], build inferred };),
+    );
+    insert(
+        &mut catalog,
+        0,
+        syn::parse_quote!(wrong_level = WrongLevel { reads [exact, range, membership], build inferred };),
+    );
+    catalog.providers[0].levels.clear();
+    let later: Declaration =
+        syn::parse_quote!(later = Later { reads [exact, range, membership], build inferred };);
+    insert(&mut catalog, 4, later);
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+    assert_eq!((selected_physical.clone(), selected.clone()), select_from_catalog(&physical, &source, &catalog).unwrap());
+    assert_eq!((selected_physical.clone(), selected.clone()), select_from_catalog(&selected_physical, &selected, &catalog).unwrap());
     let supplier = selected
         .structures
         .entries
@@ -108,8 +130,8 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
         })
         .unwrap();
     assert_eq!(
-        provider_type(&supplier.structure),
-        Some(&syn::parse_quote!(MembershipOnly))
+        provider(&supplier.structure),
+        Some(&syn::parse_quote!(@membership_only as MembershipOnly))
     );
     let nation = selected
         .structures
@@ -120,99 +142,113 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
         })
         .unwrap();
     assert_eq!(
-        provider_type(&nation.structure),
-        Some(&catalog.providers[2].ty)
+        provider(&nation.structure),
+        Some(&catalog.providers[2].provider)
     );
 }
 
 #[test]
 fn unavailable_read_or_canonicalization_cannot_be_selected() {
-    let source = cq_structure_selection::compile(&h05().physical).unwrap();
+    let (physical, _) = h05();
+    let source = cq_structure_selection::compile(&physical).unwrap();
     let mut missing_read = gpu_catalog();
-    missing_read.providers[0].capabilities.clear();
-    assert!(select_from_catalog(&source, &missing_read).is_err());
+    declaration(&mut missing_read, "range_provider")
+        .facts
+        .reads
+        .clear();
+    assert!(select_from_catalog(&physical, &source, &missing_read).is_err());
     let mut missing_canon = gpu_catalog();
-    for canon in &mut missing_canon.canons {
-        canon.levels.clear();
+    let catalog = gpu_catalog();
+    for entry in &mut missing_canon.providers {
+        if catalog
+            .facts(&entry.provider)
+            .unwrap()
+            .reads(&Capability::Distinct)
+        {
+            entry.levels.clear();
+        }
     }
-    assert!(select_from_catalog(&source, &missing_canon).is_err());
+    assert!(select_from_catalog(&physical, &source, &missing_canon).is_err());
 }
 
 #[test]
 fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
-    let source: structures::Program = syn::parse_quote! {
+    let (physical, source) = structure_fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             projected = pipe project j keep {a};
-            answer = pipe canon semi eager [a] projected,r;
+            answer = let canon semi eager [a] projected,r;
             return answer as answer(a);
         }
-        structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r = Index [a];
-            answer canon = Canon;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @index as Index [a];
+            answer rows = @sort as ::cq_storage::dedup::Sort;
+            answer canon = rows;
         }
     };
     let mut catalog = gpu_catalog();
-    let mut membership = catalog.providers[0].clone();
-    membership.capabilities = vec![Capability::Membership];
-    catalog.providers[0].capabilities = vec![Capability::Exact, Capability::Range];
-    catalog.providers.push(membership);
-    let error = select_from_catalog(&source, &catalog)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("`r`") && error.contains("Exact") && error.contains("Membership"),
-        "{error}"
+    declaration(&mut catalog, "range_provider").facts.reads =
+        vec![Capability::Exact, Capability::Range];
+    insert(
+        &mut catalog,
+        2,
+        syn::parse_quote!(membership = Membership { reads [membership], build inferred };),
     );
-    catalog.providers[0]
-        .capabilities
+    assert!(select_from_catalog(&physical, &source, &catalog).is_err());
+    declaration(&mut catalog, "range_provider")
+        .facts
+        .reads
         .push(Capability::Membership);
-    select_from_catalog(&source, &catalog).unwrap();
+    select_from_catalog(&physical, &source, &catalog).unwrap();
 }
 
-fn host_keyed_read() -> structures::Program {
-    syn::parse_quote! {
+fn host_keyed_read() -> (structures::physical::Program, structures::Program) {
+    structure_fixture! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
-            answer = pipe canon probe first [a] l,r;
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
+            answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
-        structures {
-            l host scan = HostColumns [];
-            r host scan = HostColumns [];
-            r host answer = HostColumns [a];
-            answer canon = Canon;
+        structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+            l host scan = @host_columns as HostColumns [];
+            r host scan = @host_columns as HostColumns [];
+            r host result(answer) = @host_columns as HostColumns [a];
+            answer rows = @sort as ::cq_storage::dedup::Sort;
+            answer canon = rows;
         }
     }
 }
 
 #[test]
 fn integral_host_fallback_is_retained_with_a_catalog_range_index() {
-    let source = host_keyed_read();
-    let selected = select_from_catalog(&source, &gpu_catalog()).unwrap();
-    structures::physical::check_rewrite(&source.physical, &selected.physical).unwrap();
+    let (physical, source) = host_keyed_read();
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &gpu_catalog()).unwrap();
+    structures::physical::check_rewrite(&physical, &selected_physical).unwrap();
     assert_eq!(
         selected,
-        select_from_catalog(&source, &gpu_catalog()).unwrap()
+        select_from_catalog(&physical, &source, &gpu_catalog()).unwrap().1
     );
     assert_eq!(
         selected,
-        select_from_catalog(&selected, &gpu_catalog()).unwrap()
+        select_from_catalog(&selected_physical, &selected, &gpu_catalog()).unwrap().1
     );
-    let analysis = structures::contract::check(&selected).unwrap();
+    let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
     assert_eq!(
-        analysis.built_on("r", &["a".into()]).map(|(ty, _)| ty),
-        Some(&gpu_catalog().providers[0].ty)
+        analysis
+            .built_on("r", &["a".into()])
+            .map(|(provider, _)| provider),
+        Some(&gpu_catalog().providers[0].provider)
     );
     for before in &source.structures.entries {
-        if matches!(&before.structure, Structure::Host { reader, .. } if reader == "scan") {
+        if matches!(&before.structure, Structure::Host { reader, .. } if matches!(reader, cq_lang_sequence::structures::ReaderRef::Scan))
+        {
             assert!(
                 selected.structures.entries.contains(before),
                 "host column scans remain unchanged"
@@ -224,81 +260,41 @@ fn integral_host_fallback_is_retained_with_a_catalog_range_index() {
 #[test]
 fn unsupported_host_range_read_rejects_instead_of_skipping_the_obligation() {
     let mut catalog = gpu_catalog();
-    catalog.providers[0].capabilities = vec![Capability::Exact, Capability::Membership];
-    let error = select_from_catalog(&host_keyed_read(), &catalog)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("`r`") && error.contains("Range") && error.contains("host"),
-        "{error}"
-    );
+    declaration(&mut catalog, "range_provider").facts.reads =
+        vec![Capability::Exact, Capability::Membership];
+    let (physical, source) = host_keyed_read();
+    assert!(select_from_catalog(&physical, &source, &catalog).is_err());
 }
 
 #[test]
 fn host_range_index_selection_does_not_pick_an_exact_only_token() {
     let mut catalog = gpu_catalog();
-    let mut exact = catalog.providers[0].clone();
-    exact.ty = syn::parse_quote!(ExactOnly);
-    exact.capabilities = vec![Capability::Exact];
-    catalog.providers.insert(0, exact);
-    let selected = select_from_catalog(&host_keyed_read(), &catalog).unwrap();
-    let analysis = structures::contract::check(&selected).unwrap();
+    insert(
+        &mut catalog,
+        0,
+        syn::parse_quote!(exact_only = ExactOnly { reads [exact], build inferred };),
+    );
+    let (physical, source) = host_keyed_read();
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+    let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
     assert_eq!(
-        analysis.built_on("r", &["a".into()]).map(|(ty, _)| ty),
-        Some(&catalog.providers[1].ty)
+        analysis
+            .built_on("r", &["a".into()])
+            .map(|(provider, _)| provider),
+        Some(&catalog.providers[1].provider)
     );
 }
 
 #[test]
-fn catalog_element_capability_checks_both_built_and_host_fallback_rows() {
-    for retained in [false, true] {
-        let mut source: structures::Program = syn::parse_quote! {
-            physical {
-                relation L(a:i64); relation R(a:i64,b:String);
-                l = pipe rename L@0 {a -> a};
-                r = pipe rename R@1 {a -> a,b -> b};
-                answer = pipe canon probe first [a] l,r;
-                return answer as answer(a,b);
-            }
-            structures {
-                l host scan = HostColumns [];
-                r host scan = HostColumns [];
-                r host answer = HostColumns [a];
-                answer canon = Canon;
-            }
-        };
-        if retained {
-            source.physical.program.definitions[1].mode =
-                structures::physical::Mode::Let(Default::default());
-            source.structures.entries[2] = syn::parse_quote!(r = HostIndex [a];);
-        }
-        let mut catalog = gpu_catalog();
-        catalog.providers[0].elements = Some(vec![syn::parse_quote!(i64)]);
-        assert!(select_from_catalog(&source, &catalog).is_err());
-        let mut host = catalog.providers[0].clone();
-        host.ty = syn::parse_quote!(HostIndex);
-        host.elements = None;
-        host.levels = vec![vec!["host".into()]];
-        catalog.providers.push(host);
-        let selected = select_from_catalog(&source, &catalog).unwrap();
-        let analysis = structures::contract::check(&selected).unwrap();
-        assert_eq!(
-            analysis.built_on("r", &["a".into()]).map(|(ty, _)| ty),
-            Some(&syn::parse_quote!(HostIndex))
-        );
-    }
-}
-
-#[test]
-fn unused_string_payload_is_projected_from_renamed_provider() {
+fn unused_code_payload_is_projected_from_renamed_provider() {
     for retained in [false, true] {
         let mut physical: structures::physical::Program = syn::parse_quote! {
             physical {
-                relation L(a:i64); relation R(a:i64,unused:String);
-                l = pipe rename L@0 {a -> a};
-                r = pipe rename R@1 {a -> a,unused -> unused};
+                relation L(a:i64); relation R(a:i64,unused:StringCode);
+                l = pipe rename L {a -> a};
+                r = pipe rename R {a -> a,unused -> unused};
                 joined = pipe probe first [a] l,r;
-                answer = pipe canon project joined keep {a};
+                answer = let canon project joined keep {a};
                 return answer as answer(a);
             }
         };
@@ -307,58 +303,110 @@ fn unused_string_payload_is_projected_from_renamed_provider() {
                 structures::physical::Mode::Let(Default::default());
         }
         let source = cq_structure_selection::compile(&physical).unwrap();
-        let mut catalog = gpu_catalog();
-        catalog.providers[0].elements = Some(vec![syn::parse_quote!(i64)]);
-        let selected = select_from_catalog(&source, &catalog).unwrap();
-        let analysis = structures::contract::check(&selected).unwrap();
+        let catalog = gpu_catalog();
+        let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+        let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
         assert_eq!(analysis.layouts["r"], ["a"]);
         assert_eq!(
-            analysis.built_on("r", &["a".into()]).map(|(ty, _)| ty),
-            Some(&catalog.providers[0].ty)
+            analysis
+                .built_on("r", &["a".into()])
+                .map(|(provider, _)| provider),
+            Some(&catalog.providers[0].provider)
         );
     }
 }
 
 #[test]
-fn canon_selection_uses_complete_heading_width() {
-    for (third, expected) in [(false, "PackedCanon"), (true, "WideCanon")] {
-        let mut source: structures::Program = syn::parse_quote! {
+fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
+    for (third, expected) in [(false, "radix_set"), (true, "radix_set")] {
+        let (mut physical, mut source) = structure_fixture! {
             physical {
                 relation R(a:i64,b:i64,c:i64);
-                r = pipe rename R@0 {a -> a,b -> b,c -> c};
-                answer = pipe canon project r keep {a,b,c};
+                r = pipe rename R {a -> a,b -> b,c -> c};
+                answer = let canon project r keep {a,b,c};
                 return answer as answer(a,b,c);
             }
-            structures {
-                r host scan = HostColumns [];
-                answer canon = Canon;
+            structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+                r host scan = @host_columns as HostColumns [];
+                answer rows = @sort as ::cq_storage::dedup::Sort;
+                answer canon = rows;
             }
         };
         if !third {
-            source = syn::parse_quote! {
+            (physical, source) = structure_fixture! {
                 physical {
                     relation R(a:i64,b:i64);
-                    r = pipe rename R@0 {a -> a,b -> b};
-                    answer = pipe canon project r keep {a,b};
+                    r = pipe rename R {a -> a,b -> b};
+                    answer = let canon project r keep {a,b};
                     return answer as answer(a,b);
                 }
-                structures {
-                    r host scan = HostColumns [];
-                    answer canon = Canon;
+                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+                    r host scan = @host_columns as HostColumns [];
+                    answer rows = @sort as ::cq_storage::dedup::Sort;
+                    answer canon = rows;
                 }
             };
         }
-        let selected = select_from_catalog(&source, &gpu_catalog()).unwrap();
-        structures::check_rewrite(&source, &selected).unwrap();
-        let analysis = structures::contract::check(&selected).unwrap();
-        let syn::Type::Path(ty) = &analysis.dedup["answer"] else {
-            panic!("provider path")
-        };
-        assert_eq!(ty.path.segments.last().unwrap().ident, expected);
+        let (selected_physical, selected) = select_from_catalog(&physical, &source, &gpu_catalog()).unwrap();
+        structures::check_rewrite(&physical, &source, &selected_physical, &selected).unwrap();
+        let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
+        assert_eq!(
+            analysis.canonical["answer"].rows_provider().unwrap().token,
+            expected
+        );
         if third {
             let mut catalog = gpu_catalog();
-            catalog.canons.pop();
-            assert!(select_from_catalog(&source, &catalog).is_err());
+            catalog.providers.pop();
+            assert!(select_from_catalog(&physical, &source, &catalog).is_err());
         }
+    }
+}
+
+#[test]
+fn blocked_canonical_catalog_requires_comparator_rows_not_a_token_name() {
+    for retained in [false, true] {
+        let boundary = if retained {
+            quote::quote! {
+                out = let canon project r keep {x};
+                return out as answer(x);
+            }
+        } else {
+            quote::quote! {
+                out = pipe project r keep {x};
+                return canon out as answer(x);
+            }
+        };
+        let physical: structures::physical::Program = syn::parse2(quote::quote! { physical {
+            relation R(a: i64 [17], b: i64 [17]);
+            r = pipe rename R {a -> x, b -> y};
+            #boundary
+        }}).unwrap();
+        let (physical, source) = cq_structure_selection::compile_with(&physical, quote::quote!(
+            blocks(R { block_rows 1024; summary none; columns [a: bytes u64, b: plain u64]; })
+        )).unwrap();
+        let mut catalog = Catalog::default();
+        catalog.register(
+            syn::parse_quote!(distinct_only = DistinctOnly { reads [distinct], build inferred, shared };),
+            vec![vec!["host".into()]],
+        );
+        assert!(select_from_catalog(&physical, &source, &catalog).is_err());
+        catalog.register(
+            syn::parse_quote!(logical_comparator = LogicalComparator { reads [distinct, comparator_rows], build inferred, shared };),
+            vec![vec!["host".into()]],
+        );
+        let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+        assert_eq!(selected_physical, physical);
+        assert_eq!(selected.encoded, source.encoded);
+        structures::check_rewrite(&physical, &source, &selected_physical, &selected).unwrap();
+        let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
+        let selected_provider = if retained {
+            analysis.canonical["out"].rows_provider().unwrap()
+        } else {
+            &analysis.head_dedup["out"]
+        };
+        assert_eq!(selected_provider.token, "logical_comparator");
+        declaration(&mut catalog, "logical_comparator").facts.reads
+            .retain(|capability| *capability != Capability::ComparatorRows);
+        assert!(select_from_catalog(&physical, &source, &catalog).is_err());
     }
 }

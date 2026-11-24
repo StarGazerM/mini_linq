@@ -1,27 +1,14 @@
 //! Explicit pipelines and the common typed shell for TPC-H-derived CQ kernels.
 //! Query collection is timed; answer serialization and comparison are separate.
 
-#[cfg(feature = "counters")]
-pub type Dedup<T> = cq_storage::counters::DistinctSet<T>;
-// Keep the recorded measurement alias aligned with the default provider.
-// The counter build retains its explicit deterministic instrumentation state.
-#[cfg(not(feature = "counters"))]
-pub type Dedup<T> = cq_storage::HashSet<T>;
+#[allow(dead_code)]
+#[path = "../xtask/src/fuzz/routes.rs"]
+pub(crate) mod cpu_routes;
 
 /// Expand the same authored CQ with an explicit sequence of public passes.
 macro_rules! configuration {
     (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
-        crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, { $($body)* });
-        crate::tpch_runtime::configuration!(@named radix, $d, { $($stages)* }, [::cq_rewrites::radix_runs], { $($body)* });
-        crate::tpch_runtime::configuration!(@named radix_retained, $d, { $($stages)* }, [::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
-        crate::tpch_runtime::configuration!(@named built_hash, $d, {
-            $($stages)*
-            physical = [::cq_rewrites::build_host_reads];
-        }, { $($body)* });
-        crate::tpch_runtime::configuration!(@named built_radix, $d, {
-            $($stages)*
-            physical = [::cq_rewrites::build_host_reads];
-        }, [::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::configuration!(default, $d, { $($stages)* }, [], { $($body)* });
         crate::tpch_runtime::configuration!(@named par, $d, {
             $($stages)*
             decompose = [::cq_sequence_tasks_macros::plan];
@@ -53,6 +40,19 @@ macro_rules! configuration {
             $($stages)*
         }, { $($body)* });
     };
+    (default, $d:tt, { $($stages:tt)* }, [$($extra:path),*], { $($body:tt)* }) => {
+        crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, [$($extra),*], { $($body)* });
+        crate::tpch_runtime::configuration!(@named radix, $d, { $($stages)* }, [$($extra,)* ::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::configuration!(@named radix_retained, $d, { $($stages)* }, [$($extra,)* ::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
+        crate::tpch_runtime::configuration!(@named built_hash, $d, {
+            $($stages)*
+            physical = [::cq_rewrites::build_host_reads];
+        }, [$($extra),*], { $($body)* });
+        crate::tpch_runtime::configuration!(@named built_radix, $d, {
+            $($stages)*
+            physical = [::cq_rewrites::build_host_reads];
+        }, [$($extra,)* ::cq_rewrites::radix_runs], { $($body)* });
+    };
     ($module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
         crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, [], { $($body)* });
     };
@@ -68,20 +68,18 @@ macro_rules! configuration {
             use super::*;
             #[allow(unused_macros)]
             macro_rules! query {
-                (positional($d($d host:ident),*); $d($d tokens:tt)*) => { ::mini_linq::compile! {
-                    pipeline {
+                (positional($d($d host:ident),*); $d($d tokens:tt)*) => { crate::tpch_runtime::evidence_query! {
+                    $module; {
                         $($stages)*
                         select = ::mini_linq::passes::select(positional($d($d host),*));
-                        structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
-                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+                        structures = [$($extra,)* ];
                     }
                     $d($d tokens)*
                 } };
-                ($d($d tokens:tt)*) => { ::mini_linq::compile! {
-                    pipeline {
+                ($d($d tokens:tt)*) => { crate::tpch_runtime::evidence_query! {
+                    $module; {
                         $($stages)*
-                        structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
-                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+                        structures = [$($extra,)* ];
                     }
                     $d($d tokens)*
                 } };
@@ -96,7 +94,7 @@ pub(crate) use configuration;
 /// Each `query!` carries stage-local advice; only the advised variant applies it.
 macro_rules! standalone_configs {
     ($d:tt; $($body:tt)*) => {
-        pub const CONFIGS: &[&str] = &["default", "par", "par_radix", "par_built_hash", "par_built_radix", "radix", "radix_retained", "no-reduce", "transfer", "le", "le_runs", "advised"];
+        pub const CONFIGS: &[&str] = crate::tpch_runtime::cpu_routes::cpu_route_names!("par_radix", "par_built_hash", "par_built_radix", "advised");
         crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(radix, $d, {}, [::cq_rewrites::radix_runs], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(radix_retained, $d, {}, [::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
@@ -161,7 +159,25 @@ macro_rules! standalone_configuration {
         #[allow(non_snake_case)]
         mod $module {
             use super::*;
+            // `canon(packed);` is authored Structures advice: every column of
+            // the query's canonical rows records has an `OrderKey`, so they use
+            // the packed sorted-run provider in every configuration.
             macro_rules! query {
+                (plan($d($d advice:tt)*); canon(packed); evidence { $d($d facts:tt)* } $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; {
+                            $($stages)*
+                            sequence = ::mini_linq::passes::sequence(evidence { $d($d facts)* });
+                        };
+                        [$($extra,)* ::cq_rewrites::packed_canon]; $d($d tokens)*
+                    }
+                };
+                (plan($d($d advice:tt)*); canon(packed); $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; { $($stages)* };
+                        [$($extra,)* ::cq_rewrites::packed_canon]; $d($d tokens)*
+                    }
+                };
                 (plan($d($d advice:tt)*); evidence { $d($d facts:tt)* } $d($d tokens:tt)*) => {
                     crate::tpch_runtime::standalone_query! {
                         $module; [$d($d advice)*]; {
@@ -186,24 +202,61 @@ macro_rules! standalone_configuration {
 pub(crate) use standalone_configuration;
 
 macro_rules! standalone_query {
-    (advised; [$($advice:tt)*]; {$($stages:tt)*}; []; $($tokens:tt)*) => {
-        crate::tpch_runtime::standalone_query! {
-            default; []; { $($stages)* plan = ::mini_linq::passes::plan($($advice)*); }; [];
+    (advised; [$($advice:tt)*]; {$($stages:tt)*}; [$($extra:path),*]; $($tokens:tt)*) => {
+        ::mini_linq::compile! {
+            pipeline {
+                $($stages)* plan = ::mini_linq::passes::plan($($advice)*);
+                structures = [$($extra,)* ];
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+            }
             $($tokens)*
         }
     };
     ($module:ident; [$($advice:tt)*]; {$($stages:tt)*}; [$($extra:path),*]; $($tokens:tt)*) => {
-        ::mini_linq::compile! {
-            pipeline {
+        crate::tpch_runtime::evidence_query! {
+            $module; {
                 $($stages)*
-                structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
-                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+                structures = [$($extra,)* ];
             }
             $($tokens)*
         }
     };
 }
 pub(crate) use standalone_query;
+
+/// Formal rule R-TpchEvidence: `default` and `par` attach the checked-in neutral
+/// SF1 document with explicit compiler/source correspondence. Its provenance
+/// records the source manifest hash/path and declared keys; compilation requires
+/// no dataset and never infers statistics from relation or column spelling.
+/// Other configurations keep their existing planning inputs.
+macro_rules! evidence_query {
+    (default; $pipeline:tt $($tokens:tt)*) => {
+        crate::tpch_runtime::evidence_query!(@checked $pipeline $($tokens)*)
+    };
+    (par; $pipeline:tt $($tokens:tt)*) => {
+        crate::tpch_runtime::evidence_query!(@checked $pipeline $($tokens)*)
+    };
+    (@checked { $($pipeline:tt)* } $($tokens:tt)*) => {
+        ::mini_linq::compile! {
+            pipeline {
+                $($pipeline)*
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
+                    ::cq_workload_passes::tpch_evidence];
+            }
+            $($tokens)*
+        }
+    };
+    ($module:ident; { $($pipeline:tt)* } $($tokens:tt)*) => {
+        ::mini_linq::compile! {
+            pipeline {
+                $($pipeline)*
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+            }
+            $($tokens)*
+        }
+    };
+}
+pub(crate) use evidence_query;
 
 macro_rules! candidate {
     (hypergraph; $d:tt; positional($($host:ident),*); $($body:tt)*) => {
@@ -240,13 +293,13 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "par", "par_radix", "par_built_hash", "par_built_radix", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = crate::tpch_runtime::cpu_routes::cpu_route_names!("par_radix", "par_built_hash", "par_built_radix", "built_hash", "built_radix", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?);
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
         pub struct Data { $(pub $table: Vec<($first_ty, $($ty,)*)>,)* $($extra: Option<ZoneData>,)? }
         pub type Answer = ($($out_ty,)+);
-        ::mini_linq::relation_loaders! {
+        ::cq_load::relation_loaders! {
             $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
         }
         pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
@@ -376,7 +429,10 @@ macro_rules! retail_kernel {
             }
         }
         pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-            rows.iter().map(|($($out,)+)| vec![$($out.to_string(),)+]).collect()
+            rows.iter().map(canonical_row).collect()
+        }
+        pub fn canonical_row(($($out,)+): &Answer) -> Vec<String> {
+            vec![$($out.to_string(),)+]
         }
     };
 }

@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h16.rs, query literal 1.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation Part (p_partkey : i64 , p_brand : StringCode in (data . dictionaries . domain ("p_brand")) , p_type : StringCode , p_size : i32) ; relation Partsupp (ps_partkey : i64 , ps_suppkey : i64) ; relation AllowedKinds (kind : StringCode) ; relation BadSupplier (suppkey : i64) ; relation answer (part_key : i64 , suppkey : i64) ; answer (part_key , suppkey) :- Part (part_key , brand , kind , size) , AllowedKinds (kind) , where brand != "Brand#45" , if [49 , 14 , 23 , 45 , 19 , 3 , 36 , 9] . contains (size) , Partsupp (part_key , suppkey) , ! BadSupplier (suppkey) ;

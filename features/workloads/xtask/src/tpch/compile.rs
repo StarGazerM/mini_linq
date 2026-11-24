@@ -41,10 +41,12 @@ pub(super) fn build_in(
     );
     manifest.push_str("[features]\ncounters = [\"cq-storage/counters\"]\nprofile = [\"cq-storage/operator-timing\"]\n[dependencies]\n");
     manifest.push_str(&crate::cargo::dependencies(&[
+        "bench-check",
         "mini-linq",
         "cq-load",
         "cq-storage",
         "cq-planners",
+        "cq-workload-passes",
         "cq-rewrites",
         "cq-join-filters",
         "cq-ext-aggregate",
@@ -67,13 +69,13 @@ pub(super) fn build_in(
         .collect::<Vec<_>>()
         .join("\n")
         + "\n";
-    manifest.push_str("serde_json = \"1\"\nrayon = \"1\"\n");
+    manifest.push_str("serde_json = \"1\"\nrayon = \"1\"\n[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n");
     write_if_changed(&directory.join("Cargo.toml"), &manifest)?;
     // Preserve the repository's dependency versions. Cargo may only adapt the
     // root-package entries here; the actual measured build always uses --locked.
     write_if_changed(
         &directory.join("Cargo.lock"),
-        &std::fs::read_to_string(root.join("Cargo.lock"))?,
+        &std::fs::read_to_string(crate::cargo::lockfile()?)?,
     )?;
     // Match the workload/corpus crate allowance: instrumented iterator chains
     // add wrapper types and can exceed rustc's default layout-query depth.

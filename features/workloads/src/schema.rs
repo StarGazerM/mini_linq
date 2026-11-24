@@ -18,7 +18,7 @@ pub struct Relation {
 }
 
 pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
-    inputs
+    let mut declarations: Vec<_> = inputs
         .iter()
         .map(|input| cq_syntax::RelationDecl {
             relation_token: Default::default(),
@@ -39,11 +39,14 @@ pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
                                     ColumnType::I64 => "i64",
                                     ColumnType::Date => "Date",
                                     ColumnType::Decimal => "Decimal",
-                                    ColumnType::Text => "String",
+                                    ColumnType::Text => "StringCode",
                                 },
                                 proc_macro2::Span::call_site(),
                             );
-                            if matches!(kind, ColumnType::Date | ColumnType::Decimal) {
+                            if matches!(
+                                kind,
+                                ColumnType::Date | ColumnType::Decimal | ColumnType::Text
+                            ) {
                                 let mut path: syn::Path =
                                     syn::Ident::new("cq_load", proc_macro2::Span::call_site())
                                         .into();
@@ -54,12 +57,18 @@ pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
                             }
                         },
                     }),
+                    logical_type_id: None,
+                    domain: None,
                 })
                 .collect(),
             value: None,
+            hosts: Vec::new(),
             semi_token: Default::default(),
         })
-        .collect()
+        .collect();
+    cq_syntax::intern_logical_types(&mut declarations)
+        .expect("the workload schema has only five logical types");
+    declarations
 }
 
 /// Construct only after schema, manifest and provenance validation have passed.
@@ -67,7 +76,12 @@ pub struct Inputs {
     relations: Vec<RelationData>,
 }
 impl Inputs {
-    pub fn from_dataset(dataset: Dataset) -> Self {
+    pub fn from_dataset(mut dataset: Dataset) -> Self {
+        // Preserve raw manifest/statistics semantics until validation finishes;
+        // the engine-facing hosts expose each complete input row only once.
+        for relation in &mut dataset.relations {
+            cq_load::canonicalize(&mut relation.rows);
+        }
         Self {
             relations: dataset.relations,
         }

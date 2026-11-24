@@ -30,11 +30,12 @@ pub struct Witness {
 }
 
 pub(crate) fn check_witnesses(
+    physical: &crate::physical::Program,
     program: &Program,
     facts: &Analysis,
 ) -> syn::Result<BTreeMap<String, Witness>> {
     let mut result = BTreeMap::new();
-    let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
+    let candidates = physical::candidate_prefixes(physical, &facts.physical);
     // STR-Witness: The extra cursor abstracts to lookup_b(k), and every path
     // consumes it at the force probe before any materialization or scope escape.
     // Distinct prefixes may share a Smallest force; each cursor keeps its own
@@ -109,7 +110,7 @@ pub(crate) fn check_witnesses(
                     format!("witness {name} for {} escapes at {offender}", share.build),
                 )
             };
-            if current == symbol_name(&program.physical.program.returned)
+            if current == symbol_name(&physical.program.returned)
                 || facts.physical.canon.contains(&current)
                 || facts.physical.modes[&current] != ModeKind::Pipe
                 || facts.retained.contains_key(&current)
@@ -122,7 +123,7 @@ pub(crate) fn check_witnesses(
                 return Err(escape(&current));
             }
             let mut used = false;
-            for definition in &program.physical.program.definitions {
+            for definition in &physical.program.definitions {
                 if !definition
                     .operator
                     .operands()
@@ -189,7 +190,7 @@ pub struct ReprBase {
 /// Unlike a positional read, a representation can retain several occurrences
 /// and carry computed values alongside their positions. Do not relax `lineages`:
 /// selection/keyset/read still require its original single-base proof.
-pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<String, Vec<Lineage>> {
+pub fn representation_bases(physical: &crate::physical::Program, _program: &Program, facts: &Analysis) -> BTreeMap<String, Vec<Lineage>> {
     let mut result: BTreeMap<String, Vec<Lineage>> = BTreeMap::new();
     let scoped: BTreeSet<_> = facts
         .physical
@@ -197,7 +198,7 @@ pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<Str
         .values()
         .flat_map(|group| group.members.iter())
         .collect();
-    for definition in &program.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         if scoped.contains(&name) {
             continue;
@@ -245,8 +246,8 @@ pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<Str
     result
 }
 
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, Repr>> {
-    let origins = representation_bases(program, facts);
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, Repr>> {
+    let origins = representation_bases(physical, program, facts);
     let mut result = BTreeMap::new();
     // STR-Repr: Each carried occurrence has truthful injective lineage; lineage
     // plus owned computed values covers the entire logical result heading.

@@ -1,0 +1,721 @@
+//! Shared parser and checked Plan-Prefix composition for all compiler drivers.
+#![forbid(unsafe_code)]
+
+use cq_lang_cq as cq;
+use cq_lang_ra as ra;
+use cq_lang_vo as vo;
+use cq_order::{Heuristic, Options, Ranking, Split};
+use syn::parse::{Parse, ParseStream};
+use syn::{Ident, Token};
+
+/// Arguments shared by facade, build-time and diagnostic Plan-Prefix callers.
+#[derive(Default)]
+pub struct PlanOptions {
+    /// An explicit occurrence/subatom order, checked by WF-VO and lookup-phase obligations.
+    pub order: Option<Vec<cq_order::OrderAtom>>,
+    pub no_reduce: bool,
+    /// `(target, support)` atom selectors to add, in advice order.
+    pub reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
+    /// `(target, support)` atom selectors whose Masks reduction is dropped.
+    pub skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
+    /// `known(Rel@i at k)`: request a ready boundary after positive read k;
+    /// I2 drains the negation earlier when ready (transported by Datalog Fork).
+    pub known: Vec<cq_order::Known>,
+    /// `ordering(seed = .., delta = .., driver = .., permutation = [..], shared_demand = ..)`:
+    /// upstream ordering inputs recorded unchanged in VO; no ordering choice reads them.
+    pub ordering: Option<vo::ordering::OrderingFacts>,
+}
+
+impl Parse for PlanOptions {
+    /// Parse comma-separated order, no_reduce, reduce and skip options.
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut options = Self::default();
+        while !input.is_empty() {
+            if input.peek(vo::ordering::kw::ordering) && options.ordering.is_none() {
+                options.ordering = Some(input.parse()?);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                    if input.is_empty() {
+                        return Err(input.error("trailing comma after plan options"));
+                    }
+                }
+                continue;
+            }
+            let option: Ident = input.parse()?;
+            if option == "order" && options.order.is_none() {
+                let content;
+                syn::parenthesized!(content in input);
+                options.order = Some(
+                    content
+                        .parse_terminated(cq_order::OrderAtom::parse, Token![,])?
+                        .into_iter()
+                        .collect(),
+                );
+            } else if option == "no_reduce" && !options.no_reduce {
+                options.no_reduce = true;
+            } else if option == "reduce" || option == "skip" {
+                let content;
+                syn::parenthesized!(content in input);
+                let target: cq_order::OrderAtom = content.parse()?;
+                let with: Ident = content.parse()?;
+                if with != "with" {
+                    return Err(syn::Error::new_spanned(with, "expected `with`"));
+                }
+                let support: cq_order::OrderAtom = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("expected (Target with Support)"));
+                }
+                if option == "reduce" {
+                    options.reduce.push((target, support));
+                } else {
+                    options.skip.push((target, support));
+                }
+            } else if option == "known" {
+                let content;
+                syn::parenthesized!(content in input);
+                let known: cq_order::Known = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("expected (Relation@clause at level)"));
+                }
+                if known.level == 0 {
+                    return Err(syn::Error::new_spanned(
+                        &known.relation,
+                        "known placement names no positive read 0",
+                    ));
+                }
+                if options
+                    .known
+                    .iter()
+                    .any(|other| other.clause == known.clause)
+                {
+                    return Err(syn::Error::new_spanned(
+                        &known.relation,
+                        "duplicate known placement for one negation",
+                    ));
+                }
+                options.known.push(known);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    option,
+                    "expected order(Relation, ...), no_reduce, reduce/skip(Target with Support), known(Relation@clause at level), or ordering(seed = .., delta = .., driver = .., permutation = [..], shared_demand = ..)",
+                ));
+            }
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+                if input.is_empty() {
+                    return Err(input.error("trailing comma after plan options"));
+                }
+            }
+        }
+        Ok(options)
+    }
+}
+
+/// Preserve authored atom/block selectors when normalization inserts clauses.
+fn normalized_advice(
+    source: &cq::Program,
+    normal: &cq::Program,
+    args: &PlanOptions,
+) -> syn::Result<Option<PlanOptions>> {
+    let selectors = args
+        .order
+        .iter()
+        .flatten()
+        .chain(args.reduce.iter().flat_map(|(a, b)| [a, b]))
+        .chain(args.skip.iter().flat_map(|(a, b)| [a, b]));
+    if args.known.is_empty()
+        && !selectors
+            .into_iter()
+            .any(|selector| selector.occurrence.is_some())
+    {
+        return Ok(None);
+    }
+    let occurrences = |program: &cq::Program| {
+        program
+            .query
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                matches!(item, cq::BodyItem::Positive { .. } | cq::BodyItem::Block(_))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>()
+    };
+    // Normalization preserves these occurrences and their relative order;
+    // generated constraints and Rust bindings are not authored selectors.
+    let mapping: std::collections::BTreeMap<_, _> = occurrences(source)
+        .into_iter()
+        .zip(occurrences(normal))
+        .collect();
+    let remap = |selector: &cq_order::OrderAtom| -> syn::Result<cq_order::OrderAtom> {
+        let mut selector = selector.clone();
+        if selector.occurrence.is_some() {
+            let source_clause = selector.resolve(source)?;
+            selector.occurrence = Some(mapping[&source_clause]);
+        }
+        Ok(selector)
+    };
+    let negations = |program: &cq::Program| {
+        program
+            .query
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| matches!(item, cq::BodyItem::Negation(_)).then_some(index))
+            .collect::<Vec<_>>()
+    };
+    // Negations are copied verbatim and in order by normalization.
+    let negation_mapping: std::collections::BTreeMap<_, _> = negations(source)
+        .into_iter()
+        .zip(negations(normal))
+        .collect();
+    let known = args
+        .known
+        .iter()
+        .map(|known| {
+            known.negation(source)?;
+            Ok(cq_order::Known {
+                clause: negation_mapping[&known.clause],
+                ..known.clone()
+            })
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    let pairs = |pairs: &[(cq_order::OrderAtom, cq_order::OrderAtom)]| {
+        pairs
+            .iter()
+            .map(|(a, b)| Ok((remap(a)?, remap(b)?)))
+            .collect::<syn::Result<Vec<_>>>()
+    };
+    Ok(Some(PlanOptions {
+        order: args
+            .order
+            .as_ref()
+            .map(|order| order.iter().map(remap).collect())
+            .transpose()?,
+        no_reduce: args.no_reduce,
+        reduce: pairs(&args.reduce)?,
+        skip: pairs(&args.skip)?,
+        ordering: args.ordering.clone(),
+        known,
+    }))
+}
+
+/// Normalize, order and reduce CQ using the shared production composition.
+/// Returns the actual normalized CQ alongside its standalone valuation.
+/// An explicit order overrides Prefix(Connected), not the reduction policy.
+pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result<(cq::Program, vo::Program)> {
+    let normal = cq::normal::normalize(source)?;
+    let remapped = normalized_advice(source, &normal, args)?;
+    let args = remapped.as_ref().unwrap_or(args);
+    let ordering = Options {
+        heuristic: Heuristic::Prefix(Ranking::Connected),
+        split: Split::Coarse,
+    };
+    let mut plan = if let Some(relations) = &args.order {
+        let plan = cq_order::compile_explicit(&normal, relations)?;
+        cq_order::check_advice(&normal, &plan, relations)?;
+        plan
+    } else if normal.declared_evidence.is_some() {
+        let plan = cq_order::evidence::compile(&normal, &ordering)?;
+        cq_order::evidence::check_evidence(&normal, &plan, &ordering)?;
+        plan
+    } else {
+        let plan = cq_order::compile(&normal, &ordering)?;
+        cq_order::check(&normal, &plan, &ordering)?;
+        plan
+    };
+    // Plan-Prefix: upstream ordering inputs are recorded unchanged; no choice above read them.
+    plan.valuation.ordering = args.ordering.clone();
+    for known in &args.known {
+        known.place(&normal, &mut plan)?;
+    }
+    let options = cq_reduce::Options {
+        semijoins: if args.no_reduce {
+            cq_reduce::Reductions::None
+        } else {
+            cq_reduce::Reductions::Masks
+        },
+    };
+    let mut reduced = cq_reduce::compile(&normal, &plan, &options)?;
+    cq_reduce::check(&normal, &plan, &reduced, &options)?;
+    advise_prefix(&normal, &mut reduced, args)?;
+    for known in &args.known {
+        known.check(&normal, &reduced)?;
+    }
+    Ok((normal, reduced))
+}
+
+/// Formal rule R-Advice: Add admissible top-level reductions before the stream; skip only existing Masks reductions.
+fn advise_prefix(source: &cq::Program, reduced: &mut vo::Program, args: &PlanOptions) -> syn::Result<()> {
+    if args.reduce.is_empty() && args.skip.is_empty() {
+        return Ok(());
+    }
+    let analysis = vo::contract::check(source, reduced)?;
+    let graph = cq::hypergraph::Analysis::of(source);
+    let pair = |target: &cq_order::OrderAtom,
+                support: &cq_order::OrderAtom|
+     -> syn::Result<(usize, usize)> {
+        let (t, s) = (
+            target.positive_clause(source)?,
+            support.positive_clause(source)?,
+        );
+        if t == s || graph.shared(t, s).is_empty() {
+            return Err(syn::Error::new_spanned(
+                &support.relation,
+                "reduce advice needs two atoms sharing a variable",
+            ));
+        }
+        Ok((t, s))
+    };
+    let mut skipped = Vec::new();
+    for (target, support) in &args.skip {
+        let (t, s) = pair(target, support)?;
+        let step = cq_reduce::semijoin(&analysis, &graph, t, s);
+        if !reduced.valuation.steps.contains(&step) {
+            return Err(syn::Error::new_spanned(
+                &target.relation,
+                "skip advice names no Masks reduction",
+            ));
+        }
+        skipped.push(step);
+    }
+    reduced
+        .valuation
+        .steps
+        .retain(|step| !skipped.contains(step));
+    let mut steps = Vec::new();
+    for (target, support) in &args.reduce {
+        let (t, s) = pair(target, support)?;
+        steps.push(cq_reduce::semijoin(&analysis, &graph, t, s));
+    }
+    let first = reduced
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, vo::Step::Atom(..) | vo::Step::Block(..)))
+        .unwrap_or(reduced.valuation.steps.len());
+    reduced.valuation.steps.splice(first..first, steps);
+    vo::contract::check(source, reduced)?;
+    Ok(())
+}
+
+/// CQ → RA′ through the same checked composition used by the facade.
+/// Formal rule Plan-Prefix: Normalize, use explicit order or checked source-document statistics or Prefix(Connected)/Coarse, reduce by Masks unless disabled, apply advice, and elaborate.
+pub fn compile_prefix(source: &cq::Program, options: &PlanOptions) -> syn::Result<ra::Program> {
+    let (normal, reduced) = prefix_valuation(source, options)?;
+    let (target, steps) = cq_relational_lowering::compile(&normal, &reduced)?;
+    cq_relational_lowering::check(&normal, &reduced, &target, &steps)?;
+    Ok(target)
+}
+
+pub use cq_relational_lowering::Steps;
+
+/// Optional diagnostics: the normalized CQ, selected VO and actual lowering correspondence.
+pub fn compile_prefix_with_steps(
+    source: &cq::Program,
+    options: &PlanOptions,
+) -> syn::Result<(ra::Program, cq::Program, vo::Program, Steps)> {
+    let (normal, valuation) = prefix_valuation(source, options)?;
+    let (target, steps) = cq_relational_lowering::compile(&normal, &valuation)?;
+    cq_relational_lowering::check(&normal, &valuation, &target, &steps)?;
+    Ok((target, normal, valuation, steps))
+}
+
+/// Produce authored occurrence-to-first-read paths from the actual selected VO.
+/// Unique top-level relation aliases support unqualified advice; nested reads
+/// retain their full CQ occurrence paths. No future invocation is inspected.
+pub fn first_reads(source: &cq::Program, valuation: &vo::Program) -> std::collections::BTreeMap<String, Vec<usize>> {
+    use std::collections::BTreeMap;
+    fn visit(reads: &[vo::Step], path: &mut Vec<usize>, result: &mut BTreeMap<String, Vec<usize>>) {
+        for (index, step) in reads.iter().enumerate() {
+            path.push(index);
+            match step {
+                vo::Step::Atom(atom, _) => {
+                    result.entry(format!("{}@{}", cq::symbol_name(&atom.relation), atom.clause)).or_insert_with(|| path.clone());
+                }
+                vo::Step::Block(block, _) => {
+                    for (branch, body) in block.branches.iter().enumerate() {
+                        path.push(branch);
+                        visit(&body.steps, path, result);
+                        path.pop();
+                    }
+                }
+                _ => (),
+            }
+            path.pop();
+        }
+    }
+    let mut result = BTreeMap::new();
+    visit(&valuation.valuation.steps, &mut Vec::new(), &mut result);
+    let mut aliases = BTreeMap::new();
+    for (clause, item) in source.query.body.iter().enumerate() {
+        if let cq::BodyItem::Positive { atom } = item {
+            aliases.entry(cq::symbol_name(&atom.relation)).and_modify(|entry| *entry = None).or_insert(Some(clause));
+        }
+    }
+    for (relation, clause) in aliases {
+        if let Some(path) = clause.and_then(|clause| result.get(&format!("{relation}@{clause}"))).cloned() {
+            result.insert(relation, path);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn first_reads_normalizes_raw_relation_names() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation r#R(x:i32);
+            answer(x) :- r#R(x);
+        };
+        let (_, normal, valuation, _) = compile_prefix_with_steps(
+            &source, &syn::parse_quote!(no_reduce),
+        ).unwrap();
+        let reads = first_reads(&normal, &valuation);
+        assert_eq!(reads["R"], reads["R@0"]);
+        assert!(!reads.contains_key("r#R"));
+        assert!(!reads.contains_key("r#R@0"));
+    }
+
+
+    #[test]
+    fn first_reads_records_nested_occurrence_paths() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i32);
+            relation S(x:i32);
+            answer(x) :- { R(x) } | { S(x) };
+        };
+        let (_, normal, valuation, _) = compile_prefix_with_steps(
+            &source, &syn::parse_quote!(no_reduce),
+        ).unwrap();
+        let reads = first_reads(&normal, &valuation);
+        let (block_index, block) = valuation.valuation.steps.iter().enumerate().find_map(
+            |(index, step)| match step {
+                vo::Step::Block(block, _) => Some((index, block)),
+                _ => None,
+            },
+        ).unwrap();
+        let read_index = block.branches[1].steps.iter().position(
+            |step| matches!(step, vo::Step::Atom(atom, _) if atom.relation == "S"),
+        ).unwrap();
+        assert_eq!(reads["S@0.1.0"], vec![block_index, 1, read_index]);
+        assert!(!reads.contains_key("S"));
+    }
+
+    #[test]
+    fn first_reads_records_only_the_first_subatom_read() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Seed(x:i32);
+            relation R(x:i32,y:i32);
+            answer(x,y) :- Seed(x), R(x,y);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
+        let (_, normal, valuation, _) = compile_prefix_with_steps(&source, &options).unwrap();
+        let reads = first_reads(&normal, &valuation);
+        let first = valuation.valuation.steps.iter().position(
+            |step| matches!(step, vo::Step::Atom(atom, _) if atom.clause() == 1),
+        ).unwrap();
+        assert_eq!(reads["R@1"], vec![first]);
+        assert_eq!(reads["R"], vec![first]);
+    }
+
+    #[test]
+    fn step_advice_elaborates_lookup_and_expand_on_the_same_occurrence() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Seed(x:i32);
+            relation R(x:i32,y:i32);
+            answer(x,y) :- Seed(x), R(x,y);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
+        let plan = compile_prefix(&source, &options).unwrap();
+        let (lookup_index, lookup) = plan
+            .plan
+            .definitions
+            .iter()
+            .enumerate()
+            .find_map(|(i, definition)| match &definition.operator {
+                ra::Operator::Semijoin(join) => Some((i, join)),
+                _ => None,
+            })
+            .expect("lookup is RL-Check semijoin");
+        let (expand_index, expand) = plan
+            .plan
+            .definitions
+            .iter()
+            .enumerate()
+            .find_map(|(i, definition)| match &definition.operator {
+                ra::Operator::NaturalJoin(join) if join.right == lookup.right => Some((i, join)),
+                _ => None,
+            })
+            .expect("expansion joins the exact same occurrence relation");
+        assert!(lookup_index < expand_index);
+        assert_eq!(expand.left, plan.plan.definitions[lookup_index].result);
+    }
+
+    #[test]
+    fn subatom_selectors_survive_normalization_inserted_clauses() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Seed(tag:i32,x:i32);
+            relation R(x:i32,y:i32);
+            answer(x,y) :- Seed({ wanted_tag },x), R(x,y);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
+        let (normal, plan) = prefix_valuation(&source, &options).unwrap();
+        let occurrence = normal
+            .query
+            .body
+            .iter()
+            .position(
+                |item| matches!(item, cq::BodyItem::Positive { atom } if atom.relation == "R"),
+            )
+            .unwrap();
+        assert_ne!(
+            occurrence, 1,
+            "normalization inserts Seed's closed-operand constraint"
+        );
+        let reads: Vec<_> = plan
+            .valuation
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                vo::Step::Atom(atom, _) if atom.relation == "R" => {
+                    Some((atom.clause(), atom.variables().count()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reads, [(occurrence, 1), (occurrence, 2)]);
+    }
+
+    #[test]
+    fn authored_selectors_survive_closed_atom_restrictions() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(key:i32,value:CodeAlias);
+            relation S(key:i32);
+            answer(x) :- R(x, { first }), R(x, { second }),
+                { S(x) } | { S(x) };
+        };
+        let normal = cq::normal::normalize(&source).unwrap();
+        let args: PlanOptions = syn::parse_quote!(
+            order(R@1,R@0,block@2), no_reduce,
+            reduce(R@0 with R@1), skip(R@1 with R@0)
+        );
+        let mapped = normalized_advice(&source, &normal, &args).unwrap().unwrap();
+        assert_eq!(
+            mapped
+                .order
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|selector| selector.occurrence)
+                .collect::<Vec<_>>(),
+            [Some(2), Some(0), Some(4)]
+        );
+        assert_eq!(mapped.reduce[0].0.occurrence, Some(0));
+        assert_eq!(mapped.reduce[0].1.occurrence, Some(2));
+        assert_eq!(mapped.skip[0].0.occurrence, Some(2));
+        assert_eq!(mapped.skip[0].1.occurrence, Some(0));
+        let executable: PlanOptions = syn::parse_quote!(order(R @ 1, R @ 0, block @ 2), no_reduce);
+        prefix_valuation(&source, &executable).unwrap();
+        compile_prefix(&source, &executable).unwrap();
+    }
+
+    #[test]
+    fn closed_disjunction_domains_preserve_literal_reduction_topology() {
+        let mut reference = None;
+        for (ty, first, second) in [
+            ("String", "\"FRANCE\"", "\"GERMANY\""),
+            ("CodeAlias", "france", "germany"),
+        ] {
+            let source: cq::Program = syn::parse_str(&format!(
+                r#"
+                struct Q;
+                relation Lineitem(order_key:i64,supplier_key:i64,ship_date:Date);
+                relation Supplier(supplier_key:i64,nation_key:i32);
+                relation Orders(order_key:i64,customer_key:i64);
+                relation Customer(customer_key:i64,nation_key:i32);
+                relation Nation(nation_key:i32,name:{ty});
+                answer(order_key,supplier_nation,customer_nation) :-
+                    Lineitem(order_key,supplier_key,ship_date),
+                    where ship_date >= start && ship_date <= end,
+                    Supplier(supplier_key,supplier_nation),
+                    Orders(order_key,customer_key), Customer(customer_key,customer_nation),
+                    Nation(supplier_nation,supplier_name), Nation(customer_nation,customer_name),
+                    where (supplier_name == {first} && customer_name == {second}) ||
+                        (supplier_name == {second} && customer_name == {first});
+            "#
+            ))
+            .unwrap();
+            // This isolates operand representation from A-Closed atom normalization.
+            assert_eq!(cq::normal::normalize(&source).unwrap(), source);
+            let planned = compile_prefix(&source, &PlanOptions::default()).unwrap();
+            assert_eq!(
+                planned
+                    .plan
+                    .definitions
+                    .iter()
+                    .filter(|definition| matches!(definition.operator, ra::Operator::Semijoin(_)))
+                    .count(),
+                3
+            );
+            let mut topology = planned.plan.definitions;
+            for definition in &mut topology {
+                if let ra::Operator::Select(selection) = &mut definition.operator {
+                    selection.condition = Default::default();
+                }
+            }
+            if let Some(reference) = &reference {
+                assert_eq!(
+                    &topology, reference,
+                    "only constant operand payloads and schema types may differ"
+                );
+            } else {
+                reference = Some(topology);
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_aggregate_preserves_all_joined_prefix_origins() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Lineitem(id:i64,key:i64,value:i64,date:i32);
+            relation Part(key:i64,kind:i32);
+            relation Qualified(kind:i32);
+            relation answer(promotional:i64,total:i64);
+            answer(sum(promo),sum(revenue)) :-
+                Lineitem(id,key,value,date),
+                where date >= start && date < end,
+                Part(key,kind),
+                let revenue:i64 = *value,
+                { Qualified(kind), let promo:i64 = *revenue }
+                else { let promo:i64 = 0 };
+        };
+        assert_eq!(
+            source
+                .query
+                .body
+                .iter()
+                .position(|item| matches!(item, cq::BodyItem::Block(_))),
+            Some(5)
+        );
+        for options in [
+            PlanOptions::default(),
+            syn::parse_quote!(no_reduce),
+            syn::parse_quote!(no_reduce, order(Lineitem, Part, block @ 5)),
+        ] {
+            compile_prefix(&source, &options).unwrap();
+        }
+    }
+
+    #[test]
+    fn inline_statistics_are_not_plan_options() {
+        for text in [
+            "evidence from \"old\" { count R = 1; }",
+            "evidence from \"old\" { key R [a]; }",
+            "order(R), evidence from \"old\" { count R = 1; }",
+        ] {
+            assert!(syn::parse_str::<PlanOptions>(text).is_err());
+        }
+    }
+
+    #[test]
+    fn known_records_earliest_ready_negation_despite_late_advice() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i64,y:i64);
+            relation S(y:i64,z:i64);
+            relation Old(x:i64);
+            answer(x) :- R(x,y), S(y,z), !Old(x);
+        };
+        let (_, natural) = prefix_valuation(&source, &PlanOptions::default()).unwrap();
+        let position = |plan: &vo::Program| {
+            plan.valuation
+                .steps
+                .iter()
+                .position(|step| matches!(step, vo::Step::Negation(..)))
+                .unwrap()
+        };
+        assert_eq!(position(&natural), 1);
+        let options: PlanOptions = syn::parse_quote!(no_reduce, known(Old@2 at 2));
+        let (normal, pinned) = prefix_valuation(&source, &options).unwrap();
+        assert_eq!(position(&pinned), 1);
+        let recorded = syn::parse::Parser::parse2(|input: ParseStream| vo::Program::parse(input, &normal), quote::quote!(#pinned)).unwrap();
+        assert_eq!(recorded, pinned);
+        options.known[0].check(&normal, &recorded).unwrap();
+        let mut delayed = pinned.clone();
+        let negation = delayed.valuation.steps.remove(position(&delayed));
+        delayed.valuation.steps.push(negation);
+        assert!(options.known[0].check(&normal, &delayed).is_err());
+        compile_prefix(&source, &options).unwrap();
+        for bad in ["known(Old@2 at 3)", "known(R@0 at 1)", "known(Old@2 at 0)"] {
+            let parsed = syn::parse_str::<PlanOptions>(bad);
+            assert!(parsed.is_err() || prefix_valuation(&source, &parsed.unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn known_read_boundary_respects_computed_bindings_and_rejects_missing_inputs() {
+        for variable in ["y", "z"] {
+            let source: cq::Program = syn::parse_str(&format!(
+                "struct KnownDependencies;
+                 relation R(x:i64); relation S(y:i64,z:i64); relation Old(v:i64);
+                 answer(x) :- R(x), let y:i64 = *x + 1, S(y,z), !Old({variable});"
+            )).unwrap();
+            let late: PlanOptions = syn::parse_quote!(no_reduce, known(Old@3 at 2));
+            let (normal, plan) = prefix_valuation(&source, &late).unwrap();
+            let position = plan.valuation.steps.iter()
+                .position(|step| matches!(step, vo::Step::Negation(..))).unwrap();
+            assert_eq!(position, if variable == "y" { 2 } else { 3 });
+            let early: PlanOptions = syn::parse_quote!(no_reduce, known(Old@3 at 1));
+            if variable == "y" {
+                let (_, early_plan) = prefix_valuation(&source, &early).unwrap();
+                assert_eq!(early_plan, plan);
+            } else {
+                let error = prefix_valuation(&source, &early).unwrap_err().to_string();
+                assert!(error.contains("KnownDependencies") && error.contains("binding"), "{error}");
+                assert!(early.known[0].check(&normal, &plan).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn ordering_option_is_recorded_unchanged_and_checked_in_vo() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i64,y:i64);
+            relation S(y:i64,z:i64);
+            answer(x) :- R(x,y), S(y,z);
+        };
+        let facts = quote::quote!(ordering(seed = false, delta = 1, driver = DeltaFirst,
+            permutation = [1, 0], shared_demand = [R(0)]));
+        let (_, unordered) = prefix_valuation(&source, &PlanOptions::default()).unwrap();
+        let options: PlanOptions = syn::parse2(quote::quote!(#facts)).unwrap();
+        let (normal, recorded) = prefix_valuation(&source, &options).unwrap();
+        let mut expected = unordered.clone();
+        expected.valuation.ordering = Some(syn::parse2(facts.clone()).unwrap());
+        assert_eq!(recorded, expected);
+        let printed = syn::parse::Parser::parse2(|input: ParseStream| vo::Program::parse(input, &normal), quote::quote!(#recorded)).unwrap();
+        assert_eq!(printed, recorded);
+        let explicit: PlanOptions =
+            syn::parse2(quote::quote!(order(S@1, R@0), #facts, no_reduce)).unwrap();
+        assert_eq!(
+            prefix_valuation(&source, &explicit).unwrap().1.valuation.ordering,
+            expected.valuation.ordering,
+        );
+        assert!(syn::parse2::<PlanOptions>(quote::quote!(#facts, #facts)).is_err());
+        let invalid: PlanOptions = syn::parse_quote!(ordering(seed = false, delta = 1,
+            driver = DeltaFirst, permutation = [0, 0], shared_demand = none));
+        let error = prefix_valuation(&source, &invalid).unwrap_err().to_string();
+        assert!(error.contains("VO-OrderingInputs"), "{error}");
+    }
+}

@@ -1,19 +1,31 @@
 //! Expose literal atom arguments before selecting physical storage providers.
-use std::collections::BTreeSet;
 use cq_lang_structures::physical::{self, Operator, Program, symbol_name};
 use cq_lang_structures::syntax::EqualityValue;
 use quote::{format_ident, quote};
+use std::collections::BTreeSet;
 
 fn derive(source: &Program) -> syn::Result<Program> {
     let analysis = physical::contract::check(source)?;
-    let mut used: BTreeSet<String> = analysis.headings.values().flatten().cloned()
-        .chain(source.program.definitions.iter().map(|definition| symbol_name(&definition.name)))
+    let mut used: BTreeSet<String> = analysis
+        .headings
+        .values()
+        .flatten()
+        .cloned()
+        .chain(
+            source
+                .program
+                .definitions
+                .iter()
+                .map(|definition| symbol_name(&definition.name)),
+        )
         .collect();
     let mut fresh = |stem: &str| {
         let mut suffix = 0usize;
         loop {
             let name = format!("__cq_constant_{stem}_{suffix}");
-            if used.insert(name.clone()) { break format_ident!("{name}"); }
+            if used.insert(name.clone()) {
+                break format_ident!("{name}");
+            }
             suffix += 1;
         }
     };
@@ -36,20 +48,28 @@ fn derive(source: &Program) -> syn::Result<Program> {
         let filtered = fresh("filtered");
         let mut renamed = rename.clone();
         renamed.constants = None;
-        let keep: Vec<_> = rename.mapping.iter().map(|mapping| mapping.target.clone()).collect();
+        let keep: Vec<_> = rename
+            .mapping
+            .iter()
+            .map(|mapping| mapping.target.clone())
+            .collect();
         let mut conditions = Vec::new();
         for equality in &constants.equalities {
             let column = &equality.left;
             let EqualityValue::Literal(value) = &equality.right else {
-                return Err(syn::Error::new_spanned(definition, "PH-ConstantGuard requires literal occurrence arguments"));
+                return Err(syn::Error::new_spanned(
+                    definition,
+                    "PH-ConstantGuard requires literal occurrence arguments",
+                ));
             };
             let variable = fresh("column");
-            renamed.mapping.push(syn::parse_quote!(#column -> #variable));
-            conditions.push(quote!(*#variable == (#value)));
+            renamed
+                .mapping
+                .push(syn::parse_quote!(#column -> #variable));
+            conditions.push(quote!(#variable = #value));
         }
         definitions.push(syn::parse_quote!(#raw = pipe #renamed;));
-        let condition = conditions.into_iter().reduce(|left, right| quote!((#left) && (#right))).expect("nonempty constants");
-        definitions.push(syn::parse_quote!(#filtered = pipe guard #raw if (#condition);));
+        definitions.push(syn::parse_quote!(#filtered = pipe select #raw if (#(#conditions),*);));
         let mut projected = definition.clone();
         projected.operator = syn::parse_quote!(project #filtered keep {#(#keep),*});
         definitions.push(projected);
@@ -58,21 +78,17 @@ fn derive(source: &Program) -> syn::Result<Program> {
     Ok(target)
 }
 
-// Formal rule PH-ConstantGuard: fresh literal columns, equality guards and projection preserve the renamed atom's bag.
+// Formal rule PH-ConstantGuard: fresh literal columns, relational restrictions and projection preserve the renamed atom's bag.
 pub fn compile(source: &Program) -> syn::Result<Program> {
     let target = derive(source)?;
     check(source, &target)?;
     Ok(target)
 }
 
-/// Re-derive the complete expected rewrite, including freshness and all records.
+/// Check the actual literal guard expansion through PH-ConstantGuard erasure.
+/// Fresh names are immaterial; predicates, source columns and projection are not.
 pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
-    let expected = derive(source)?;
-    if target != &expected {
-        return Err(syn::Error::new_spanned(target, "PH-ConstantGuard differs from the source-derived literal guard rewrite"));
-    }
-    physical::contract::check(target)?;
-    Ok(())
+    physical::check_rewrite(source, target)
 }
 
 #[cfg(test)]
@@ -81,7 +97,7 @@ mod tests {
     fn source() -> Program {
         syn::parse_quote! { physical {
             relation R(x:i32,y:i32);
-            r = let rename R@0 {y -> y} constants {x = 7};
+            r = let rename R {y -> y} constants {x = 7};
             return r as answer(y);
         } }
     }
@@ -93,20 +109,66 @@ mod tests {
         assert_eq!(source.program.head, target.program.head);
         check(&source, &target).unwrap();
         let mut changed = target.clone();
-        let Operator::Guard(guard) = &mut changed.program.definitions[1].operator else { panic!() };
-        guard.condition = syn::parse_quote!(false);
+        let Operator::Select(select) = &mut changed.program.definitions[1].operator else {
+            panic!()
+        };
+        select.condition = syn::parse_quote!(__cq_constant_column_0 = 8);
         assert!(check(&source, &changed).is_err());
         let mut changed = target.clone();
         changed.program.definitions.remove(1);
         assert!(check(&source, &changed).is_err());
+        let rename_raw = |target: &Program, name: syn::Ident| {
+            let mut changed = target.clone();
+            changed.program.definitions[0].name = name.clone();
+            let Operator::Select(select) = &mut changed.program.definitions[1].operator else {
+                panic!()
+            };
+            select.input = name;
+            changed
+        };
+        // Any fresh name is legal; the checker does not replay name choice.
+        check(
+            &source,
+            &rename_raw(&target, syn::parse_quote!(another_fresh_name)),
+        )
+        .unwrap();
+        // Relation definitions and heading columns occupy separate namespaces.
+        check(&source, &rename_raw(&target, syn::parse_quote!(y))).unwrap();
+        // Reusing the original result definition is not fresh.
+        assert!(check(&source, &rename_raw(&target, syn::parse_quote!(r))).is_err());
         let mut changed = target;
         changed.program.definitions[0].name = syn::parse_quote!(not_the_fresh_name);
         assert!(check(&source, &changed).is_err());
     }
     #[test]
+    fn guard_erasure_checks_records_not_generated_names() {
+        let source = source();
+        let target: Program = syn::parse_quote! { physical {
+            relation R(x:i32,y:i32);
+            input = pipe rename R {y -> y, x -> literal_column};
+            restricted = pipe select input if (literal_column = 7);
+            r = let project restricted keep {y};
+            return r as answer(y);
+        } };
+        check(&source, &target).unwrap();
+        let mut changed = target.clone();
+        let Operator::Rename(rename) = &mut changed.program.definitions[0].operator else {
+            panic!()
+        };
+        rename.mapping[1].source = syn::parse_quote!(y);
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target;
+        let Operator::Project(project) = &mut changed.program.definitions[2].operator else {
+            panic!()
+        };
+        project.attributes = syn::parse_quote!(literal_column);
+        assert!(check(&source, &changed).is_err());
+    }
+
+    #[test]
     fn unchanged_atoms_remain_exact() {
         let source: Program = syn::parse_quote! { physical {
-            relation R(x:i32); r = pipe rename R@0 {x -> x}; return r as answer(x);
+            relation R(x:i32); r = pipe rename R {x -> x}; return r as answer(x);
         } };
         assert_eq!(compile(&source).unwrap(), source);
     }

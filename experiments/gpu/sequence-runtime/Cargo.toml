@@ -3,6 +3,9 @@ name = "cq-gpu-sequence-runtime"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+publication-counters = ["gpu-device-columns/publication-counters"]
+
 [dependencies]
 cuda-core.workspace = true
 cuda-device.workspace = true
@@ -12,6 +15,7 @@ gpu-compress = { path = "../compress" }
 gpu-compress-host = { path = "../compress-host" }
 gpu-device-columns = { path = "../device-columns" }
 gpu-tiles = { path = "../tiles" }
+gpu-datalog-runtime = { path = "../datalog-runtime" }
 rccl-cub.workspace = true
 rccl-memory.workspace = true
 rccl-thrust.workspace = true

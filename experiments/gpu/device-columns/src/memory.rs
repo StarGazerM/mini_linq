@@ -1,19 +1,115 @@
 use crate::Result;
-use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceCopy, PinnedHostBuffer};
+use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceCopy, IntoResult, PinnedHostBuffer};
 use rccl_memory::{
-    ContiguousDeviceRange, CudaMemoryResource, DeviceAllocator, DeviceBlock, PoolMemoryResource,
-    StatisticsMemoryResource,
+    ContiguousDeviceRange, CudaAsyncMemoryResource, CudaMemoryResource, DeviceAllocator,
+    DeviceBlock, MemoryError, PoolMemoryResource, StatisticsMemoryResource,
 };
 use std::{
     alloc::Layout,
     marker::PhantomData,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
-pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
+pub type MemoryResource = StatisticsMemoryResource<TieredMemoryResource>;
 
-/// Host-side accounting for this runtime pool, excluding native CUDA scratch
-/// allocated outside it. Allocated bytes include CUDA allocation alignment.
+/// Requests of at least this many bytes are the driver's stream-ordered
+/// allocations; smaller ones are suballocated from the pool.
+const DIRECT_BYTES: usize = 64 << 20;
+
+/// A suballocating pool for small blocks and one driver allocation per large
+/// block.
+///
+/// A pool chunk stays reserved while any block inside it lives, and the pool
+/// doubles its chunks. Relation runs of several gigabytes inside such chunks
+/// pinned freed scratch between them: the pool held twice the live bytes, its
+/// next chunk no longer fit the card, and what it held was invisible to the
+/// runtime's own driver-side sort scratch. A large block is therefore its own
+/// `cuMemAllocAsync` allocation, freed in stream order to the same driver
+/// pool that scratch draws from; nothing larger than the threshold is ever
+/// carved from a shared chunk.
+pub struct TieredMemoryResource {
+    pool: PoolMemoryResource<CudaMemoryResource>,
+    direct: CudaAsyncMemoryResource,
+    /// Requested bytes live in both tiers, and their high-water mark.
+    current: AtomicUsize,
+    peak: AtomicUsize,
+    direct_bytes: AtomicUsize,
+}
+impl TieredMemoryResource {
+    fn new(context: Arc<CudaContext>, initial: usize, maximum: usize) -> Result<Self> {
+        // Freed large blocks stay mapped in the device's default driver pool,
+        // which this tier and native sort scratch both draw from: unmapping at
+        // every synchronization and mapping again on the next request costs
+        // more than the memory it returns between two rounds.
+        let mut retain = u64::MAX;
+        // SAFETY: the pool handle and the attribute value are live locals.
+        unsafe {
+            cuda_core::sys::cuMemPoolSetAttribute(
+                driver_pool(&context)?,
+                cuda_core::sys::CUmemPool_attribute_enum_CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                (&mut retain as *mut u64).cast(),
+            )
+            .result()?;
+        }
+        Ok(Self {
+            pool: PoolMemoryResource::new(CudaMemoryResource::new(context.clone()), initial, maximum)
+                .map_err(allocation_error)?,
+            direct: CudaAsyncMemoryResource::new(context),
+            current: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+            direct_bytes: AtomicUsize::new(0),
+        })
+    }
+}
+
+/// The device's default stream-ordered driver pool.
+fn driver_pool(context: &Arc<CudaContext>) -> Result<cuda_core::sys::CUmemoryPool> {
+    context.bind_to_thread()?;
+    let mut pool = std::mem::MaybeUninit::uninit();
+    // SAFETY: the out-pointer is a live local and the device handle is the context's.
+    unsafe {
+        cuda_core::sys::cuDeviceGetDefaultMemPool(pool.as_mut_ptr(), context.cu_device()).result()?;
+        Ok(pool.assume_init())
+    }
+}
+// SAFETY: each block is returned to the tier that produced it, selected by
+// the same size test on the same requested size; both tiers are allocators.
+unsafe impl DeviceAllocator for TieredMemoryResource {
+    fn context(&self) -> &Arc<CudaContext> {
+        self.pool.context()
+    }
+    fn allocate(&self, layout: Layout, stream: &CudaStream) -> std::result::Result<DeviceBlock, MemoryError> {
+        let block = if layout.size() >= DIRECT_BYTES {
+            let block = self.direct.allocate(layout, stream)?;
+            self.direct_bytes.fetch_add(layout.size(), Ordering::Relaxed);
+            block
+        } else {
+            self.pool.allocate(layout, stream)?
+        };
+        let current = self.current.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+        self.peak.fetch_max(current, Ordering::Relaxed);
+        Ok(block)
+    }
+    unsafe fn deallocate(&self, block: DeviceBlock, stream: &CudaStream) -> std::result::Result<(), MemoryError> {
+        let bytes = block.size();
+        self.current.fetch_sub(bytes, Ordering::Relaxed);
+        if bytes >= DIRECT_BYTES {
+            self.direct_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            // SAFETY: a block of this size came from the direct tier.
+            unsafe { self.direct.deallocate(block, stream) }
+        } else {
+            // SAFETY: a block below the threshold came from the pool.
+            unsafe { self.pool.deallocate(block, stream) }
+        }
+    }
+}
+
+/// Host-side accounting for this runtime's allocator, including pooled
+/// library scratch. Current and peak are requested bytes in both tiers;
+/// reserved is the pool's chunks plus the live large blocks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PoolMemoryStats {
     pub current_bytes: usize,
@@ -42,8 +138,10 @@ fn allocation_error(error: rccl_memory::MemoryError) -> Box<dyn std::error::Erro
 /// Asynchronous uploads share a pinned staging arena. Completed chunks are
 /// reused without waiting; staging is released only when the pool is dropped.
 /// Pool teardown waits for outstanding uploads before freeing their sources.
+/// [`Pool::lane`] pools share the allocator and context with their own stream
+/// and staging; RCCL orders cross-stream reuse of freed blocks by events.
 pub struct Pool {
-    memory: MemoryResource,
+    memory: Arc<MemoryResource>,
     stream: Arc<CudaStream>,
     context: Arc<CudaContext>,
     uploads: Mutex<UploadStaging>,
@@ -52,16 +150,31 @@ impl Pool {
     pub fn new(device: usize, initial: usize, maximum: usize) -> Result<Arc<Self>> {
         let context = CudaContext::new(device)?;
         let stream = context.default_stream();
-        let memory = StatisticsMemoryResource::new(
-            PoolMemoryResource::new(CudaMemoryResource::new(context.clone()), initial, maximum)
-                .map_err(allocation_error)?,
-        );
+        let memory =
+            StatisticsMemoryResource::new(TieredMemoryResource::new(context.clone(), initial, maximum)?);
         Ok(Arc::new(Self {
-            memory,
+            memory: Arc::new(memory),
             stream,
             context,
             uploads: Mutex::new(UploadStaging::default()),
         }))
+    }
+    /// A pool on a new non-blocking stream sharing this pool's allocator and
+    /// context, with its own upload staging. Work on it is unordered with this
+    /// pool's stream except through explicit events and RCCL's ordering of
+    /// reused blocks.
+    pub fn lane(&self) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            memory: self.memory.clone(),
+            stream: self.context.new_stream()?,
+            context: self.context.clone(),
+            uploads: Mutex::new(UploadStaging::default()),
+        }))
+    }
+    /// Whether two pools allocate from the same memory resource and context,
+    /// so buffers of one may be read and freed under the other's ordering.
+    pub fn shares_memory(&self, other: &Pool) -> bool {
+        Arc::ptr_eq(&self.memory, &other.memory)
     }
     pub fn resource(&self) -> &MemoryResource {
         &self.memory
@@ -72,25 +185,32 @@ impl Pool {
     /// stream dependency is recorded, even if its last device use is pending.
     /// Unlike the statistics adaptor's nested counters, these are pool-wide.
     pub fn memory_stats(&self) -> PoolMemoryStats {
-        let stats = self.memory.upstream().stats();
+        let tiers = self.memory.upstream();
+        let stats = tiers.pool.stats();
         PoolMemoryStats {
-            current_bytes: stats.allocated_bytes,
-            peak_bytes: stats.peak_allocated_bytes,
-            reserved_bytes: stats.pool_size,
+            current_bytes: tiers.current.load(Ordering::Relaxed),
+            peak_bytes: tiers.peak.load(Ordering::Relaxed),
+            reserved_bytes: stats.pool_size + tiers.direct_bytes.load(Ordering::Relaxed),
             cached_bytes: stats.free_bytes,
         }
     }
-    /// Return wholly unused upstream chunks and report the released bytes.
+    /// Return wholly unused pool chunks and the driver pool's idle large
+    /// blocks, and report the released pool bytes.
     ///
     /// Call after dropping dead owners and cached scratch at a stratum boundary.
     /// RCCL orders frees after their recorded uses on this pool's stream.
     /// Partly live chunks remain reserved; the synchronous CUDA upstream may
     /// block while freeing a chunk, so this is not a hot-path operation.
     pub fn release_unused(&self) -> Result<usize> {
-        self.memory
+        let released = self
+            .memory
             .upstream()
+            .pool
             .release_unused(self.stream())
-            .map_err(allocation_error)
+            .map_err(allocation_error)?;
+        // SAFETY: trimming only returns memory no live allocation maps.
+        unsafe { cuda_core::sys::cuMemPoolTrimTo(driver_pool(&self.context)?, 0).result()? };
+        Ok(released)
     }
     pub fn context(&self) -> &Arc<CudaContext> {
         &self.context
@@ -192,7 +312,12 @@ impl UploadChunk {
         self.used += bytes;
         self.tracked = false;
         unsafe {
-            cuda_core::simt::memory::memcpy_htod_async(destination, source, bytes, stream.cu_stream())?;
+            cuda_core::simt::memory::memcpy_htod_async(
+                destination,
+                source,
+                bytes,
+                stream.cu_stream(),
+            )?;
         }
         self.ready.record(stream)?;
         self.tracked = true;
@@ -202,16 +327,23 @@ impl UploadChunk {
 
 /// An owned device allocation retaining its allocator, context and stream.
 /// Deallocation is ordered on that stream; there is no host-runtime lifetime.
-/// An immutable range may retain an allocation through `owner` instead of
+/// An immutable range may retain an allocation through its owner instead of
 /// owning its affine token. Range construction is unsafe: the unique writer
 /// must never overwrite a published range, even when the backing buffer grows.
 pub struct Buffer<T: DeviceCopy> {
-    block: Option<DeviceBlock>,
-    owner: Option<Arc<Buffer<T>>>,
-    offset: usize,
+    storage: Storage<T>,
     pool: Arc<Pool>,
     len: usize,
     marker: PhantomData<T>,
+}
+enum Storage<T: DeviceCopy> {
+    Owned(Option<DeviceBlock>),
+    Slice(Arc<Buffer<T>>, usize),
+    Cast {
+        owner: Arc<dyn std::any::Any + Send + Sync>,
+        ptr: cuda_core::sys::CUdeviceptr,
+        allocation_bytes: usize,
+    },
 }
 impl<T: DeviceCopy> Buffer<T> {
     pub fn zeroed(pool: Arc<Pool>, len: usize) -> Result<Self> {
@@ -239,14 +371,19 @@ impl<T: DeviceCopy> Buffer<T> {
         if std::mem::size_of::<T>() == 0 {
             return Err("zero-sized device elements".into());
         }
-        let block = pool
-            .memory
-            .allocate(layout, pool.stream())
-            .map_err(allocation_error)?;
+        let block = pool.memory.allocate(layout, pool.stream()).map_err(|error| {
+            // Opt-in diagnostic: which request the pool or the driver refused.
+            if std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some() {
+                let stats = pool.memory_stats();
+                eprintln!(
+                    "[gpu-memory] allocation-failed request_bytes={} current_bytes={} reserved_bytes={} cached_bytes={}",
+                    layout.size(), stats.current_bytes, stats.reserved_bytes, stats.cached_bytes,
+                );
+            }
+            allocation_error(error)
+        })?;
         Ok(Self {
-            block: Some(block),
-            owner: None,
-            offset: 0,
+            storage: Storage::Owned(Some(block)),
             pool,
             len,
             marker: PhantomData,
@@ -325,20 +462,73 @@ impl<T: DeviceCopy> Buffer<T> {
         }
         Ok(Self {
             pool: owner.pool.clone(),
-            block: None,
-            owner: Some(owner),
-            offset,
+            storage: Storage::Slice(owner, offset),
             len,
             marker: PhantomData,
         })
+    }
+    /// View initialized native bytes as `T` without copying. `first` and `len`
+    /// count destination elements. Retains the source's entire owner (including
+    /// dependencies) and uses the source's stream for all reads.
+    ///
+    /// # Safety
+    /// The owner's buffer must remain fixed and immutable for this view's
+    /// lifetime. Its selected bytes must be initialized, valid `T` values in
+    /// native order, ready on its pool stream. This is not a data conversion.
+    pub unsafe fn shared_cast_slice<S: DeviceCopy, O>(
+        owner: Arc<O>, first: usize, len: usize,
+    ) -> Result<Self>
+    where
+        O: AsRef<Buffer<S>> + Send + Sync + 'static,
+    {
+        let source = owner.as_ref().as_ref();
+        let width = size_of::<T>();
+        if width == 0 || first.checked_add(len).is_none_or(|end| end > source.bytes() / width) {
+            return Err("typed device range exceeds source".into());
+        }
+        let ptr = source.cu_deviceptr() + (first * width) as u64;
+        if len != 0 && !ptr.is_multiple_of(align_of::<T>() as u64) {
+            return Err("misaligned typed device range".into());
+        }
+        Ok(Self {
+            pool: source.pool.clone(),
+            storage: Storage::Cast { ptr, allocation_bytes: source.allocated_bytes(), owner },
+            len,
+            marker: PhantomData,
+        })
+    }
+    /// Borrow part of an already shared, immutable range, retaining its
+    /// backing allocation directly. An owning buffer returns `None`: a
+    /// borrowed `&Buffer` cannot extend an unshared allocation's lifetime.
+    ///
+    /// # Safety
+    /// As for [`Self::shared_slice`], the range must be initialized and
+    /// remain immutable until all stream-ordered reads of the result finish.
+    pub unsafe fn shared_subrange(&self, offset: usize, len: usize) -> Result<Option<Self>> {
+        if offset.checked_add(len).is_none_or(|end| end > self.len) {
+            return Err("shared subrange exceeds initialized range".into());
+        }
+        // The parent already validated its extent. Compose offsets without
+        // retaining the intermediate view, including for a typed owner.
+        let storage = match &self.storage {
+            Storage::Owned(_) => return Ok(None),
+            Storage::Slice(owner, start) => Storage::Slice(owner.clone(), *start + offset),
+            Storage::Cast { owner, ptr, allocation_bytes } => Storage::Cast {
+                owner: owner.clone(),
+                ptr: *ptr + (offset * size_of::<T>()) as u64,
+                allocation_bytes: *allocation_bytes,
+            },
+        };
+        Ok(Some(Self { storage, pool: self.pool.clone(), len, marker: PhantomData }))
     }
     pub fn ptr(&self) -> *mut T {
         self.cu_deviceptr() as *mut T
     }
     pub fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
-        match &self.owner {
-            Some(owner) => owner.cu_deviceptr() + (self.offset * std::mem::size_of::<T>()) as u64,
-            None => self.block.as_ref().unwrap().cu_deviceptr(),
+        match &self.storage {
+            Storage::Owned(block) => block.as_ref().unwrap().cu_deviceptr(),
+            Storage::Slice(owner, offset) => owner.cu_deviceptr() + (offset * size_of::<T>()) as u64,
+            Storage::Cast { ptr, .. } => *ptr,
         }
     }
     pub fn len(&self) -> usize {
@@ -356,9 +546,10 @@ impl<T: DeviceCopy> Buffer<T> {
     /// range. Aliases report the same backing bytes and must not be summed
     /// without deduplicating owners. Pool alignment is not included.
     pub fn allocated_bytes(&self) -> usize {
-        match &self.owner {
-            Some(owner) => owner.allocated_bytes(),
-            None => self.block.as_ref().unwrap().size(),
+        match &self.storage {
+            Storage::Owned(block) => block.as_ref().unwrap().size(),
+            Storage::Slice(owner, _) => owner.allocated_bytes(),
+            Storage::Cast { allocation_bytes, .. } => *allocation_bytes,
         }
     }
     pub fn num_bytes(&self) -> usize {
@@ -398,7 +589,8 @@ impl<T: DeviceCopy> Buffer<T> {
 }
 impl<T: DeviceCopy> Drop for Buffer<T> {
     fn drop(&mut self) {
-        if let Some(block) = self.block.take() {
+        if let Storage::Owned(block) = &mut self.storage {
+            let block = block.take().expect("owned device allocation");
             // This owner is the unique holder of the affine allocation token.
             // All library uses are ordered on the retained stream.
             if let Err(rccl_memory::MemoryError::Driver(error)) =
@@ -431,6 +623,31 @@ unsafe impl<T: DeviceCopy> ContiguousDeviceRange<T> for Buffer<T> {
         if stream.cu_stream() != self.pool.stream().cu_stream() {
             return Err(rccl_memory::MemoryError::StreamMismatch);
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_subrange_respects_the_published_extent() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let owner = Arc::new(Buffer::from_host(pool, &[2u64, 3, 5, 7, 11])?);
+        // SAFETY: no more writes to any of the initialized elements.
+        let tail = unsafe {
+            assert!(owner.shared_subrange(0, 5)?.is_none());
+            let view = Buffer::shared_slice(owner.clone(), 1, 3)?;
+            assert!(view.shared_subrange(2, 2).is_err());
+            assert!(view.shared_subrange(usize::MAX, 1).is_err());
+            assert!(view.shared_subrange(3, 0)?.unwrap().is_empty());
+            view.shared_subrange(1, 2)?.unwrap()
+        };
+        assert_eq!(tail.cu_deviceptr(), owner.cu_deviceptr() + 2 * size_of::<u64>() as u64);
+        assert_eq!(tail.allocated_bytes(), owner.allocated_bytes());
+        drop(owner);
+        assert_eq!(tail.to_host()?, [5, 7]);
         Ok(())
     }
 }

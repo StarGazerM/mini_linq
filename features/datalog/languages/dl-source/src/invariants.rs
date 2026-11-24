@@ -1,49 +1,9 @@
 //! Independent checking and erasure of bounded frozen-filter certificates.
+//! DESIGN contract7-invariant-projection
+//! Contract 7, doc/PLANNING-REDESIGN.md and DL-InvariantProjection:
+//! helpers project relational variables; DL-AnswerOwnership owns realization.
+//! DO NOT choose copy syntax from host types or recognize Rust copy expressions.
 use super::*;
-
-/// Ownership spelling of a projected declared column, not a target rewrite.
-/// Primitive Copy scalars use the same dereference as authored Datalog heads;
-/// generic columns retain the ordinary value-preserving Clone requirement.
-pub fn owned_column(variable: &Ident, ty: &syn::Type) -> Expr {
-    fn primitive(ty: &syn::Type, names: &[&str]) -> bool {
-        let syn::Type::Path(path) = ty else {
-            return false;
-        };
-        if path.qself.is_some() || path.path.segments.iter().any(|s| !s.arguments.is_empty()) {
-            return false;
-        }
-        let segments = &path.path.segments;
-        let canonical_path = segments.len() == 1
-            || (segments.len() == 3
-                && (segments[0].ident == "std" || segments[0].ident == "core")
-                && segments[1].ident == "primitive");
-        canonical_path
-            && segments
-                .last()
-                .is_some_and(|s| names.iter().any(|name| s.ident == *name))
-    }
-    let copy = match ty {
-        syn::Type::Paren(p) => return owned_column(variable, &p.elem),
-        syn::Type::Group(g) => return owned_column(variable, &g.elem),
-        syn::Type::Reference(r) => {
-            r.mutability.is_none()
-                && r.lifetime.as_ref().is_some_and(|l| l.ident == "static")
-                && primitive(&r.elem, &["str"])
-        }
-        _ => primitive(
-            ty,
-            &[
-                "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128",
-                "usize", "bool", "char",
-            ],
-        ),
-    };
-    if copy {
-        syn::parse_quote!(*#variable)
-    } else {
-        syn::parse_quote!((*#variable).clone())
-    }
-}
 
 /// Erase helpers and restore the certified source rules. Callers must check first.
 pub fn erase(program: &Program) -> syn::Result<Program> {
@@ -61,9 +21,15 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
         )?;
         original.rules[entry.rule] = entry.source.clone();
     }
-    original
+    let kept: Vec<_> = original
         .rules
-        .retain(|q| !helpers.contains(&symbol_name(&q.head.relation)));
+        .iter()
+        .map(|q| !helpers.contains(&symbol_name(&q.head.relation)))
+        .collect();
+    let mut keep = kept.iter().copied();
+    original.rules.retain(|_| keep.next().unwrap_or(true));
+    let mut keep = kept.iter().copied();
+    original.labels.retain(|_| keep.next().unwrap_or(true));
     original
         .declarations
         .retain(|d| !helpers.contains(&symbol_name(&d.name)));
@@ -103,11 +69,16 @@ pub fn check(program: &Program) -> syn::Result<()> {
                     || (i != head && !analysis.graph.reach[i][head])
             })
         };
-        let changing_positions: Vec<_> = entry.source.body.iter().enumerate()
+        let changing_positions: Vec<_> = entry
+            .source
+            .body
+            .iter()
+            .enumerate()
             .filter_map(|(i, item)| match item {
                 BodyItem::Positive { atom } if !frozen(&atom.relation) => Some(i),
                 _ => None,
-            }).collect();
+            })
+            .collect();
         ensure(
             !changing_positions.is_empty(),
             program,
@@ -160,14 +131,16 @@ pub fn check(program: &Program) -> syn::Result<()> {
             )?;
         }
         let input_decl = &original.declarations[analysis.positions[&symbol_name(&input.relation)]];
-        let expected_head: Vec<Expr> = input
+        // The helper records relational projection, not a Rust copy expression.
+        // DL-AnswerOwnership realizes the declared-owned result downstream.
+        // Formal rule DL-InvariantProjection: preserve positive-input variables
+        // in column order, as relational head variables rather than Rust copies.
+        let expected_head = input
             .args
             .iter()
-            .zip(input_decl.columns.iter())
-            .filter_map(|(arg, column)| rust::variable(arg).map(|v| owned_column(v, &column.ty)))
-            .collect();
+            .filter(|arg| rust::variable(arg).is_some());
         ensure(
-            definition.head.args.iter().eq(expected_head.iter()),
+            definition.head.args.iter().eq(expected_head),
             program,
             "invariant must preserve all positive bindings",
         )?;
@@ -231,9 +204,7 @@ pub fn check(program: &Program) -> syn::Result<()> {
             }
         }
         ensure(
-            changing_positions
-                .iter()
-                .any(|&i| i < first)
+            changing_positions.iter().any(|&i| i < first)
                 && names.iter().any(|v| prior.contains(v)),
             program,
             "invariant must be a keyed side after a changing driver",
@@ -277,8 +248,9 @@ pub fn check(program: &Program) -> syn::Result<()> {
             .zip(input_decl.columns.iter())
             .filter_map(|(arg, col)| {
                 rust::variable(arg).map(|var| {
-                    let ty = &col.ty;
-                    quote!(#var: #ty)
+                    let mut column = col.clone();
+                    column.name = var.clone();
+                    column
                 })
             })
             .collect();

@@ -13,6 +13,7 @@ syn.workspace = true
 
 [dev-dependencies]
 cq-testkit.workspace = true
+cq-order.workspace = true
 cq-syntax.workspace = true
 
 quote.workspace = true

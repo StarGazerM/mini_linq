@@ -1,8 +1,8 @@
 //! Compile-time separation of uninstrumented timing and counted execution.
 #[cfg(feature = "counters")]
-pub use cq_storage::counters::{DistinctSet as Dedup, HashMap, Snapshot, reset, snapshot};
+pub use cq_storage::counters::{HashMap, Snapshot, reset, snapshot};
 #[cfg(not(feature = "counters"))]
-pub use std::collections::{HashMap, HashSet as Dedup};
+pub use std::collections::HashMap;
 #[cfg(not(feature = "counters"))]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Snapshot {

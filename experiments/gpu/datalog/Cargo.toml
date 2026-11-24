@@ -8,6 +8,7 @@ cq-lang-datalog-storage = { path = "../../../features/datalog/languages/dl-stora
 cq-lang-datalog-round = { path = "../../../features/datalog/languages/dl-round" }
 cq-datalog-print = { path = "../../../features/datalog/print" }
 cq-datalog-support = { path = "../../../features/datalog/support" }
+cq-gpu-sequence-core = { path = "../sequence/core" }
 cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
 cq-stage = { path = "../../../facade/cq-stage" }
 cq-syntax = { path = "../../../languages/cq-syntax" }

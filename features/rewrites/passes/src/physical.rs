@@ -8,6 +8,12 @@ use cq_structure_selection::arguments::Results;
 /// Replace selected probes with merges when each side already supplies order
 /// through a retained result, reusable host, or same-key merge stream. Modes
 /// are never changed. Native host reads retain rustc's OrderedRead obligation.
+///
+/// Formal rule EXT-MergeRetained: a `let` side is retained storage unless it
+/// is a canon result with one unkeyed reader. PH-Canon stores such a result
+/// only in its canonical index, whose rows move by value into that reader
+/// (STR-RowsByValue); it is a canonical stream, as a canon pipe was, and a
+/// merge on it would add an ordered index the probe does not need.
 pub fn merge_joins(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let facts = ir::contract::check(source)?;
     let selected = Results::parse(arguments)?;
@@ -30,22 +36,19 @@ pub fn merge_joins(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             continue;
         };
         let columns = sorted(&key.columns);
+        let retained = |name: &str| {
+            facts.modes[name] != ModeKind::Pipe
+                && !(facts.canon.contains(name)
+                    && facts.readers.get(name) == Some(&1)
+                    && facts.keyed_reads.get(name).is_none_or(Vec::is_empty)
+                    && facts.merge_reads.get(name).is_none_or(Vec::is_empty))
+        };
         let admissible = !columns.is_empty()
             && [&key.left, &key.right].iter().all(|side| {
                 let name = symbol_name(side);
-                facts.modes[&name] != ModeKind::Pipe
+                retained(&name)
                     || facts.hosts.contains_key(&name)
                     || ordered.get(&name) == Some(&columns)
-            })
-            && columns.iter().all(|column| {
-                let ident = syn::Ident::new(column, definition.name.span());
-                [&key.left, &key.right].iter().all(|side| {
-                    ir::syntax::algebra::check_ord_type(
-                        &facts.rows[&symbol_name(side)].types[column],
-                        &ident,
-                    )
-                    .is_ok()
-                })
             });
         if admissible {
             let name = symbol_name(&definition.name);
@@ -69,38 +72,29 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     let selected = Results::parse(arguments)?;
     let mut target = source.clone();
     let mut matched = BTreeSet::new();
-    let mut unique = BTreeMap::<String, Vec<String>>::new();
-    for definition in &mut target.program.definitions {
+    let mut added = Vec::with_capacity(source.program.definitions.len());
+    ir::uniqueness(source, &facts.headings, &facts.disjoint, |definition, inherited| {
         let name = symbol_name(&definition.name);
-        let heading = facts.headings[&name].clone();
-        let inherited = ir::inherited_key(
-            &definition.operator,
-            &heading,
-            &target.program.host_sets,
-            |id| unique.get(&symbol_name(id)).cloned(),
-        );
+        let heading = &facts.headings[&name];
+        let mut add = false;
         if selected.includes(&definition.name) {
             if let Operator::Project(p) = &definition.operator {
                 if heading.len() < facts.headings[&symbol_name(&p.input)].len() {
-                    let admissible = inherited.is_some()
-                        || heading.iter().all(|column| {
-                            ir::syntax::algebra::check_leibniz_type(
-                                &facts.rows[&name].types[column],
-                                &facts.rows[&name].bindings[column],
-                            )
-                            .is_ok()
-                        });
-                    if admissible {
-                        matched.insert(name.clone());
-                        if inherited.is_none() {
-                            definition.canon = Some(Default::default());
-                        }
+                    matched.insert(name);
+                    if inherited.is_none() {
+                        add = true;
                     }
                 }
             }
         }
-        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then_some(heading)) {
-            unique.insert(name, key);
+        added.push(add);
+        definition.canon.is_some() || add
+    });
+    for (definition, add) in target.program.definitions.iter_mut().zip(added) {
+        if add {
+            definition.canon = Some(Default::default());
+            // PH-Canon: a canon result is stored in its canonical index.
+            definition.mode = ir::Mode::Let(Default::default());
         }
     }
     selected.require_matches(&matched)?;
@@ -108,58 +102,265 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     Ok(target)
 }
 
-/// Expose binary intersections by hoisting independent relational definitions
-/// before their candidate probe, then record smallest. Rust nodes stay pinned.
-/// Admissibility and correspondence belong to the public language checks.
-/// In bag semantics, choosing a membership intersection also requires checked
-/// host_set facts (or derived keys) on candidate sources: multiplicities cannot
-/// be discarded. This language currently denotes Set; K-relation gating is separate.
+/// Expose k-way intersections by hoisting independent relational definitions
+/// before their candidate probe. Empty/all/result advice retains its existing
+/// meaning; `smallest(r0, r1, ...)` selects one exact definition-name site.
+/// Admissibility and correspondence belong to the public Physical Set law.
 pub fn smallest_intersections(
     source: &ir::Program,
     arguments: TokenStream,
 ) -> syn::Result<ir::Program> {
     let facts = ir::contract::check(source)?;
-    let selected = Results::parse(arguments)?;
-    let mut target = source.clone();
+    let selection: SmallestSelection = syn::parse2(arguments)?;
+    let definitions = &source.program.definitions;
+    let mut plans = Vec::new();
     let mut matched = BTreeSet::new();
-    // Visit source names, rather than positions that change during hoisting,
-    // so independent candidate pairs in a moved interval are still visited.
-    for definition in &source.program.definitions {
-        if !selected.includes(&definition.name)
-            || !matches!(definition.operator, Operator::Probe(..))
-        {
+    let mut site_matches = match &selection {
+        SmallestSelection::Sites(sites) => vec![0; sites.len()],
+        SmallestSelection::Results(_) => Vec::new(),
+    };
+    for (position, first) in definitions.iter().enumerate() {
+        if !matches!(first.operator, Operator::Probe(..)) {
             continue;
         }
-        let name = symbol_name(&definition.name);
-        let definitions = &mut target.program.definitions;
-        let position = definitions
-            .iter()
-            .position(|d| symbol_name(&d.name) == name)
-            .expect("rewrite retains every result");
-        let Some(offset) = definitions[position + 1..].iter().position(|check| {
-            ir::binary_intersection(&definitions[position], check, &facts).is_some()
-        }) else {
+        let mut chain = vec![position];
+        loop {
+            let previous = *chain.last().unwrap();
+            let Some(next) = (previous + 1..definitions.len()).find(|&next| {
+                ir::intersection_extension(
+                    first,
+                    &definitions[previous],
+                    &definitions[next],
+                    &facts,
+                )
+                .is_some()
+                    || matches!(selection, SmallestSelection::Sites(_))
+                        && ir::intersection_key_projection(
+                            first,
+                            &definitions[previous],
+                            &definitions[next],
+                            &facts,
+                        )
+            }) else {
+                break;
+            };
+            if !definitions[previous + 1..next].iter().all(|definition| {
+                chain.iter().all(|&member| {
+                    independent_relational(
+                        &definition.operator,
+                        &symbol_name(&definitions[member].name),
+                    )
+                })
+            }) {
+                break;
+            }
+            chain.push(next);
+        }
+        if chain.len() < 2 {
             continue;
+        }
+        let selected = match &selection {
+            SmallestSelection::Results(results) => results.includes(&first.name),
+            SmallestSelection::Sites(sites) => {
+                let origins: Option<BTreeSet<_>> = chain
+                    .iter()
+                    .map(|&index| {
+                        let (Operator::Probe(_, key) | Operator::Semi(_, key)) =
+                            &definitions[index].operator
+                        else {
+                            unreachable!()
+                        };
+                        provider_definition(definitions, &key.right)
+                    })
+                    .collect();
+                let mut selected = false;
+                for (index, site) in sites.iter().enumerate() {
+                    if origins.as_ref() == Some(site) && site.len() == chain.len() {
+                        site_matches[index] += 1;
+                        selected = true;
+                    }
+                }
+                selected
+            }
         };
-        let check_position = position + 1 + offset;
-        if !definitions[position + 1..check_position]
-            .iter()
-            .all(|d| independent_relational(&d.operator, &name))
-        {
-            continue;
-        }
-        // The source is topological. Preserving the interval's order and
-        // excluding references to the candidate also preserves its transitive
-        // dependencies. This interval contains no Rust node to move across.
-        definitions[position..check_position].rotate_left(1);
-        if let Operator::Probe(_, key) = &mut definitions[check_position - 1].operator {
-            key.choice = Some(Choice::Smallest(Default::default()));
-            matched.insert(name);
+        if selected {
+            matched.insert(symbol_name(&first.name));
+            plans.push(chain);
         }
     }
-    selected.require_matches(&matched)?;
+    match &selection {
+        SmallestSelection::Results(results) => results.require_matches(&matched)?,
+        SmallestSelection::Sites(sites) => {
+            for (site, count) in sites.iter().zip(site_matches) {
+                if count != 1 {
+                    return Err(syn::Error::new(
+                        proc_macro2::Span::call_site(),
+                        format!(
+                            "smallest({}) must identify exactly one admissible complete intersection site; matched {count}",
+                            site.iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    let mut target = source.clone();
+    for chain in plans {
+        let first_name = &definitions[chain[0]].name;
+        for pair in chain.windows(2) {
+            let member = &definitions[pair[1]];
+            if ir::intersection_extension(
+                &definitions[chain[0]],
+                &definitions[pair[0]],
+                member,
+                &facts,
+            )
+            .is_some()
+            {
+                continue;
+            }
+            let Operator::Semi(_, key) = &member.operator else {
+                unreachable!("only membership sides need a key projection");
+            };
+            let mut suffix = 0;
+            let view = loop {
+                let name = syn::Ident::new(
+                    &format!("__cq_smallest_{}_{}", member.name, suffix),
+                    member.name.span(),
+                );
+                if !target.program.definitions.iter().any(|d| d.name == name) {
+                    break name;
+                }
+                suffix += 1;
+            };
+            let provider = &key.right;
+            let columns = key.columns.iter();
+            let projection: ir::Definition =
+                syn::parse_quote!(#view = let project #provider keep {#(#columns),*};);
+            let position = target
+                .program
+                .definitions
+                .iter()
+                .position(|d| d.name == member.name)
+                .unwrap();
+            let Operator::Semi(_, key) = &mut target.program.definitions[position].operator else {
+                unreachable!("source membership preserved");
+            };
+            key.right = view;
+            target.program.definitions.insert(position, projection);
+        }
+        for (length, &next) in chain.iter().enumerate().skip(1) {
+            let start = target
+                .program
+                .definitions
+                .iter()
+                .position(|d| &d.name == first_name)
+                .unwrap();
+            let end = target
+                .program
+                .definitions
+                .iter()
+                .position(|d| d.name == definitions[next].name)
+                .unwrap();
+            // Stable hoisting preserves the source's topological order. No
+            // interval contains Rust or references to an intersection result.
+            target.program.definitions[start..end].rotate_left(length);
+        }
+        let first = target
+            .program
+            .definitions
+            .iter_mut()
+            .find(|d| &d.name == first_name)
+            .unwrap();
+        if let Operator::Probe(_, key) = &mut first.operator {
+            key.choice = Some(Choice::Smallest(Default::default()));
+        }
+    }
     ir::check_rewrite(source, &target)?;
     Ok(target)
+}
+
+type DefinitionSite = BTreeSet<String>;
+
+enum SmallestSelection {
+    Results(Results),
+    Sites(Vec<DefinitionSite>),
+}
+
+impl syn::parse::Parse for SmallestSelection {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        use syn::{Ident, Token};
+        let fork = input.fork();
+        let is_site = fork.parse::<Ident>().is_ok() && fork.peek(syn::token::Paren);
+        if !is_site {
+            return input.parse().map(Self::Results);
+        }
+        let mut sites = Vec::new();
+        while !input.is_empty() {
+            let name: Ident = input.parse()?;
+            if name != "smallest" {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "expected smallest(r0, r1, ...)",
+                ));
+            }
+            let content;
+            syn::parenthesized!(content in input);
+            let mut site = BTreeSet::new();
+            while !content.is_empty() {
+                let definition: Ident = content.parse()?;
+                if !site.insert(symbol_name(&definition)) {
+                    return Err(syn::Error::new_spanned(
+                        definition,
+                        "duplicate smallest definition",
+                    ));
+                }
+                if !content.is_empty() {
+                    content.parse::<Token![,]>()?;
+                }
+            }
+            if site.len() < 2 {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "smallest requires at least two distinct definitions",
+                ));
+            }
+            if sites.contains(&site) {
+                return Err(syn::Error::new_spanned(name, "duplicate smallest site"));
+            }
+            sites.push(site);
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self::Sites(sites))
+    }
+}
+
+/// Follow unary inputs to their Physical rename definition.
+fn provider_definition(
+    definitions: &[ir::Definition],
+    result: &syn::Ident,
+) -> Option<String> {
+    let mut result = result;
+    loop {
+        let definition = definitions
+            .iter()
+            .find(|definition| &definition.name == result)?;
+        result = match &definition.operator {
+            Operator::Rename(_) => {
+                return Some(symbol_name(&definition.name));
+            }
+            Operator::Project(project) => &project.input,
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                &select.input
+            }
+            _ => return None,
+        };
+    }
 }
 
 fn independent_relational(operator: &Operator, candidate: &str) -> bool {
@@ -316,56 +517,6 @@ pub fn hoist(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Pr
         .program
         .definitions
         .sort_by_key(|definition| !closure.contains(&symbol_name(&definition.name)));
-    ir::check_rewrite(source, &target)?;
-    Ok(target)
-}
-
-/// Record checked full-heading host sets, then remove only canon boundaries
-/// already implied by the resulting keys. Arguments name host relations.
-pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    use syn::parse::Parser;
-    let relations = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated
-        .parse2(arguments)?;
-    if relations.is_empty() {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "host_sets requires host relation names",
-        ));
-    }
-    let facts = ir::contract::check(source)?;
-    let mut target = source.clone();
-    for relation in relations {
-        if !target.program.host_is_set(&relation) {
-            target.program.host_sets.push(ir::HostSet {
-                host_set_token: Default::default(),
-                relation,
-                discharged: None,
-                semi_token: Default::default(),
-            });
-        }
-    }
-    ir::contract::check(&target)?;
-    let mut keys = BTreeMap::<String, Vec<String>>::new();
-    for definition in &mut target.program.definitions {
-        let name = symbol_name(&definition.name);
-        let heading = &facts.headings[&name];
-        let inherited = ir::inherited_key(
-            &definition.operator,
-            heading,
-            &target.program.host_sets,
-            |id| keys.get(&symbol_name(id)).cloned(),
-        );
-        if inherited.is_some() {
-            definition.canon = None;
-        }
-        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then(|| heading.clone()))
-        {
-            keys.insert(name, key);
-        }
-    }
-    if keys.contains_key(&symbol_name(&target.program.returned)) {
-        target.program.return_canon = None;
-    }
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

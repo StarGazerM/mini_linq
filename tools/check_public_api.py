@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare reviewed core API snapshots with rustdoc JSON (pinned toolchain).
+"""Compare reviewed compiler/runtime/IO APIs with rustdoc JSON (pinned toolchain).
 
 Run --update only while reviewing an intentional API change. CI/default mode
 never overwrites snapshots. IDs, spans, documentation and bodies are excluded;
@@ -83,7 +83,9 @@ def snapshot(data):
             return {k:normalize(v,k) for k,v in sorted(value.items())
                 if k not in {"span","docs","links","impls","implementations","has_body","body"}}
         if isinstance(value,list):
-            if key in {"items","fields","variants"}:return [reference(v) if v is not None else None for v in value]
+            if key in {"items","fields","variants"} or (
+                key == "tuple" and all(v is None or isinstance(v, (int, str)) for v in value)
+            ):return [reference(v) if v is not None else None for v in value]
             return [normalize(v) for v in value]
         if key=="id":return reference(value)
         if key=="value" and isinstance(value,str):return value
@@ -117,7 +119,9 @@ def snapshot(data):
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--update",action="store_true");args=parser.parse_args()
     data=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version=1","--locked"],cwd=ROOT))
-    packages=sorted(p["name"] for p in data["packages"] if Path(p["manifest_path"]).parent.parent.name in {"languages","passes","runtime","facade","testkit"})
+    core_directories = {ROOT / folder for folder in ("languages", "passes", "runtime", "io", "facade", "testkit")}
+    packages=sorted(p["name"] for p in data["packages"]
+                    if Path(p["manifest_path"]).parent.parent in core_directories)
     env=os.environ.copy();env["RUSTC_BOOTSTRAP"]="1"
     logdir=ROOT/"target/public-api-logs";logdir.mkdir(parents=True,exist_ok=True)
     # cargo rustdoc supports a single package; reuse artifacts between packages.

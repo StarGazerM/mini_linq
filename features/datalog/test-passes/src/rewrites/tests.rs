@@ -121,10 +121,14 @@ fn storage_alternative_fixture_and_binding_mutations() {
         relation: syn::parse_quote!(E),
         columns: vec![1, 0],
         key: 0,
-        provider: syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>),
+        provider: syn::parse_quote!(@hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>),
+        hasher: storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(admitted_rows),
+        protocol: storage::LayoutProtocol::GroupedMap,
     });
-    expected.reads[0].index = 1;
+    // E's scan and R's identity canonical layout precede the added layout.
+    assert_eq!(source.layouts.len(), 2);
+    expected.reads[0].index = 2;
     expected.reads[0].columns = vec![1, 0];
     // Storage's alpha map evaluates the embedded Incremental program.
     let reference = crate::reference_incremental::emit(&source.incremental).unwrap();
@@ -136,12 +140,12 @@ fn storage_alternative_fixture_and_binding_mutations() {
         mutations: vec![
             Box::new(|p: &storage::Program| {
                 let mut p = p.clone();
-                p.layouts[1].key = 1;
+                p.layouts[2].key = 1;
                 p
             }),
             Box::new(|p: &storage::Program| {
                 let mut p = p.clone();
-                p.layouts[1].columns = vec![0, 0];
+                p.layouts[2].columns = vec![0, 0];
                 p
             }),
             Box::new(|p: &storage::Program| {

@@ -288,12 +288,16 @@ fn rename_body(
                     }
                 }
             }
-            BodyItem::Constraint(constraint) => constraint.map_terms(&mut |term| {
-                if let cq_syntax::constraint::Term::Variable(id) = term {
+            BodyItem::Constraint(constraint) => constraint.map_terms(&mut |term| match term {
+                cq_syntax::constraint::Term::Variable(id) => {
                     if let Some(new) = names.get(&symbol_name(id)) {
                         *id = new.clone();
                     }
                 }
+                cq_syntax::constraint::Term::Closed(expression) => {
+                    rename_expression(expression, names, &bound);
+                }
+                cq_syntax::constraint::Term::Literal(_) => {}
             }),
             BodyItem::Block(block) => {
                 let interface = block.analyze(&bound.keys().cloned().collect()).interface;

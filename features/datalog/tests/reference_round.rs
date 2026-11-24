@@ -29,36 +29,36 @@ fn nonlinear_rounds_follow_permuted_layouts_and_later_direct_deltas() {
 
 #[test]
 fn borrowed_filtered_keys_preserve_native_owned_rust_and_push_interfaces() {
-    let names = [
-        ("alice".to_owned(),),
-        ("bob".to_owned(),),
-        ("alice".to_owned(),),
-    ];
+    // Names are borrowed non-Copy keys; `repeat` computes an owned value from
+    // the borrowed key. Kinds are dictionary codes compared with a literal.
+    let (alice, bob) = (vec![1_i64], vec![2_i64]);
+    let kinds = cq_load::StringDictionary::new(["blocked", "other"]);
+    let names = [(alice.clone(),), (bob.clone(),), (alice.clone(),)];
     let blocked = [
-        ("blocked".to_owned(), "bob".to_owned()),
-        ("other".to_owned(), "alice".to_owned()),
+        (cq_storage::domain::exact(&kinds, "blocked"), bob),
+        (cq_storage::domain::exact(&kinds, "other"), alice),
     ];
     let result = cq_datalog::datalog! {
         pipeline {
-            cq = pipeline { print = ::cq_datalog::passes::print_push; };
+            cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; };
             print = cq_datalog_test_passes::eval_round;
         }
         struct Names;
-        relation Name(name:String) = (&names);
-        relation Blocked(kind:String,name:String) = (&blocked);
-        relation Allowed(name:String,n:i32);
+        relation Name(name:Vec<i64>) = (&names);
+        relation Blocked(kind:cq_load::StringCode in (kinds),name:Vec<i64>) = (&blocked);
+        relation Allowed(name:Vec<i64>,n:i32);
         output Allowed;
         Allowed(owned.clone(), n) :- Name(name), !Blocked("blocked",name),
-            let owned = name.to_uppercase(), for n in 0_i32..2;
-        Allowed(name.clone(), *n + 1) :- Allowed(name,n), if *n < 3;
+            let owned = name.repeat(2), for n in 0_i32..2;
+        Allowed(name.clone(), *n + 1) :- Allowed(name,n), where n < 3;
     };
     assert_eq!(
         result,
         HashSet::from([
-            ("ALICE".to_owned(), 0),
-            ("ALICE".to_owned(), 1),
-            ("ALICE".to_owned(), 2),
-            ("ALICE".to_owned(), 3),
+            (vec![1_i64, 1], 0),
+            (vec![1_i64, 1], 1),
+            (vec![1_i64, 1], 2),
+            (vec![1_i64, 1], 3),
         ])
     );
 }
@@ -79,7 +79,7 @@ fn component_publication_retains_mutual_deltas_and_empty_negation_keys() {
             relation Allowed(n:i32);
             output A, B, Allowed;
             A(*n) :- Seed(n);
-            B(*n + 1) :- A(n), if *n < 3;
+            B(*n + 1) :- A(n), where n < 3;
             A(*n) :- B(n);
             Allowed(*n) :- A(n), !Blocked(_);
         };
@@ -130,7 +130,7 @@ fn surface_if_let_reaches_recorded_native_generators() {
         relation Input(value:Option<i32>) = (&values);
         relation Out(value:i32);
         output Out;
-        Out(n) :- Input(value), if let Some(n) = *value, if n > 2;
+        Out(n) :- Input(value), if let Some(n) = *value, where n > 2;
     };
     assert_eq!(result, HashSet::from([(5,)]));
 }

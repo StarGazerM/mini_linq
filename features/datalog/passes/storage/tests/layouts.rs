@@ -48,6 +48,9 @@ fn delta_binds_only_at_its_written_positive_position() {
         ]
     );
     assert_eq!(target.incremental.variants[1].delta, Some(1));
+    // Existing all-column-keyed reads are the canonical layouts; none is added.
+    let canonical: Vec<_> = target.providers.iter().map(|p| p.canonical).collect();
+    assert_eq!(canonical, [2, 1, 3]);
     check(&strata, &target).unwrap();
     let mut wrong = target.clone();
     wrong.layouts[0].columns = vec![1, 0, 2];
@@ -86,8 +89,11 @@ fn constants_are_keys_but_wildcards_repeats_and_lets_do_not_prebind_variables() 
             ("E".into(), vec![0, 1, 2], 3),
             ("E".into(), vec![1, 0, 2], 1),
             ("E".into(), vec![2, 0, 1], 1),
+            ("A".into(), vec![0], 1),
         ]
     );
+    let canonical: Vec<_> = target.providers.iter().map(|p| p.canonical).collect();
+    assert_eq!(canonical, [1, 4]);
     contract::check(&target).unwrap();
 }
 
@@ -110,6 +116,9 @@ fn disconnected_full_reads_are_scans_and_negative_reads_have_separate_policy() {
             ("E".into(), vec![0], 0),
             ("A".into(), vec![0], 0),
             ("F".into(), vec![0], 0),
+            ("Blocked".into(), vec![0], 1),
+            ("A".into(), vec![0], 1),
+            ("B".into(), vec![0], 1),
         ]
     );
     assert_eq!(&target.policy.negation_keys, "borrowed");
@@ -128,7 +137,14 @@ fn independent_strata_and_empty_idbs_are_explicit() {
     assert_eq!(strata.strata.components.len(), 2);
     assert_eq!(target.incremental.deltas.len(), 2);
     assert_eq!(target.incremental.variants.len(), 1);
-    assert_eq!(choices(&target), vec![("E".into(), vec![0], 0)]);
+    assert_eq!(
+        choices(&target),
+        vec![
+            ("E".into(), vec![0], 0),
+            ("A".into(), vec![0], 1),
+            ("Empty".into(), vec![0], 1),
+        ]
+    );
 }
 
 #[test]
@@ -172,10 +188,54 @@ fn delta_demands_cover_constants_later_scans_and_shared_mixed_keys_exactly() {
             ("R".into(), vec![0, 1, 2], 2)
         ]
     );
-    assert_eq!(choices(&target), vec![("E".into(), vec![0, 1, 2], 0)]);
+    assert_eq!(
+        choices(&target),
+        vec![
+            ("E".into(), vec![0, 1, 2], 0),
+            ("R".into(), vec![0, 1, 2], 3),
+        ]
+    );
     let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(target, replay);
     check(&source, &replay).unwrap();
+}
+#[test]
+fn inputs_get_an_all_column_layout_only_when_returned_or_negated() {
+    let (_, target) = scheduled(syn::parse_quote! {
+        struct Inputs;
+        relation Read(x:i32,y:i32) = (read);
+        relation Returned(x:i32,y:i32) = (returned);
+        relation Negated(x:i32,y:i32) = (negated);
+        relation Unread(x:i32,y:i32) = (unread);
+        relation R(x:i32,y:i32);
+        output R, Returned;
+        R(*x,*y) :- Read(x,y), Returned(y,z), !Negated(x,y);
+    });
+    assert_eq!(
+        choices(&target),
+        vec![
+            ("Read".into(), vec![0, 1], 0),
+            ("Returned".into(), vec![0, 1], 1),
+            ("Returned".into(), vec![0, 1], 2),
+            ("Negated".into(), vec![0, 1], 2),
+            ("Unread".into(), vec![0, 1], 0),
+            ("R".into(), vec![0, 1], 2),
+        ]
+    );
+    // A read-only input names its read layout; no membership layout is added.
+    let canonical: Vec<_> = target.providers.iter().map(|p| p.canonical).collect();
+    assert_eq!(canonical, [0, 2, 3, 4, 5]);
+    let changes: &[fn(&mut Program)] = &[
+        // A returned input must be enumerated through an all-column key.
+        |p| p.providers[1].canonical = 1,
+        // A canonical layout belongs to its own relation.
+        |p| p.providers[0].canonical = 4,
+    ];
+    for change in changes {
+        let mut changed = target.clone();
+        change(&mut changed);
+        assert!(contract::check(&changed).is_err());
+    }
 }
 #[test]
 fn insertion_negation_and_read_semantics_are_checked() {
@@ -208,37 +268,38 @@ fn default_providers_record_concrete_types_in_declaration_order() {
     });
     let expected: Vec<cq_lang_datalog_storage::Providers> = vec![
         syn::parse_quote! {
-            canonical_name { Canonical }
-            canonical_set { ::std::collections::HashSet<R, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>> }
-            all { ::std::vec::Vec<(i32, u64,)> }
-            seen { ::cq_storage::HashSet<(i32, u64,)> }
-            delta { ::std::vec::Vec<(i32, u64,)> }
-            next { ::std::vec::Vec<(i32, u64,)> }
-            all_init { ::std::vec::Vec::new() }
+            canonical { 1 }
+            delta { @rows_vec as ::std::vec::Vec<(i32, u64,)> }
+            next { @rows_vec as ::std::vec::Vec<(i32, u64,)> }
             delta_init { ::std::vec::Vec::new() }
             next_init { ::std::vec::Vec::new() }
         },
         syn::parse_quote! {
-            canonical_name { Canonical }
-            canonical_set { ::cq_storage::HashSet<R> }
-            all { ::std::vec::Vec<(u64, i32,)> }
-            seen { ::std::collections::HashSet<(u64, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>> }
-            delta { ::std::vec::Vec<(u64, i32,)> }
-            next { ::std::vec::Vec<(u64, i32,)> }
-            all_init { ::std::vec::Vec::new() }
+            canonical { 2 }
+            delta { @rows_vec as ::std::vec::Vec<(u64, i32,)> }
+            next { @rows_vec as ::std::vec::Vec<(u64, i32,)> }
             delta_init { ::std::vec::Vec::new() }
             next_init { ::std::vec::Vec::new() }
         },
     ];
     assert_eq!(target.providers, expected);
-    let scan: syn::Type = syn::parse_quote!(
-        ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    let scan: cq_lang_datalog_storage::Provider = syn::parse_quote!(
+        @hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[0].provider, scan);
-    let lookup: syn::Type = syn::parse_quote!(
-        ::std::collections::HashMap<(i32, u64,), ::std::vec::Vec<()>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    assert_eq!(
+        target.layouts[0].protocol,
+        cq_lang_datalog_storage::LayoutProtocol::GroupedMap
+    );
+    // A full-key layout has no payload: it is a key set, not a map of `Vec<()>`.
+    let lookup: cq_lang_datalog_storage::Provider = syn::parse_quote!(
+        @hash_set as ::std::collections::HashSet<(i32, u64,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[1].provider, lookup);
+    assert_eq!(
+        target.layouts[1].protocol,
+        cq_lang_datalog_storage::LayoutProtocol::Set
+    );
     assert!(
         target
             .layouts
@@ -267,8 +328,10 @@ fn delta_driver_is_recorded_and_independently_checked() {
     };
     let strata = stratify::compile(&source).unwrap();
     let incremental = cq_datalog_incremental::compile_with_driver(
-        &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
-    ).unwrap();
+        &strata,
+        cq_datalog_incremental::DriverPolicy::DeltaFirst,
+    )
+    .unwrap();
     let target = cq_datalog_storage::compile(&incremental).unwrap();
     let variant = &target.incremental.variants[1];
     assert_eq!(variant.delta, Some(1));
@@ -276,7 +339,12 @@ fn delta_driver_is_recorded_and_independently_checked() {
     assert!(matches!(&variant.query.body[0], BodyItem::Positive { atom }
         if atom.relation == target.incremental.deltas[0].name));
     assert!(target.delta_layouts.is_empty());
-    assert!(target.to_token_stream().to_string().contains("delta 1 order [1 , 0]"));
+    assert!(
+        target
+            .to_token_stream()
+            .to_string()
+            .contains("delta 1 order [1 , 0]")
+    );
     let replay = syn::parse2(target.to_token_stream()).unwrap();
     check(&incremental, &replay).unwrap();
     let mut wrong = target.clone();
@@ -294,30 +362,60 @@ fn delta_driver_is_recorded_and_independently_checked() {
     let cpu = cq_datalog_incremental::compile(&strata).unwrap();
     assert_eq!(cpu.variants[1].order, [0, 1]);
     let mut wrong = target.clone();
-    let index = wrong.reads.iter().find(|read| read.variant == 1 && read.position == 1).unwrap().index;
+    let index = wrong
+        .reads
+        .iter()
+        .find(|read| read.variant == 1 && read.position == 1)
+        .unwrap()
+        .index;
     wrong.layouts[index].columns.swap(0, 1);
     assert!(contract::check(&wrong).is_err());
 }
 
 #[test]
-fn delta_driver_never_crosses_before_constraints() {
-    for clause in ["if *x > 0", "!Blocked(x)", "let copied = *x", "for copied in [*x]"] {
+fn delta_driver_can_cross_clauses_when_their_inputs_are_bound() {
+    for clause in [
+        "where x > 0",
+        "if *x > 0",
+        "!Blocked(x)",
+        "let copied = *x",
+        "for copied in [*x]",
+    ] {
         let source: source::Program = syn::parse_str(&format!(
-            "struct Barriers;
+            "struct Dependencies;
              relation E(x:i32) = (e);
              relation Blocked(x:i32) = (blocked);
              relation R(x:i32);
              output R;
              R(*x) :- E(x);
              R(*x) :- E(x), {clause}, R(x);"
-        )).unwrap();
+        ))
+        .unwrap();
         let strata = stratify::compile(&source).unwrap();
         let target = cq_datalog_incremental::compile_with_driver(
-            &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
-        ).unwrap();
+            &strata,
+            cq_datalog_incremental::DriverPolicy::DeltaFirst,
+        )
+        .unwrap();
         assert_eq!(target.variants[1].order, [0, 1, 2]);
-        let mut wrong = target.clone();
-        wrong.variants[1].order = vec![2, 1, 0];
-        assert!(incremental::contract::check(&wrong).unwrap_err().to_string().contains("Before"));
+        let mut reordered = target.clone();
+        let body = &target.variants[1].query.body;
+        reordered.variants[1].order = vec![2, 1, 0];
+        reordered.variants[1].query.body = [body[2].clone(), body[1].clone(), body[0].clone()]
+            .into_iter()
+            .collect();
+        incremental::contract::check(&reordered).unwrap();
+        let storage = cq_datalog_storage::compile(&reordered).unwrap();
+        check(&reordered, &storage).unwrap();
+
+        let mut unbound = target.clone();
+        unbound.variants[1].order = vec![1, 2, 0];
+        unbound.variants[1].query.body = [body[1].clone(), body[2].clone(), body[0].clone()]
+            .into_iter()
+            .collect();
+        assert!(
+            incremental::contract::check(&unbound).is_err(),
+            "clause must not precede every binder of x: {clause}"
+        );
     }
 }

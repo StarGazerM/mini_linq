@@ -1,0 +1,940 @@
+{
+ "version": 1,
+ "definitions": {
+  "interned-domain-capture": {
+   "kind": "intended",
+   "description": "InternedStrings/P5 S0 (A-Domain, IF-Capture): the hand-written `data.dictionaries.literal(col, s)` lets and their `__cq_parameter_N = &x` bindings are replaced by host-once A-Domain captures `let __cq_capture_N: StringCode = ::cq_storage::domain::exact(&(dictionaries.domain(col)), &(s)); let __cq_c_N = &__cq_capture_N;`; relational comparisons read __cq_c_N instead of __cq_parameter_N (renumbered); same codes, same predicates and operator order"
+  },
+  "interned-renumber": {
+   "kind": "refactor",
+   "description": "InternedStrings renumbering only: inserted capture bindings shift generated ordinals (__cq_parameter_N, __cq_rN_*, __cq_generated_N, ...); token streams equal modulo these ordinals"
+  },
+  "interned-h19-where": {
+   "kind": "intended",
+   "description": "P5 S0 retail_h19: the opaque Rust `if` over code lets becomes one relational `where` over A-Domain captures and closed Decimal bounds; the plan and realization change (selection before the part join, no part_key fallback HashIndex), measured by exactness and paired timing"
+  },
+  "interned-typed": {
+   "kind": "intended",
+   "description": "InternedStrings typed_* workloads: text columns are interned at load through a generated loader (`intern(.., &mut dictionaries)`) and decoded once at publication (`dictionaries.publish(col, code)`) instead of query-time `to_string`"
+  }
+ },
+ "rules": [
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "22313d17aa32e21e0f27731081a6733c3bcfac5977ce925a391f2ee69d2c656a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-renumber",
+   "hunk_sha256": "3979cf77d23cf253261b4d9ad8fef355cc27ee774fb39606b22f60117164fb1f",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "67c0385cb5998bfb7b418b74dff1847ec82e5a61b1467caa9551cceb16c61c2f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e59e63af41e8e55f4fd5e32789d48d122e513554a918946780cbfb9efbe4e2e1",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "e7536f5f2be593320d3c2b1e70f71cd5891f8fcf772b40848b9180c9c70d3d47",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e3d424604c5fe7d76e7ef8c7d8d47d5e60e0afcf71d190e90b12d2d8a3bbbf23",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "113d881eaec2bff593e5443caec6ae5d5c5663bed9cd38fb75326dbfadcf8363",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cccec66fc540b1bb82ea9d954f699f153c065a3dc2fecbd23abaa5f880e1630c",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "856eacc902259a810d2de7806e6bc2607a341951548a8e0e1bb5b6348dcf4e3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "c10e65c14a2241f9a3ae37725b7879df6a70770610ea5193dce461309fa7d6be",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "111d1dd83a5039cc1b77b04eb3de2b0f0933b78dfb53c691e1161afbb4af6d74",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "dab1f7b05c63d0bfc1161e19c75cc62dbb007ec563e2c67e422e2dd0168b6cac",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "22313d17aa32e21e0f27731081a6733c3bcfac5977ce925a391f2ee69d2c656a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-renumber",
+   "hunk_sha256": "3979cf77d23cf253261b4d9ad8fef355cc27ee774fb39606b22f60117164fb1f",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f50806bc5c4d1b0ec71c5f673e76236fd97e44fc03936137aeacc2433f23f10a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "568b0825f59b9fd3b96a0260435cc5a5eb57b030e0c656a449f7917dea1cd7b7",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "9e389eb55b4999d157bb9d24752f866b61dc101e8b0ec94c235a602a92d35f42",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "d0eef667f43e7d0fb42c4ee3ca3ea1c8d3918c70f77c09025a0f810c9d2d8074",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "d6880e149ac580f489a1f254580a9f2d1a43f076b4914477c65eaedfdccfbbc8",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "fae527ffb7b96c075002fa2726938c789c29d20df082f2490ea8c887d32a6f94",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "89924f49a2c5fe5c24c1b8bac2e4e4cf798d7f8413926a99ac5ce7ae28af6e07",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "a522850d8bb6eb10958b898c4498846086659218679dd2bc5f9c914e32cc0708",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "45e291776ab17a22247f984a1da1c709d4bc3d6e975b652511f64bf176a4ad64",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "cb3fca7e91f54c85d7c185f1b2b35ca19ce58828fa70e98f3022afe7eb57e7f9",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a16847448419d765c1698c84449c00a56a051aa2467af65e0bd8aa56c0c8ee3f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "4d4637f799ae7e2515871928fb17e3b07cc16d768745d8441f4f90892ec089f1",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ec0d4a950328670e18ab81f2427bdd1f64b7a4505b7ee19211e923140ac47b0b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4e1df9b975fa53081d5409c83e1d3785ed7c1379fd7bccffe42fa9e098f42f0c",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-renumber",
+   "hunk_sha256": "3979cf77d23cf253261b4d9ad8fef355cc27ee774fb39606b22f60117164fb1f",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "fd185668c4e37b672f15cda1d34484be874770064b6788d2fa3a2ddd79056261",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "55b52e7f046eb752ec4c9d671072a0a7751a6a480d7a417c6183fafac7371fc3",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4cdc65032b1f4c7f79ae90055a829c91fd07a86feb5d0bcbd815a7b293918b53",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "54042d99cdd809f1e935dddff7ba68cd7c5a66678c1a47f543243d9c1cd7c21d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "1808026043bf6758696432f687f7093a629008790f5f1a9670de4614068bc505",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "511fa117bcab59ef9d4bccccac9f2f3253658dc85138cfd20e9d755d577df7f6",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "29e50d2ad7030e6c57d86b2238380135dcc5ef223bf4477c0f01fdfa36839670",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cb33ec134f704e5a683b526485de3ad3188ccaacbeb71bbd42eab93c00df671a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "1fddf522a330539340b65230b747d3575be1c43b6d6c74389194dc90f4b9cd9b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "08ab310d63a6a4254bcaa5a8588ade9ed5b92271c3bcbb82ca6a43265cbe4a2a",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "9853906ecb5be7e9af3cb9ffafa8448e565603b17b7153645cb38f86558e8c36",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "58bcd5be4712382f9c17f72a6354cc8106894fec7a9bbfbb4610b48f6161f35d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4cdc65032b1f4c7f79ae90055a829c91fd07a86feb5d0bcbd815a7b293918b53",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f660799157bfef5c9c5f5822677f7fff633ee3843e480f7c631ab910e480bb2f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "6b089be0fcae160a89707117a5c5ce76212e64eacb2d43cb3f402aa32ff8db0f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "2ddf6df63b3f055c317e2dba59332320d55dfc5805b98caf8d31cefb543e1715",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "638c58fae8590ad2deaccb195e005657fd9635129cae8f825b333a53a929841f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "101f1e8fe6596d7543358cd19d73a2d2a48bcf633a8376804f224780999940d0",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "8bbad9fb9219c56a93e631bb213342bb6dce92796eb8975b7b08f583cfa63e0a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "78b7e8fde63292c8225ac65cee0a3899516551c3c91caf06f1c15db8133ffff7",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "41d7a8d25defeff5e50610385d9e4e1da1114dc81b5202fd530fc452accbc8c9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0939d7dac68fe4cebf93b06eb60dc4bdd7e6a1d298afdfbd9b20d4e8f4cd5e47",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "6a16188c8ed43f37fecaa7b5b724b7ac29a4fd3f3bb61d1d1f35702ba3c82435",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "856eacc902259a810d2de7806e6bc2607a341951548a8e0e1bb5b6348dcf4e3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ce2d2fbe0c06c0ad362a24151c9fb99062b2082b0d06b5a03afccd0cd74fa03a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "b5ba706c70f11eb32599a2ef2d867c845266faa1a0f4b72d8f5b013fe12a33be",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "847d361e37365484340e43a5e954b21697ecf05e1e926d38a2a9d365accd820f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "562baf4e08e2c726b9b1f0bb53a9d266521c70126633b34d711376384103910e",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "b89f4efec52f5e879918ff7418732a3fd1b2766212b7400c1d02df6e29149f79",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "3cbd6c2fd873e060baf1da066487a58c4f1f92b69d071321e384fd10859e651a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e4ea6f6fac45de115f21c599886599bc5d1e27582682b4a217e692ff68e65866",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "aa3a0088d7cebd69615803684bea0cca2898b312ea524f5fb5342e84006bd7b0",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "64af4142246e75199d2dca20dcec1f0130ae7daffaf2cdcc7f5003452a07f70b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a853366a32dbe6047c5736ea2ce8b8ee6b247a1e07c5ba4fb6660fd7617ae620",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c300f5a4ec260bdf11124aaa18aeaa4c658696b5d4e45ac413e5b3484ad961de",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "d06ba712504fa1dc7d72ca838cdbf6135f717bae2722acbc296017c1c7460337",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "58bcd5be4712382f9c17f72a6354cc8106894fec7a9bbfbb4610b48f6161f35d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ce3e6228a81eaad39b17bba91ddbc8ea59614d0b7dc2687ea3f3a9565a3d27eb",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "7ac2f29cdedfdd7140b9838366dd33f10a735e9e726d3a597e6d5a1b263f2357",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "288541699952477808b5cf1af320e1ffb80cfcea587923fd934d533f3a1c1c76",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "64af4142246e75199d2dca20dcec1f0130ae7daffaf2cdcc7f5003452a07f70b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "650495cf68a23e11ce0ea5eb5b62b6f2c3bf0345daf12532084eda907f1c8578",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e3d424604c5fe7d76e7ef8c7d8d47d5e60e0afcf71d190e90b12d2d8a3bbbf23",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "90f79cfc2a607f415d04c844494cdac4d140f8e77dd0fc1582bd887ef36c2ddd",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "bd262027e548eeb07e67c45cf165805f89387d6fdfd531a8b9eb8d5a43edaf55",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cccec66fc540b1bb82ea9d954f699f153c065a3dc2fecbd23abaa5f880e1630c",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "e7536f5f2be593320d3c2b1e70f71cd5891f8fcf772b40848b9180c9c70d3d47",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "856eacc902259a810d2de7806e6bc2607a341951548a8e0e1bb5b6348dcf4e3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "5a9642db57f482f03055a0ae27ad7d1f6ba4b90f50c2527f705c1ae4b801c63c",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f50806bc5c4d1b0ec71c5f673e76236fd97e44fc03936137aeacc2433f23f10a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ccb5b0284bdc60f248a34dcc8f250ffe5ebbda7fa3281ad25ab564237eb13b12",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-renumber",
+   "hunk_sha256": "35e98a3e60897fb495a9d10bf93b685f721b590ffa7249123a190fac88059253",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-renumber",
+   "hunk_sha256": "a1923fcf5b6325d58d63404cf0161ca94ea6a5105220b630c0f8cfca398cf713",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h11",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "05961459eb03fc41392de392c67dfde60c512ec523580c64674e4b186a0e37da",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c99732b59b2795fdb23e5e27aa98a08af4b72b491d3bf3305ec2fce22ad6627b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4bde3610aed01b3a0de625f3876448c73fc60ddbf559785411548f1b9fb793bb",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c9997a45695b170f5a6f379dbac6e274f6c780c9c0ef5155b6968d276f7f053e",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "acf72961a181e206edab67ec67881468da90a2ad6880f3dc58aaf62b8647c5f9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "6800e5fbc2749b8e9e5000c98594ced3d6d38ad71b71226f7ed6271d5ad1c538",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e468ee0075e31751cff7905abd658041c1e81d11a3f1cfb5bc6b2d5de49878c9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "3ecd5c7bf16cc131a816aca5c3d48e02b4d6637740bf1cc4801deb2fbfce82af",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5b2881804b7d6b200b3c76e0b02b8e4b42168099f5fb5d60d49d14ebc75f042a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "3e6d19365f51e5f6165bdbd237f0db843fc1712b60465d175359eae5ff13de0b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "0e3adb3806d49f68eb85d40646daaf43b9ae85860d475d9b2dade8c8487839b3",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "baf4f2dede9b8c0506a88f542fb60b631a18daccb7873202fcc259cc37d3cb7d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "70efa7a3de76e497faf0f8b5701e8578d1f854d2e1583622f1ac030824cb7f8b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "4a08bdce21e89111044cf2edc6bdb029b70d4db009f84a6597f710a0a813f0e4",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "503376e3e76559fb51174455e0480624044aba10bdba726e2522c2e391d740ba",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h20",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0fad286d887891876a28807c4d7c0914f72dc225e493d1c1b5c43427a5980dab",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "d0dee8bad50de7d1ca25e9e4db50198cae0535ad220599908e0f30da8fda1575",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f660799157bfef5c9c5f5822677f7fff633ee3843e480f7c631ab910e480bb2f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "8bbad9fb9219c56a93e631bb213342bb6dce92796eb8975b7b08f583cfa63e0a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "fe10a29cda86e64e8a596c134777b7e62eb236a3833f7f3b013fe4399971194f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "06078a5df738f504de9f657f943c305d8172fafd4f18b03ecce00f614bc4716d",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "9c6a06e461e6b3a7c8e4914dff118df75b311bccf29559f031f64cb35e0c7d2b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4206e681c841e1df92d6e71b4f1676f3558df27dc885b966fb460dc92c92be3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "66a1f0ce78ec3ac4f5790b44c791725a294a18e570ce37610939394bf237b140",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c388cc79f0d298f170726a0826dd013760fc570c9cc7ee27dd98ee73e8206612",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "1367c17b921f8644751a2ad25b525cbce5b4a9509a6bb17914f3ac06c5f3043c",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "346395b08ec1850a7bf64aae0eca591f9cc253a7cb8c7ff4d9bea606211173e9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "f51e04d839d2458e1cf228fb853c6cbedc7d1811354cf53c6cac8d68e1e0fe57",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "f4b351e36224bb2073532c790ac64b17ad75c605299c069ff6fd3d0170efe70d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "typed_line_filter",
+   "class": "interned-typed",
+   "hunk_sha256": "83b76c3cf31b0fec54a75301dc98d029287eaec332a7eeb939254655b21ff221",
+   "reason": "reviewed: generated interning loader and publication decode",
+   "source": "features/workloads/src/typed.rs;io/cq-load/src/intern.rs"
+  },
+  {
+   "target": "typed_line_filter",
+   "class": "interned-typed",
+   "hunk_sha256": "028dcc19f02e4bd2bd564993b6a4871b53420984ce2f1ef864aff1a0a82239b8",
+   "reason": "reviewed: generated interning loader and publication decode",
+   "source": "features/workloads/src/typed.rs;io/cq-load/src/intern.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "2237b40eae610cb10b47d9ac7d16834570857fa1f745e7a67117c2a4497e606b",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "82fcc4865087b2e164c58cfcb01330ea81c65985b801f16d203350243e1616d0",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "05bd7fb3dd93e8be2bd0d646a232f4d02be5d56160bd8390257a78610d10d5c8",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "8f1eafb58452740c405a56341a336c9019b0d434f2338be47223217fab9db586",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "1b88e67e998eecebbc0755a3d5bba89fd569e34cb1c2cebfbeb2c3617c970ae8",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "ea9ba3a49f96582758fdd485b07fbc00cedc8ccb183c9ac7c6b66ac145a4f8ec",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  }
+ ]
+}

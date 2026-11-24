@@ -5,7 +5,7 @@ use proc_macro2::TokenStream;
 
 use crate::arguments::Results;
 
-/// Retain reusable host renames serving integral stream or eager membership reads.
+/// Retain reusable host renames serving stream or eager membership reads.
 ///
 /// This records only a Physical mode decision. Key columns, predicates and
 /// reader order are unchanged; selection subsequently chooses the providers.
@@ -38,12 +38,7 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
                     })
             })
             .collect::<Vec<_>>();
-        if reads.is_empty()
-            || !reads.iter().all(|(_, keys, _)| {
-                keys.iter()
-                    .all(|key| crate::arguments::sorted_key(&facts.rows[&name].types[key]))
-            })
-        {
+        if reads.is_empty() {
             continue;
         }
         // A lazy keyed read has a distinct demand contract; retaining its host

@@ -7,8 +7,8 @@
 //! premises. IX demands and relational erasure belong to the lowering pass.
 //!
 //! ```text
-//! Program ::= "physical" "{" RelationDecl* Fact* Definition* "return" ["canon"] Ident "as" Atom ";" "}"
-//! Fact ::= "host_set" Ident ["discharged"] ";" | "consumer" "canonical" ";"
+//! Program ::= "physical" "{" RelationDecl* Fact* Definition* "return" ["canon"] ["dedup"] Ident "as" Atom ";" "}"
+//! Fact ::= "consumer" "canonical" ";"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
 //! Mode ::= "pipe" | "let"
 //! Operator ::= Unit | Rename | Select | Point | Range | Bind | Guard | Project | Group
@@ -19,10 +19,9 @@
 //!
 //! Point/Range ::= ("point" | "range") Select
 //! Unit, Rename, Select, Bind, Guard and Project are shared syntax.
-//! Meaning is Kleisli over bottom + Set: bottom aborts the whole evaluation.
-//! Bind/guard expressions outside typed CQ-Arith are opaque partial functions.
-//! Their ancestry chain preserves written order; total steps may move earlier.
-//! Other effects and evaluation counts are outside this meaning.
+//! Rust expressions are opaque, pure and total by premise. Their unchanged
+//! payloads depend only on their free variables; representation choices add no
+//! written-order chain or relational predecessor obligations.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -37,10 +36,9 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Rust expressions never become relational predicates. Actual anti operators
+//! and preserved columns prove disjointness; origin flags and literals do not.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,10 +64,9 @@ pub mod kw {
     syn::custom_keyword!(any);
     syn::custom_keyword!(all);
     syn::custom_keyword!(fused);
-    syn::custom_keyword!(host_set);
-    syn::custom_keyword!(discharged);
     syn::custom_keyword!(consumer);
     syn::custom_keyword!(canonical);
+    syn::custom_keyword!(dedup);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -85,35 +82,33 @@ pub struct Program {
 pub struct Body {
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<cq_syntax::RelationDecl>,
-    #[to_tokens(|tokens, facts| quote::TokenStreamExt::append_all(tokens, facts))]
-    pub host_sets: Vec<HostSet>,
+    /// Host-once values carried from RA (A-Capture); never heading columns.
+    pub captures: cq_syntax::Captures,
     pub consumer_canonical: Option<ConsumerCanonical>,
     #[to_tokens(|tokens, definitions| quote::TokenStreamExt::append_all(tokens, definitions))]
     pub definitions: Vec<Definition>,
     pub return_token: Token![return],
     pub return_canon: Option<kw::canon>,
+    /// PH-HeadDedup: the recorded obligation to deduplicate
+    /// computed answers at the return boundary. Required when
+    /// [`head_collapses`] and the return is not already `canon`; an extra one
+    /// is admissible. [`Body::head_dedup`] is the complete obligation.
+    pub return_dedup: Option<kw::dedup>,
     pub returned: Ident,
     pub as_token: Token![as],
     pub head: cq_syntax::Atom,
     pub return_semi: Token![;],
 }
 
-/// A full-heading host uniqueness fact, certified at runtime unless its
-/// invoking compiler has discharged the obligation.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct HostSet {
-    pub host_set_token: kw::host_set,
-    pub relation: Ident,
-    pub discharged: Option<kw::discharged>,
-    pub semi_token: Token![;],
-}
 
 impl Body {
-    pub fn host_is_set(&self, relation: &Ident) -> bool {
-        self.host_sets
-            .iter()
-            .any(|fact| symbol_name(&fact.relation) == symbol_name(relation))
+    /// PH-HeadDedup: the recorded return-boundary answer dedup
+    /// obligation (`return canon` or `return dedup`), which Structures types
+    /// with an answer identity index.
+    pub fn head_dedup(&self) -> bool {
+        self.return_canon.is_some() || self.return_dedup.is_some()
     }
+
 }
 
 /// Formal rule CTX-Consumer: The invoking consumer owns the returned set boundary.
@@ -127,16 +122,12 @@ pub struct ConsumerCanonical {
 impl syn::parse::Parse for Body {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let declarations = cq_syntax::parse_declarations(input)?;
-        let mut host_sets = Vec::new();
+        let captures = input.parse()?;
         let mut consumer_canonical = None;
-        while input.peek(kw::host_set) || input.peek(kw::consumer) {
-            if input.peek(kw::host_set) {
-                host_sets.push(input.parse()?);
-            } else {
-                let fact: ConsumerCanonical = input.parse()?;
-                if consumer_canonical.replace(fact).is_some() {
-                    return Err(input.error("duplicate consumer canonical fact"));
-                }
+        while input.peek(kw::consumer) {
+            let fact: ConsumerCanonical = input.parse()?;
+            if consumer_canonical.replace(fact).is_some() {
+                return Err(input.error("duplicate consumer canonical fact"));
             }
         }
         let mut definitions = Vec::new();
@@ -145,11 +136,12 @@ impl syn::parse::Parse for Body {
         }
         Ok(Self {
             declarations,
-            host_sets,
+            captures,
             consumer_canonical,
             definitions,
             return_token: input.parse()?,
             return_canon: input.parse()?,
+            return_dedup: input.parse()?,
             returned: input.parse()?,
             as_token: input.parse()?,
             head: input.parse()?,
@@ -159,10 +151,9 @@ impl syn::parse::Parse for Body {
 }
 
 /// Explicit context arguments shared by lowering and structure selection.
-/// Facts are comma-separated: `consumer = canonical, host_set R discharged`.
+/// The optional fact is `consumer = canonical`.
 #[derive(Clone, Debug, Default)]
 pub struct FactPacket {
-    pub host_sets: Vec<HostSet>,
     pub consumer_canonical: Option<ConsumerCanonical>,
 }
 
@@ -171,43 +162,20 @@ impl FactPacket {
     pub fn context(&self) -> cq_stage::Context {
         cq_stage::Context {
             consumer_canonical: self.consumer_canonical.is_some(),
-            discharged_host_sets: self
-                .host_sets
-                .iter()
-                .filter(|fact| fact.discharged.is_some())
-                .map(|fact| symbol_name(&fact.relation))
-                .collect(),
         }
     }
 
     /// Parse one fact, leaving its separating comma to the enclosing packet.
     pub fn parse_fact(&mut self, input: syn::parse::ParseStream<'_>) -> syn::Result<()> {
-        if input.peek(kw::host_set) {
-            let fact = HostSet {
-                host_set_token: input.parse()?,
-                relation: input.parse()?,
-                discharged: Some(input.parse()?),
-                semi_token: Default::default(),
-            };
-            if self
-                .host_sets
-                .iter()
-                .any(|previous| symbol_name(&previous.relation) == symbol_name(&fact.relation))
-            {
-                return error(&fact, "duplicate host_set argument");
-            }
-            self.host_sets.push(fact);
-        } else {
-            let consumer_token = input.parse()?;
-            let _: Token![=] = input.parse()?;
-            let fact = ConsumerCanonical {
-                consumer_token,
-                canonical_token: input.parse()?,
-                semi_token: Default::default(),
-            };
-            if self.consumer_canonical.replace(fact).is_some() {
-                return Err(input.error("duplicate consumer canonical argument"));
-            }
+        let consumer_token = input.parse()?;
+        let _: Token![=] = input.parse()?;
+        let fact = ConsumerCanonical {
+            consumer_token,
+            canonical_token: input.parse()?,
+            semi_token: Default::default(),
+        };
+        if self.consumer_canonical.replace(fact).is_some() {
+            return Err(input.error("duplicate consumer canonical argument"));
         }
         Ok(())
     }
@@ -216,27 +184,13 @@ impl FactPacket {
     /// compiler's packet. Its correspondence checker must prove these premises.
     /// Facts already recorded in the source leave its explicit choices intact.
     pub fn apply(&self, program: &mut Program) -> syn::Result<()> {
-        for fact in &self.host_sets {
-            if let Some(previous) = program
-                .program
-                .host_sets
-                .iter_mut()
-                .find(|previous| symbol_name(&previous.relation) == symbol_name(&fact.relation))
-            {
-                if previous.discharged.is_some() == fact.discharged.is_some() {
-                    continue;
-                }
-                previous.discharged = fact.discharged;
-            } else {
-                program.program.host_sets.push(fact.clone());
-            }
-        }
         if let Some(fact) = &self.consumer_canonical {
             if program.program.consumer_canonical.is_some() {
                 return contract::check(program).map(|_| ());
             }
             program.program.consumer_canonical = Some(fact.clone());
             program.program.return_canon = None;
+            program.program.return_dedup = None;
             let returned = &program.program.returned;
             let internal =
                 program
@@ -463,12 +417,9 @@ impl Operator {
 /// How a result's grades and reads are known once the contract holds.
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
-    /// Host uniqueness premises established by the invoking compiler.
-    pub discharged_host_sets: BTreeSet<String>,
     /// The invoking consumer owns canonicalization of returned answers.
     pub consumer_canonical: bool,
-    /// Union arms are disjoint only by fallback construction or different
-    /// explicit literals on the same interface column.
+    /// Union arms proved disjoint by actual anti operators and preserved columns.
     pub disjoint: BTreeSet<String>,
     /// Fused union -> prefix and arm-local definitions. Shared pipe reads in
     /// these groups are one streamed traversal, never independent traversals.
@@ -488,6 +439,9 @@ pub struct Analysis {
     pub keyed_reads: BTreeMap<String, Vec<(String, Vec<String>, cq_syntax::SupplyKind)>>,
     /// Results whose rows are enumerated (pipe input, scan of a let).
     pub scanned: BTreeSet<String>,
+    /// Number of reads of every result (scans, keyed and merge reads, and the
+    /// return), each reading definition counted once per operand.
+    pub readers: BTreeMap<String, usize>,
     /// Results flagged `canon`.
     pub canon: BTreeSet<String>,
     /// Mode of every result.
@@ -495,36 +449,20 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// Rust remains opaque unless CQ's typed arithmetic grammar defines it.
-    pub fn opaque(&self, operator: &Operator) -> bool {
-        match operator {
-            Operator::Bind(bind) => {
-                cq_syntax::arithmetic::binding(bind, &self.rows[&symbol_name(&bind.input)].types)
-                    .is_none()
-            }
-            Operator::Guard(guard) => cq_syntax::arithmetic::predicate(
-                &guard.condition,
-                &self.rows[&symbol_name(&guard.input)].types,
-            )
-            .is_none(),
-            _ => false,
-        }
-    }
-
-    /// IF-Parameter discharges closed Rust fragments at host before dispatch.
-    /// Row-dependent opaque code is never admitted by this predicate.
-    pub fn capturable(&self, operator: &Operator) -> bool {
-        match operator {
-            Operator::Bind(bind) => cq_syntax::arithmetic::capture_binding(
-                bind,
-                &self.rows[&symbol_name(&bind.input)].types,
-            ),
-            Operator::Guard(guard) => cq_syntax::arithmetic::capture_predicate(
-                &guard.condition,
-                &self.rows[&symbol_name(&guard.input)].types,
-            ),
-            _ => false,
-        }
+    /// Query columns read by a Rust expression; an empty set means a closed
+    /// host expression. Lexically opaque expressions read their whole scope.
+    pub fn rust_reads(&self, operator: &Operator) -> Option<BTreeSet<String>> {
+        let (input, expression, environment) = match operator {
+            Operator::Bind(bind) => (&bind.input, &bind.expression, &bind.environment),
+            Operator::Guard(guard) => (&guard.input, &guard.condition, &guard.environment),
+            _ => return None,
+        };
+        let heading = self.headings[&symbol_name(input)].iter().cloned().collect();
+        let scope = environment.as_ref().map_or_else(
+            || heading,
+            |environment| environment.variables.iter().map(symbol_name).collect(),
+        );
+        Some(cq_syntax::rust::free_variables(expression).dependencies(&scope))
     }
 }
 
@@ -557,6 +495,7 @@ pub struct Row {
     pub bindings: BTreeMap<String, Ident>,
     pub computed: BTreeSet<String>,
     pub types: BTreeMap<String, syn::Type>,
+    pub logical_type_ids: BTreeMap<String, cq_syntax::LogicalTypeId>,
 }
 
 impl Program {
@@ -581,35 +520,29 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 /// Formal rule WF-Physical: Derive local headings and reads, then check output, reachability and modes.
 /// Formal rule PH-Pipe: Require linear stream use except for reusable noncanonical host renames.
 /// Formal rule PH-Let: Require every let to be read.
-/// Formal rule CTX-HostSet: Require each uniqueness fact to name one used host.
 fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
+    // Formal rule PH-H-Heading: Combine definition, key, range, union and output heading checks.
     let declarations = cq_syntax::check_input_declarations(&program.declarations)?;
-    let mut certified = BTreeSet::new();
-    for fact in &program.host_sets {
-        let name = symbol_name(&fact.relation);
-        if !certified.insert(name.clone()) {
-            return error(fact, format!("duplicate host_set fact for `{name}`"));
-        }
-        if !declarations.contains_key(&name)
-            || !program.definitions.iter().any(
-                |d| matches!(&d.operator, Operator::Rename(r) if symbol_name(&r.relation) == name),
-            )
-        {
-            return error(
-                fact,
-                format!("host_set `{name}` must name a used host relation"),
-            );
-        }
-        for column in &declarations[&name].columns {
-            cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
-        }
-    }
-    if program.consumer_canonical.is_some() && program.return_canon.is_some() {
-        return error(&program.returned, "consumer canonical forbids return canon");
-    }
+    let mut output_logical_type_ids = BTreeMap::new();
     if let Some(output) = declarations.get(&symbol_name(&program.head.relation)) {
         output.check_result()?;
+        for (argument, column) in program.head.args.iter().zip(&output.columns) {
+            if let (Some(variable), Some(id)) =
+                (cq_syntax::rust::variable(argument), column.logical_type_id)
+            {
+                let name = symbol_name(&variable);
+                if output_logical_type_ids
+                    .insert(name, id)
+                    .is_some_and(|previous| previous != id)
+                {
+                    return error(
+                        argument,
+                        "one output column has conflicting logical type identities",
+                    );
+                }
+            }
+        }
     }
     let logical: BTreeSet<String> = program
         .definitions
@@ -628,21 +561,16 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             _ => Vec::new(),
         })
         .collect();
+    // Formal rule WF-Capture: carried captures bind host names outside every heading.
+    program.captures.check(&logical)?;
+    let captures = program.captures.names();
     let mut analysis = Analysis {
-        discharged_host_sets: program
-            .host_sets
-            .iter()
-            .filter(|fact| fact.discharged.is_some())
-            .map(|fact| symbol_name(&fact.relation))
-            .collect(),
         consumer_canonical: program.consumer_canonical.is_some(),
         ..Analysis::default()
     };
     let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut operands: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut chains: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut written_chain = Vec::new();
+    // Formal rule PH-H-Definitions: Check unique earlier definitions, rename partitions, fresh bindings, visible uses and reachable output.
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         if analysis.rows.contains_key(&name) {
@@ -675,6 +603,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         let mut deps = Vec::new();
         let row = match &definition.operator {
             Operator::Union(union) => {
+                // Formal rule PH-H-Union: Require matching arm headings and type identities, valid origin interfaces and dependent fused arms.
                 if union.operands.len() < 2 {
                     return error(union, "union requires at least two operands");
                 }
@@ -682,17 +611,20 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 let mut schema = cq_syntax::algebra::UnionSchema::default();
                 for operand in &union.operands {
                     let other = of(operand)?;
-                    if let Err(message) =
-                        schema.include(other.bindings.keys(), &other.types, &other.computed)
-                    {
+                    if let Err(message) = schema.include(
+                        other.bindings.keys(),
+                        &other.logical_type_ids,
+                        &other.computed,
+                    ) {
                         return error(operand, message);
                     }
+                    row.logical_type_ids
+                        .retain(|column, _| other.logical_type_ids.contains_key(column));
                     row.computed.extend(other.computed);
                     deps.push(symbol_name(operand));
                     analysis.scanned.insert(symbol_name(operand));
                 }
                 if let Some(origin) = &union.origin {
-                    origin.occurrence.check()?;
                     let mut expected: BTreeSet<_> = origin
                         .free
                         .iter()
@@ -734,7 +666,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
 
             Operator::Unit(_) => Row::default(),
             Operator::Rename(r) => {
-                r.occurrence.check()?;
                 let host = symbol_name(&r.relation);
                 let Some(declaration) = declarations.get(&host) else {
                     return error(r, format!("`{name}` renames undeclared relation `{host}`"));
@@ -764,6 +695,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         return error(m, format!("rename `{name}` must be one-to-one"));
                     }
                     row.types.insert(target.clone(), column.ty.clone());
+                    if let Some(id) = column.logical_type_id {
+                        row.logical_type_ids.insert(target.clone(), id);
+                    }
                     mapping.insert(target, source);
                 }
                 if let Some(constants) = &r.constants {
@@ -773,14 +707,13 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     }
                     for equality in &constants.equalities {
                         let source = symbol_name(&equality.left);
-                        let Some(column) = declaration
+                        let Some(_) = declaration
                             .columns
                             .iter()
                             .find(|c| symbol_name(&c.name) == source)
                         else {
                             return error(equality, format!("`{host}` has no column `{source}`"));
                         };
-                        cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
                         if !sources.insert(source) {
                             return error(
                                 equality,
@@ -819,8 +752,16 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         "probe requires first/smallest; semi requires eager/lazy; merge requires a nonempty ordered key",
                     );
                 }
-                let left = of(&k.left)?;
-                let right = of(&k.right)?;
+                let mut left = of(&k.left)?;
+                let mut right = of(&k.right)?;
+                left.logical_type_ids.retain(|column, id| {
+                    !right.bindings.contains_key(column)
+                        || right.logical_type_ids.get(column) == Some(id)
+                });
+                right.logical_type_ids.retain(|column, id| {
+                    !left.bindings.contains_key(column)
+                        || left.logical_type_ids.get(column) == Some(id)
+                });
                 let lh = left.bindings.keys().cloned().collect::<Vec<_>>();
                 let rh = right.bindings.keys().cloned().collect::<Vec<_>>();
                 let columns = if matches!(definition.operator, Operator::Anti(..)) {
@@ -847,15 +788,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         .or_default()
                         .push((name.clone(), columns.clone(), cq_syntax::SupplyKind::Stream));
                 }
-                for c in &columns {
-                    check_leibniz(&left.types[c], c, &definition.name)?;
-                    check_leibniz(&right.types[c], c, &definition.name)?;
-                    if matches!(definition.operator, Operator::Merge(..)) {
-                        let ident = syn::Ident::new(c, proc_macro2::Span::call_site());
-                        cq_syntax::algebra::check_ord_type(&left.types[c], &ident)?;
-                        cq_syntax::algebra::check_ord_type(&right.types[c], &ident)?;
-                    }
-                }
                 if matches!(definition.operator, Operator::Merge(..)) {
                     for side in [&k.left, &k.right] {
                         analysis
@@ -878,6 +810,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     row.bindings.extend(left.bindings);
                     row.computed.extend(left.computed);
                     row.types.extend(left.types);
+                    row.logical_type_ids.extend(left.logical_type_ids);
                     row
                 }
             }
@@ -885,19 +818,19 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 s.condition.check()?;
                 let row = of(&s.input)?;
                 for c in s.condition.columns() {
-                    let Some(ty) = row.types.get(&c) else {
+                    if !row.types.contains_key(&c) {
                         return error(s, format!("select `{name}` uses unavailable column `{c}`"));
-                    };
-                    check_leibniz(ty, &c, &definition.name)?;
+                    }
                 }
                 for c in &s.condition.constraints {
                     for p in c.parameters() {
-                        if row.types.contains_key(&symbol_name(p)) {
-                            return error(p, "relational parameter names an input column");
+                        let heading = row.types.keys().cloned().collect();
+                        if !cq_syntax::rust::free_variables(p)
+                            .dependencies(&heading)
+                            .is_empty()
+                        {
+                            return error(p, "closed relational operand reads an input column");
                         }
-                    }
-                    for v in c.ordered_variables() {
-                        cq_syntax::algebra::check_ord_type(&row.types[&symbol_name(v)], v)?;
                     }
                 }
                 if matches!(definition.operator, Operator::Point(..)) {
@@ -915,6 +848,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         .push((name.clone(), columns, cq_syntax::SupplyKind::Const));
                 }
                 // Formal rule PH-Range: A window demand is constant order bounds on exactly one column.
+                // Formal rule PH-H-Range: Require a nonempty set of closed ordered bounds on one available column.
                 if matches!(definition.operator, Operator::Range(..)) {
                     let Some((column, _)) = s.condition.range_bounds() else {
                         return error(s, "range read requires constant order bounds on one column");
@@ -930,6 +864,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
             Operator::Guard(g) => {
                 let row = of(&g.input)?;
+                cq_syntax::capture::check_reference(
+                    g.capture.as_ref(),
+                    &g.condition,
+                    &program.captures,
+                )?;
                 if g.environment.is_none() {
                     check_uses(&g.condition, &row)?;
                 }
@@ -941,6 +880,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
             Operator::Bind(b) => {
                 let mut row = of(&b.input)?;
+                cq_syntax::capture::check_reference(
+                    b.capture.as_ref(),
+                    &b.expression,
+                    &program.captures,
+                )?;
                 if b.environment.is_none() {
                     check_uses(&b.expression, &row)?;
                 }
@@ -953,6 +897,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         return error(b, format!("bind `{name}` repeats attribute `{c}`"));
                     }
                     row.computed.insert(c.clone());
+                    if let Some(id) = output_logical_type_ids.get(&c) {
+                        row.logical_type_ids.insert(c.clone(), *id);
+                    }
                     row.types.insert(c, ty);
                 }
                 deps.push(symbol_name(&b.input));
@@ -960,17 +907,22 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
             Operator::Group(group) => {
                 let input = of(&group.input)?;
-                group.check(&input.types)?;
-                if !unique.contains_key(&symbol_name(&group.input)) {
-                    return error(group, "group requires canonical complete input valuations");
-                }
+                group.check(&input.types, &captures)?;
                 let mut row = Row::default();
-                for key in &group.keys {
+                // A capture key groups by one host value and is not a column.
+                for key in group
+                    .keys
+                    .iter()
+                    .filter(|key| !captures.contains(&symbol_name(key)))
+                {
                     let column = symbol_name(key);
                     row.bindings
                         .insert(column.clone(), input.bindings[&column].clone());
                     row.types
                         .insert(column.clone(), input.types[&column].clone());
+                    if let Some(id) = input.logical_type_ids.get(&column) {
+                        row.logical_type_ids.insert(column.clone(), *id);
+                    }
                     if input.computed.contains(&column) {
                         row.computed.insert(column);
                     }
@@ -979,6 +931,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     let column = symbol_name(&aggregate.name);
                     row.bindings.insert(column.clone(), aggregate.name.clone());
                     row.types.insert(column.clone(), aggregate.ty.clone());
+                    if let Some(id) = output_logical_type_ids.get(&column) {
+                        row.logical_type_ids.insert(column.clone(), *id);
+                    }
                     row.computed.insert(column);
                 }
                 deps.push(symbol_name(&group.input));
@@ -998,66 +953,16 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 }
                 row.bindings.retain(|c, _| kept.contains(c));
                 row.types.retain(|c, _| kept.contains(c));
+                row.logical_type_ids.retain(|c, _| kept.contains(c));
                 row.computed.retain(|c| kept.contains(c));
                 deps.push(symbol_name(&p.input));
                 row
             }
         };
-        let mut chain = Vec::new();
-        for dep in &deps {
-            let input_chain = &chains[dep];
-            if !chain.starts_with(input_chain) && !input_chain.starts_with(&chain) {
-                if matches!(definition.operator, Operator::Union(_)) {
-                    for name in input_chain {
-                        if !chain.contains(name) {
-                            chain.push(name.clone());
-                        }
-                    }
-                    continue;
-                }
-                return error(
-                    &definition.name,
-                    "Rust bind/guard nodes must form one ancestry chain",
-                );
-            }
-            if input_chain.len() > chain.len() {
-                chain = input_chain.clone();
-            }
-        }
-        if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
-            if chain != written_chain
-                && !program
-                    .definitions
-                    .iter()
-                    .any(|d| matches!(d.operator, Operator::Union(_)))
-            {
-                return error(
-                    &definition.name,
-                    "Rust bind/guard ancestry must preserve written order",
-                );
-            }
-            chain.push(name.clone());
-            written_chain.push(name.clone());
-        }
-        chains.insert(name.clone(), chain);
-        if definition.canon.is_some() {
-            for (c, ty) in &row.types {
-                check_leibniz(ty, c, &definition.name)?;
-            }
-        }
         analysis
             .headings
             .insert(name.clone(), row.bindings.keys().cloned().collect());
         analysis.rows.insert(name.clone(), row);
-        let heading = &analysis.headings[&name];
-        if let Some(key) =
-            inherited_key(&definition.operator, heading, &program.host_sets, |input| {
-                unique.get(&symbol_name(input)).cloned()
-            })
-            .or_else(|| definition.canon.is_some().then(|| heading.clone()))
-        {
-            unique.insert(name.clone(), key);
-        }
         operands.insert(name.clone(), deps.clone());
         for input in deps {
             readers.entry(input).or_default().push(name.clone());
@@ -1069,11 +974,21 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
         }
         let mode = ModeKind::from(&definition.mode);
+        // Formal rule PH-Modes: Check each result mode, canon eligibility and empty exists headings.
         if mode == ModeKind::Exists && !analysis.headings[&name].is_empty() {
             return error(&definition.name, "exists mode requires an empty heading");
         }
         analysis.modes.insert(name.clone(), mode);
         if definition.canon.is_some() {
+            // Formal rule PH-Canon: a canon result is materialized in its
+            // canonical index, so it is stored (let/exists); only a host
+            // rename may stay a pipe, its canonical index being the host carrier.
+            if mode == ModeKind::Pipe && !matches!(definition.operator, Operator::Rename(_)) {
+                return error(
+                    &definition.name,
+                    "a canon result is stored in its canonical index: use let, or canon a host rename",
+                );
+            }
             analysis.canon.insert(name);
         }
     }
@@ -1102,6 +1017,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         .iter()
         .flat_map(|e| cq_syntax::rust::free_variables(e).dependencies(&heading))
         .collect();
+    // Formal rule PH-H-Output: Require an all-bare head dependency set to equal the returned heading.
     if program.head.variables().count() == program.head.args.len() && output != heading {
         return error(
             &program.head,
@@ -1133,6 +1049,10 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         .or_default()
         .push("return".into());
     analysis.scanned.insert(returned);
+    analysis.readers = readers
+        .iter()
+        .map(|(name, uses)| (name.clone(), uses.len()))
+        .collect();
     for definition in &program.definitions {
         let Operator::Union(union) = &definition.operator else {
             continue;
@@ -1212,15 +1132,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
     }
     for (position, definition) in program.definitions.iter().enumerate() {
         if matches!(&definition.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_))))
-            && program
-                .definitions
-                .get(position + 1)
-                .and_then(|next| binary_intersection(definition, next, &analysis))
-                .is_none()
+            && intersection(&program.definitions[position..], &analysis).is_none()
         {
             return error(
                 &definition.name,
-                "smallest requires an admissible adjacent binary intersection",
+                "smallest requires an admissible adjacent intersection of at least two providers",
             );
         }
         if let Operator::Semi(_, k) | Operator::Anti(_, k) = &definition.operator {
@@ -1256,22 +1172,55 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
         }
     }
-    analysis.disjoint = constants::disjoint(module);
+    analysis.disjoint = disjoint_unions(module, &analysis.headings);
+    let unique = uniqueness(module, &analysis.headings, &analysis.disjoint, |definition, _| definition.canon.is_some());
+    // Formal rule PH-CanonPlacement: Refuse duplicate valuations at groups and noncanonical returns.
     for definition in &program.definitions {
-        if definition.canon.is_some()
-            && matches!(definition.operator, Operator::Union(_))
-            && analysis.disjoint.contains(&symbol_name(&definition.name))
+        if let Operator::Group(group) = &definition.operator
+            && !unique.contains_key(&symbol_name(&group.input))
         {
-            return error(
-                &definition.name,
-                "disjoint union arms defer canonicalization to their consumers; cross-branch dedup is unnecessary",
-            );
+            return error(group, "group requires canonical complete input valuations");
         }
+    }
+    // Formal rule CK-Return: A consumer may own only the final canonical boundary.
+    if !unique.contains_key(&symbol_name(&program.returned))
+        && program.return_canon.is_none()
+        && !analysis.consumer_canonical
+    {
+        return error(&program.returned, "return requires canonical complete input valuations");
+    }
+    // Formal rule PH-HeadDedup: answers that may collapse distinct canonical
+    // valuations record their dedup obligation; an extra one is harmless.
+    if !program.head_dedup()
+        && !analysis.consumer_canonical
+        && head_collapses(program, &analysis.headings[&symbol_name(&program.returned)])
+    {
+        return error(
+            &program.returned,
+            "computed answers may collapse distinct valuations: record `return dedup`",
+        );
     }
     Ok(analysis)
 }
-mod constants;
 
+/// PH-HeadDedup: whether computed answers can collapse distinct
+/// canonical valuations: a head with a computed argument that leaves some of
+/// the returned `columns` unprojected.
+pub fn head_collapses<'a>(program: &Body, columns: impl IntoIterator<Item = &'a String>) -> bool {
+    let head = &program.head;
+    head.args
+        .iter()
+        .any(|e| cq_syntax::rust::variable(e).is_none())
+        && columns.into_iter().any(|c| {
+            !head
+                .args
+                .iter()
+                .filter_map(cq_syntax::rust::variable)
+                .any(|v| symbol_name(v) == *c)
+        })
+}
+
+/// Formal rule PH-H-Keys: Require distinct common join keys; anti uses a common subset and semi/anti preserve the left heading.
 fn join_columns(keyed: &Keyed, left: &[String], right: &[String]) -> syn::Result<Vec<String>> {
     let shared: BTreeSet<String> = left.iter().filter(|c| right.contains(c)).cloned().collect();
     let written: BTreeSet<String> = keyed.columns.iter().map(symbol_name).collect();
@@ -1298,12 +1247,8 @@ pub fn ordinals(analysis: &Analysis, result: &str, columns: &[String]) -> Vec<us
         .collect()
 }
 
-/// The local binary intersection recognized by selection and realization:
-/// one pipe probe introduces one column, immediately followed by a probe
-/// or semijoin that only checks it. Both candidate relations are materialized,
-/// the prefixes are nonempty, and the new column completes each heading.
-/// This intentionally excludes wider intersections, intervening operators,
-/// canonicalization of the intermediate pipe, and host-only access.
+/// The two-provider instance of the public smallest-intersection law.
+/// One pipe probe introduces one column and the next probe/semi checks it.
 pub fn binary_intersection<'a>(
     first: &'a Definition,
     second: &'a Definition,
@@ -1312,22 +1257,70 @@ pub fn binary_intersection<'a>(
     let Operator::Probe(_, a) = &first.operator else {
         return None;
     };
-    let (Operator::Probe(_, b) | Operator::Semi(_, b)) = &second.operator else {
+    let b = intersection_extension(first, first, second, analysis)?;
+    let left = &analysis.headings[&symbol_name(&a.left)];
+    let column = analysis.headings[&symbol_name(&a.right)]
+        .iter()
+        .find(|c| !left.contains(c))?;
+    Some((a, b, column.clone()))
+}
+
+/// Admit one membership check following an introducing probe and its existing
+/// checks. Intermediate results must remain uncanonicalized linear pipes.
+pub fn intersection_extension<'a>(
+    first: &Definition,
+    previous: &Definition,
+    next: &'a Definition,
+    analysis: &Analysis,
+) -> Option<&'a Keyed> {
+    intersection_extension_impl(first, previous, next, analysis, false)
+}
+
+/// Formal rule PH-KeyProjection: A smallest membership side may retain its
+/// exact join-key projection without changing the later full occurrence read.
+pub fn intersection_key_projection(
+    first: &Definition,
+    previous: &Definition,
+    next: &Definition,
+    analysis: &Analysis,
+) -> bool {
+    matches!(next.operator, Operator::Semi(..))
+        && intersection_extension_impl(first, previous, next, analysis, true).is_some()
+}
+
+fn intersection_extension_impl<'a>(
+    first: &Definition,
+    previous: &Definition,
+    next: &'a Definition,
+    analysis: &Analysis,
+    project_membership: bool,
+) -> Option<&'a Keyed> {
+    let Operator::Probe(_, a) = &first.operator else {
         return None;
     };
-    if !matches!(first.mode, Mode::Pipe(_)) || first.canon.is_some() || b.left != first.name {
+    let (Operator::Probe(_, b) | Operator::Semi(_, b)) = &next.operator else {
+        return None;
+    };
+    if !matches!(previous.mode, Mode::Pipe(_))
+        || previous.canon.is_some()
+        || b.left != previous.name
+    {
         return None;
     }
     let left = &analysis.headings[&symbol_name(&a.left)];
     let ah = &analysis.headings[&symbol_name(&a.right)];
-    let bh = &analysis.headings[&symbol_name(&b.right)];
+    let bk: Vec<_> = b.columns.iter().map(symbol_name).collect();
+    let bh = if project_membership {
+        &bk
+    } else {
+        &analysis.headings[&symbol_name(&b.right)]
+    };
     let added: Vec<_> = ah.iter().filter(|c| !left.contains(c)).collect();
     if added.len() != 1 {
         return None;
     }
     let v = added[0];
     let ak: Vec<_> = a.columns.iter().map(symbol_name).collect();
-    let bk: Vec<_> = b.columns.iter().map(symbol_name).collect();
     if ak.is_empty()
         || bk.len() < 2
         || !bk.contains(v)
@@ -1341,7 +1334,34 @@ pub fn binary_intersection<'a>(
     {
         return None;
     }
-    Some((a, b, v.clone()))
+    Some(b)
+}
+
+/// A maximal adjacent chain implementing one variable's set intersection.
+#[derive(Clone, Debug)]
+pub struct Intersection<'a> {
+    /// Introducing probe followed by membership checks, in written order.
+    pub keys: Vec<&'a Keyed>,
+    pub column: String,
+}
+
+/// Formal rule PH-Smallest: Enumerate a minimum-size candidate set and test
+/// all remaining providers; every prefix is nonempty and binds the same column.
+pub fn intersection<'a>(
+    definitions: &'a [Definition],
+    analysis: &Analysis,
+) -> Option<Intersection<'a>> {
+    let first = definitions.first()?;
+    let second = definitions.get(1)?;
+    let (a, b, column) = binary_intersection(first, second, analysis)?;
+    let mut keys = vec![a, b];
+    for pair in definitions[1..].windows(2) {
+        let Some(key) = intersection_extension(first, &pair[0], &pair[1], analysis) else {
+            break;
+        };
+        keys.push(key);
+    }
+    Some(Intersection { keys, column })
 }
 
 /// Candidate prefixes for a recorded smallest intersection.
@@ -1349,7 +1369,7 @@ pub fn binary_intersection<'a>(
 pub struct CandidatePrefixes<'a> {
     pub reader: &'a Ident,
     pub column: String,
-    pub sides: [(String, Vec<String>); 2],
+    pub sides: Vec<(String, Vec<String>)>,
 }
 
 /// Read the smallest decisions of a checked Physical program in definition order.
@@ -1357,63 +1377,181 @@ pub fn candidate_prefixes<'a>(
     program: &'a Program,
     analysis: &Analysis,
 ) -> Vec<CandidatePrefixes<'a>> {
-    program.program.definitions.windows(2).filter_map(|pair| {
-        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_)))) {
+    program.program.definitions.iter().enumerate().filter_map(|(position, first)| {
+        if !matches!(&first.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_)))) {
             return None;
         }
-        let (a, b, column) = binary_intersection(&pair[0], &pair[1], analysis)?;
-        let mut left: Vec<_> = a.columns.iter().map(symbol_name).collect();
-        let mut right: Vec<_> = b.columns.iter().map(symbol_name).filter(|c| *c != column).collect();
-        left.sort(); right.sort();
-        Some(CandidatePrefixes {
-            reader: &pair[0].name, column,
-            sides: [(symbol_name(&a.right), left), (symbol_name(&b.right), right)],
-        })
+        let Intersection { keys, column } =
+            intersection(&program.program.definitions[position..], analysis)?;
+        let sides = keys.iter().map(|key| {
+            let mut prefix: Vec<_> = key.columns.iter().map(symbol_name)
+                .filter(|c| c != &column).collect();
+            prefix.sort();
+            (symbol_name(&key.right), prefix)
+        }).collect();
+        Some(CandidatePrefixes { reader: &first.name, column, sides })
     }).collect()
 }
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
-/// Reject known failures of Leibniz admissibility; rustc checks necessary bounds.
-fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn::Result<()> {
-    let column = syn::Ident::new(column, proc_macro2::Span::call_site());
-    cq_syntax::algebra::check_leibniz_type(ty, &column)
-        .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
+/// Prove union arm disjointness from anti operators and column-preserving
+/// support lineage. A fallback origin annotation alone supplies no proof.
+/// Formal rule PH-DisjointAnti: Every pair has an anti-excluded side and a side contained in its blocker.
+pub fn disjoint_unions(
+    program: &Program,
+    headings: &BTreeMap<String, Vec<String>>,
+) -> BTreeSet<String> {
+    let definitions = &program.program.definitions;
+    if !definitions.iter().any(|d| matches!(d.operator, Operator::Union(_)))
+        || !definitions.iter().any(|d| matches!(d.operator, Operator::Anti(..)))
+    {
+        return BTreeSet::new();
+    }
+    let positions: BTreeMap<_, _> = definitions.iter().enumerate()
+        .map(|(index, definition)| (symbol_name(&definition.name), index)).collect();
+    let mut unions: Vec<_> = definitions.iter().enumerate().filter_map(|(index, definition)| {
+        let Operator::Union(union) = &definition.operator else { return None };
+        let arms: Vec<_> = union.operands.iter().map(|arm| positions[&symbol_name(arm)]).collect();
+        let pairs: Vec<_> = arms.iter().enumerate().flat_map(|(right, &r)| {
+            arms[..right].iter().map(move |&l| (l, r, false))
+        }).collect();
+        Some((index, pairs))
+    }).collect();
+    // For each anti, bit 0 follows its surviving rows and bit 1 follows rows
+    // of its right operand. Reuse one array; no path search or per-pair sets.
+    let mut lineage = vec![0_u8; definitions.len()];
+    for (excluded, definition) in definitions.iter().enumerate() {
+        let Operator::Anti(_, anti) = &definition.operator else { continue };
+        let blocker = positions[&symbol_name(&anti.right)];
+        let columns: Vec<_> = anti.columns.iter().map(symbol_name).collect();
+        lineage.fill(0);
+        for (index, definition) in definitions.iter().enumerate() {
+            let heading = &headings[&symbol_name(&definition.name)];
+            if !columns.iter().all(|column| heading.contains(column)) {
+                continue;
+            }
+            let of = |input: &Ident| lineage[positions[&symbol_name(input)]];
+            let inherited = match &definition.operator {
+                Operator::Probe(_, keyed) | Operator::Merge(_, keyed) => of(&keyed.left) | of(&keyed.right),
+                Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => of(&keyed.left),
+                Operator::Union(union) => union.operands.iter().fold(3, |mask, input| mask & of(input)),
+                Operator::Unit(_) | Operator::Rename(_) | Operator::Group(_) => 0,
+                operator => operator.input().map_or(0, of),
+            };
+            lineage[index] = inherited
+                | if index == excluded { 1 } else { 0 }
+                | if index == blocker { 2 } else { 0 };
+        }
+        for (_, pairs) in &mut unions {
+            for (left, right, proved) in pairs {
+                *proved |= (lineage[*left] & 1 != 0 && lineage[*right] & 2 != 0)
+                    || (lineage[*right] & 1 != 0 && lineage[*left] & 2 != 0);
+            }
+        }
+    }
+    unions.into_iter().filter_map(|(index, pairs)| {
+        pairs.iter().all(|(_, _, proved)| *proved).then(|| symbol_name(&definitions[index].name))
+    }).collect()
 }
 
+/// Derive duplicate-free results and their column keys from Physical operators,
+/// the input-set contract, and recorded canon boundaries.
+/// `headings` is the local heading analysis of this same program. The boundary
+/// callback receives the inherited key before the definition's own canon and
+/// supplies its recorded or proposed boundary. No asserted partial key or
+/// consumer evidence participates in the transfer.
+pub fn uniqueness(
+    program: &Program,
+    headings: &BTreeMap<String, Vec<String>>,
+    disjoint: &BTreeSet<String>,
+    mut canon: impl FnMut(&Definition, Option<&[String]>) -> bool,
+) -> BTreeMap<String, Vec<String>> {
+    let mut keys = BTreeMap::new();
+    for definition in &program.program.definitions {
+        let name = symbol_name(&definition.name);
+        let heading = &headings[&name];
+        let inherited = inherited_key(
+            &definition.operator,
+            heading,
+            disjoint.contains(&name),
+            |input| keys.get(&symbol_name(input)).map(Vec::as_slice),
+        );
+        // Formal rule PH-UniqueCanon: A recorded boundary supplies the full-heading key.
+        let boundary = canon(definition, inherited.as_deref());
+        if let Some(key) = inherited.or_else(|| boundary.then(|| heading.clone())) {
+            keys.insert(name, key);
+        }
+    }
+    keys
+}
+
+
 /// Inherit an already established uniqueness key through one operator.
-/// Formal rule PH-HostSet: A rename of a certified host set has its full heading as uniqueness key.
 /// Canonical boundaries are applied by the caller after this transfer.
-pub fn inherited_key(
+/// `disjoint` is the checked operator-disjointness fact for this result.
+pub fn inherited_key<'a>(
     operator: &Operator,
     heading: &[String],
-    host_sets: &[HostSet],
-    mut key: impl FnMut(&Ident) -> Option<Vec<String>>,
+    disjoint: bool,
+    mut key: impl FnMut(&Ident) -> Option<&'a [String]>,
 ) -> Option<Vec<String>> {
     match operator {
-        Operator::Union(_) => None,
-        Operator::Rename(rename) => host_sets
-            .iter()
-            .any(|fact| symbol_name(&fact.relation) == symbol_name(&rename.relation))
+        // Formal rule PH-UniqueUnion: Disjoint arms must each be duplicate-free.
+        Operator::Union(union) => (disjoint && union.operands.iter().all(|arm| key(arm).is_some()))
             .then(|| heading.to_vec()),
+        // Formal rule PH-UniqueInput: Every input traversal enumerates a set of full rows.
+        Operator::Rename(_) => Some(heading.to_vec()),
+        // Formal rule PH-UniqueUnit: Unit has at most its one empty valuation.
         Operator::Unit(_) => Some(Vec::new()),
         Operator::Probe(_, k) | Operator::Merge(_, k) => {
-            key(&k.left).zip(key(&k.right)).map(|(mut left, right)| {
-                left.extend(right);
-                left.sort();
-                left.dedup();
-                left
+            // Formal rule PH-UniqueJoin: A joined valuation determines both operand keys.
+            key(&k.left).zip(key(&k.right)).map(|(left, right)| {
+                let mut combined = Vec::with_capacity(left.len() + right.len());
+                combined.extend(left.iter().chain(right).cloned());
+                combined.sort();
+                combined.dedup();
+                combined
             })
         }
-        Operator::Semi(_, k) | Operator::Anti(_, k) => key(&k.left),
-        Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => key(&s.input),
-        Operator::Bind(b) if b.for_token.is_none() => key(&b.input),
+        // Formal rule PH-UniqueAnti: Membership filtering preserves the left key.
+        Operator::Semi(_, k) | Operator::Anti(_, k) => key(&k.left).map(<[String]>::to_vec),
+        // Formal rule PH-UniqueSelect: Closed equalities make their columns constant across retained rows.
+        Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+            use cq_syntax::constraint::{Comparison, Constraint, Term};
+            key(&s.input).map(|input_key| input_key.iter().filter(|column| {
+                !(s.condition.equalities.iter().any(|equality| {
+                    symbol_name(&equality.left) == **column
+                        && matches!(equality.right, cq_syntax::EqualityValue::Literal(_))
+                }) || s.condition.constraints.iter().any(|constraint| {
+                    let Constraint::Compare { left, comparison: Comparison::Eq(_), right } = constraint else {
+                        return false;
+                    };
+                    match (left, right) {
+                        (Term::Variable(variable), Term::Literal(_) | Term::Closed(_))
+                        | (Term::Literal(_) | Term::Closed(_), Term::Variable(variable)) => {
+                            symbol_name(variable) == **column
+                        }
+                        _ => false,
+                    }
+                }))
+            }).cloned().collect())
+        }
+        // Formal rule PH-UniqueFilter: Guard and scalar extension preserve the input key.
+        Operator::Bind(b) if b.for_token.is_none() => key(&b.input).map(<[String]>::to_vec),
+        // Formal rule PH-UniqueGenerator: An opaque generator can repeat a valuation.
         Operator::Bind(_) => None,
-        Operator::Guard(g) => key(&g.input),
-        Operator::Project(p) => key(&p.input).filter(|key| key.iter().all(|k| heading.contains(k))),
+        Operator::Guard(g) => key(&g.input).map(<[String]>::to_vec),
+        Operator::Project(p) => {
+            // Formal rule PH-UniqueProject: Retaining every key column preserves uniqueness.
+            // Formal rule PH-UniqueProjectDrop: Losing a key column loses the proof.
+            key(&p.input).filter(|key| key.iter().all(|k| heading.contains(k))).map(<[String]>::to_vec)
+        }
         Operator::Group(group) => {
-            let mut keys: Vec<_> = group.keys.iter().map(symbol_name).collect();
+            // Formal rule PH-UniqueGroup: One row per grouping tuple; captures are fixed.
+            let mut keys: Vec<_> = group.keys.iter().map(symbol_name)
+                .filter(|key| heading.contains(key)).collect();
             keys.sort();
             Some(keys)
         }
@@ -1423,38 +1561,189 @@ pub fn inherited_key(
 /// Physical rewrites preserve the named logical graph and satisfy their read contracts.
 /// Operator choices, retention modes and canonicalization may change while
 /// declarations, operands, relational predicates and Rust payloads remain fixed.
-/// Relational definitions may commute in dependency order and move earlier
-/// across Rust nodes. The Rust chain retains its written relative order, and
-/// every source Before obligation survives: no relational definition moves
-/// later across a Rust node.
+/// Definitions may commute in dependency order. Rust expressions retain their
+/// payload and free-variable dependencies, without additional ordering barriers.
+/// PH-KeyProjection additionally permits a private retained key view on a
+/// smallest membership edge; erasing that view restores the exact named graph.
+/// PH-ConstantGuard permits a private literal-column rename/select/project
+/// expansion; erasure restores the original occurrence's literal restrictions.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let source_facts = contract::check(source)?;
     let target_facts = contract::check(target)?;
-    let mut target_chain = Vec::new();
     let target_definitions: BTreeMap<_, _> = target
         .program
         .definitions
         .iter()
-        .map(|definition| {
-            let name = symbol_name(&definition.name);
-            let rust_before = target_chain.len();
-            if is_rust(&definition.operator) {
-                target_chain.push(name.clone());
-            }
-            (name, (definition, rust_before))
-        })
+        .map(|definition| (symbol_name(&definition.name), definition))
         .collect();
+    let source_definitions: BTreeMap<_, _> = source
+        .program
+        .definitions
+        .iter()
+        .map(|definition| (symbol_name(&definition.name), definition))
+        .collect();
+    let mut key_views = BTreeSet::new();
+    let mut projected_memberships = BTreeSet::new();
+    let mut constant_guards = BTreeSet::new();
+    for definition in &source.program.definitions {
+        let Operator::Rename(original) = &definition.operator else {
+            continue;
+        };
+        let Some(constants) = &original.constants else {
+            continue;
+        };
+        if constants.equalities.is_empty() {
+            continue;
+        }
+        let Some(replacement) = target_definitions.get(&symbol_name(&definition.name)) else {
+            continue;
+        };
+        let Operator::Project(project) = &replacement.operator else {
+            continue;
+        };
+        let Some(filtered) = target_definitions.get(&symbol_name(&project.input)) else {
+            continue;
+        };
+        let Operator::Select(select) = &filtered.operator else {
+            continue;
+        };
+        let Some(raw) = target_definitions.get(&symbol_name(&select.input)) else {
+            continue;
+        };
+        let Operator::Rename(renamed) = &raw.operator else {
+            continue;
+        };
+        // PH-ConstantGuard: inspect the recorded expansion, not the producer's
+        // naming algorithm. Private pipe intermediates introduce exactly the
+        // literal columns that the original occurrence restricted.
+        if [raw, filtered].iter().any(|d| {
+            source_definitions.contains_key(&symbol_name(&d.name))
+                || !matches!(d.mode, Mode::Pipe(_))
+                || d.canon.is_some()
+                || target
+                    .program
+                    .definitions
+                    .iter()
+                    .flat_map(|d| d.operator.operands())
+                    .filter(|operand| **operand == d.name)
+                    .count()
+                    != 1
+        }) || raw.name == filtered.name
+            || renamed.constants.is_some()
+            || renamed.mapping.len() != original.mapping.len() + constants.equalities.len()
+            || project
+                .attributes
+                .iter()
+                .ne(original.mapping.iter().map(|m| &m.target))
+        {
+            continue;
+        }
+        let mut restored = renamed.clone();
+        restored.mapping = original.mapping.clone();
+        restored.constants = original.constants.clone();
+        if &restored != original
+            || !renamed
+                .mapping
+                .iter()
+                .take(original.mapping.len())
+                .eq(original.mapping.iter())
+        {
+            continue;
+        }
+        let mut conditions = Vec::new();
+        let mut valid = true;
+        for (mapping, equality) in renamed
+            .mapping
+            .iter()
+            .skip(original.mapping.len())
+            .zip(&constants.equalities)
+        {
+            let cq_syntax::EqualityValue::Literal(value) = &equality.right else {
+                valid = false;
+                break;
+            };
+            if mapping.source != equality.left {
+                valid = false;
+                break;
+            }
+            let variable = &mapping.target;
+            conditions.push(quote::quote!(#variable = #value));
+        }
+        if !valid {
+            continue;
+        }
+        let expected: cq_syntax::algebra::Theta = syn::parse2(quote::quote!(#(#conditions),*))?;
+        if select.condition != expected {
+            continue;
+        }
+        key_views.insert(symbol_name(&raw.name));
+        key_views.insert(symbol_name(&filtered.name));
+        constant_guards.insert(symbol_name(&definition.name));
+    }
+    for (position, definition) in target.program.definitions.iter().enumerate() {
+        if !matches!(&definition.operator, Operator::Probe(_, key)
+            if matches!(key.choice, Some(Choice::Smallest(_))))
+        {
+            continue;
+        }
+        let Some(site) = intersection(&target.program.definitions[position..], &target_facts)
+        else {
+            continue;
+        };
+        for offset in 1..site.keys.len() {
+            let member = &target.program.definitions[position + offset];
+            let Operator::Semi(_, key) = &member.operator else {
+                continue;
+            };
+            let view_name = symbol_name(&key.right);
+            if source_definitions.contains_key(&view_name) {
+                continue;
+            }
+            let view = target_definitions[&view_name];
+            let Operator::Project(project) = &view.operator else {
+                continue;
+            };
+            let Some(original) = source_definitions.get(&symbol_name(&member.name)) else {
+                continue;
+            };
+            let Operator::Semi(_, original_key) = &original.operator else {
+                continue;
+            };
+            let columns: BTreeSet<_> = key.columns.iter().map(symbol_name).collect();
+            let projected: BTreeSet<_> = project.attributes.iter().map(symbol_name).collect();
+            if !matches!(view.mode, Mode::Let(_))
+                || project.input != original_key.right
+                || key.left != original_key.left
+                || key.columns != original_key.columns
+                || projected != columns
+                || target
+                    .program
+                    .definitions
+                    .iter()
+                    .flat_map(|d| d.operator.operands())
+                    .filter(|operand| **operand == view.name)
+                    .count()
+                    != 1
+            {
+                continue;
+            }
+            key_views.insert(view_name);
+            projected_memberships.insert(symbol_name(&member.name));
+        }
+    }
     if source.program.declarations != target.program.declarations
-        || source_facts.discharged_host_sets != target_facts.discharged_host_sets
+        || source.program.captures != target.program.captures
         || source_facts.consumer_canonical != target_facts.consumer_canonical
         || source.program.head != target.program.head
         || source.program.returned != target.program.returned
-        || source.program.definitions.len() != target.program.definitions.len()
+        || source.program.definitions.len() + key_views.len() != target.program.definitions.len()
         || source.program.definitions.iter().any(|definition| {
             target_definitions
                 .get(&symbol_name(&definition.name))
-                .is_none_or(|(target, _)| {
+                .is_none_or(|target| {
                     !same_logical_operator(&definition.operator, &target.operator)
+                        && !projected_memberships.contains(&symbol_name(&definition.name))
+                        && !constant_guards.contains(&symbol_name(&definition.name))
                 })
         })
     {
@@ -1464,127 +1753,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         );
     }
 
-    if source
-        .program
-        .definitions
-        .iter()
-        .any(|d| matches!(d.operator, Operator::Union(_)))
-    {
-        let scopes = branch_scopes(source);
-        let positions: BTreeMap<_, _> = target
-            .program
-            .definitions
-            .iter()
-            .enumerate()
-            .map(|(i, d)| (symbol_name(&d.name), i))
-            .collect();
-        for (i, rust) in source
-            .program
-            .definitions
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| is_rust(&d.operator))
-        {
-            let name = symbol_name(&rust.name);
-            let scope = &scopes[&name];
-            for before in &source.program.definitions[..i] {
-                let previous = symbol_name(&before.name);
-                // A sibling union arm has its own chain. Ancestor and local
-                // definitions retain every written Before obligation.
-                if scope.starts_with(&scopes[&previous]) && positions[&previous] > positions[&name]
-                {
-                    return error(
-                        &rust.name,
-                        format!(
-                            "Physical rewrite loses Before result `{previous}` at Rust `{name}`"
-                        ),
-                    );
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    // The contracts give unique names, topological operand edges and Rust
-    // ancestry. With the same graph and Rust chain, a relational node retains
-    // all source Before obligations exactly when its preceding Rust prefix
-    // does not grow. Reordering within a relational region is unrestricted.
-    let mut source_rust_before = 0;
-    for definition in &source.program.definitions {
-        let name = symbol_name(&definition.name);
-        let (target_definition, target_rust_before) = target_definitions[&name];
-        if is_rust(&definition.operator) {
-            if target_chain.get(source_rust_before) != Some(&name) {
-                return error(
-                    &target_definition.name,
-                    "Physical rewrite changes Rust bind/guard written order",
-                );
-            }
-            source_rust_before += 1;
-        } else if target_rust_before > source_rust_before {
-            return error(
-                &target_definition.name,
-                format!(
-                    "Physical rewrite moves relational result `{name}` later across Rust node `{}` and loses a source Before obligation",
-                    target_chain[source_rust_before]
-                ),
-            );
-        }
-    }
     Ok(())
-}
-
-// Given union operands assign branch scopes by graph edges, cutting the
-// recorded prefix and every negative reference. This is structural traversal
-// of named nodes; it performs no occurrence matching or search.
-fn branch_scopes(program: &Program) -> BTreeMap<String, Vec<String>> {
-    let definitions: BTreeMap<_, _> = program
-        .program
-        .definitions
-        .iter()
-        .map(|d| (symbol_name(&d.name), d))
-        .collect();
-    let mut scopes: BTreeMap<_, Vec<String>> = definitions
-        .keys()
-        .map(|name| (name.clone(), Vec::new()))
-        .collect();
-    for definition in &program.program.definitions {
-        let Operator::Union(union) = &definition.operator else {
-            continue;
-        };
-        let Some(origin) = &union.origin else {
-            continue;
-        };
-        let boundary = origin
-            .over
-            .as_ref()
-            .map(|o| symbol_name(&o.prefix))
-            .or_else(|| origin.domain.as_ref().map(|d| symbol_name(&d.input)));
-        for (j, operand) in union.operands.iter().enumerate() {
-            let mut scope = origin.occurrence.0.clone();
-            scope.push(j.to_string());
-            let mut visited = BTreeSet::new();
-            let mut pending = vec![symbol_name(operand)];
-            while let Some(name) = pending.pop() {
-                if boundary.as_ref() == Some(&name) || !visited.insert(name.clone()) {
-                    continue;
-                }
-                if scope.len() > scopes[&name].len() {
-                    scopes.insert(name.clone(), scope.clone());
-                }
-                let operator = &definitions[&name].operator;
-                match operator {
-                    Operator::Anti(_, anti) => pending.push(symbol_name(&anti.left)),
-                    _ => pending.extend(operator.operands().into_iter().map(symbol_name)),
-                }
-            }
-        }
-    }
-    scopes
-}
-
-fn is_rust(operator: &Operator) -> bool {
-    matches!(operator, Operator::Bind(_) | Operator::Guard(_))
 }
 
 // Compare the logical content directly, without importing another language.
@@ -1632,13 +1801,6 @@ impl cq_stage::Language for Program {
     fn context(&self) -> cq_stage::Context {
         cq_stage::Context {
             consumer_canonical: self.program.consumer_canonical.is_some(),
-            discharged_host_sets: self
-                .program
-                .host_sets
-                .iter()
-                .filter(|fact| fact.discharged.is_some())
-                .map(|fact| symbol_name(&fact.relation))
-                .collect(),
         }
     }
     fn check(&self) -> syn::Result<()> {

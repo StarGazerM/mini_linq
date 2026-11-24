@@ -3,20 +3,21 @@
 #[path = "h05_program.rs"]
 mod reference;
 
-use cq_lang_sequence::{OutputProtocol, Program, Term};
+use cq_lang_sequence::{OutputProtocol, Term};
+use crate::Stack;
 
-pub fn r() -> Program {
+pub fn r() -> Stack {
     let mut program = reference::program();
-    let Term::Store { capacity, .. } = &mut program.sequence.definitions.last_mut().unwrap().term
+    let Term::Store { capacity, .. } = &mut program.program.sequence.definitions.last_mut().unwrap().term
     else {
         unreachable!("the authored reference publishes a store")
     };
     *capacity = None;
-    program.sequence.output = Some(OutputProtocol::Count);
+    program.program.sequence.output = Some(OutputProtocol::Count);
     program
 }
 
-pub fn b() -> Program {
+pub fn b() -> Stack {
     syn::parse_quote! {
         physical {
             relation Region(r_regionkey:u32,r_name:i32) = (&data.region);
@@ -25,38 +26,39 @@ pub fn b() -> Program {
             relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&data.orders);
             relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&data.lineitem);
             relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&data.supplier);
-            region_base = pipe rename Region@0 {r_regionkey -> region,r_name -> region_name};
+            region_base = pipe rename Region {r_regionkey -> region,r_name -> region_name};
             region_selected = pipe select region_base if (region_name = 2);
             r1 = let project region_selected keep {region};
-            nation_base = pipe rename Nation@1 {n_nationkey -> nation,n_regionkey -> region};
+            nation_base = pipe rename Nation {n_nationkey -> nation,n_regionkey -> region};
             r2 = let semi eager [region] nation_base,r1;
-            customer = let rename Customer@2 {c_custkey -> customer,c_nationkey -> nation};
-            orders_base = pipe rename Orders@3 {o_orderkey -> order,o_custkey -> customer,o_orderdate -> date};
+            customer = let rename Customer {c_custkey -> customer,c_nationkey -> nation};
+            orders_base = pipe rename Orders {o_orderkey -> order,o_custkey -> customer,o_orderdate -> date};
             orders_selected = pipe select orders_base if (date >= 8766,date < 9131);
             orders = let project orders_selected keep {order,customer};
-            lineitem = let rename Lineitem@4 {l_orderkey -> order,l_suppkey -> supplier};
-            supplier = let rename Supplier@5 {s_suppkey -> supplier,s_nationkey -> nation};
+            lineitem = let rename Lineitem {l_orderkey -> order,l_suppkey -> supplier};
+            supplier = let rename Supplier {s_suppkey -> supplier,s_nationkey -> nation};
             asia = pipe semi eager [nation] customer,r2;
             co = pipe probe first [customer] asia,orders;
             col = pipe probe first [order] co,lineitem;
             matched = pipe semi eager [nation,supplier] col,supplier;
-            answer = pipe canon project matched keep {order,supplier,nation};
+            answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures {
-            region_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
-            nation_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            orders_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
-            lineitem host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
-            r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
-            customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-            lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];
-            supplier = ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            region_base host scan = @device_columns input { keys 0; columns [u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
+            nation_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            customer host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            orders_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
+            lineitem host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            supplier host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            r1 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+            r2 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+            answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+            answer canon = rows;
+            customer rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+            lineitem = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+            supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
         }
         sequence {
             R1 = store map r1 compact region_selected rows region_base;
@@ -87,9 +89,9 @@ pub fn b() -> Program {
     }
 }
 
-pub fn a() -> Program {
+pub fn a() -> Stack {
     let mut program = b();
-    let physical = &mut program.structures.physical.program.definitions;
+    let physical = &mut program.physical.program.definitions;
     physical.retain(|definition| {
         !["asia", "co", "col", "matched", "answer"].contains(&definition.name.to_string().as_str())
     });
@@ -98,20 +100,25 @@ pub fn a() -> Program {
     physical.push(syn::parse_quote!(asia = pipe semi eager [nation] loc,r2;));
     physical.push(syn::parse_quote!(matched = pipe semi eager [nation,supplier] asia,supplier;));
     physical
-        .push(syn::parse_quote!(answer = pipe canon project matched keep {order,supplier,nation};));
+        .push(syn::parse_quote!(answer = let canon project matched keep {order,supplier,nation};));
     let entries = &mut program.structures.structures.entries;
     entries.retain(|entry| {
         !["customer", "orders", "lineitem", "supplier"].contains(&entry.name.to_string().as_str())
             || matches!(entry.structure, cq_lang_structures::Structure::Host { .. })
     });
-    entries.push(syn::parse_quote!(lineitem rows = ::cq_gpu_sequence_runtime::RangeProvider;));
-    entries.push(syn::parse_quote!(orders = ::cq_gpu_sequence_runtime::RangeProvider [order];));
+    entries.push(syn::parse_quote!(lineitem rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;));
+    entries.push(syn::parse_quote!(orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];));
     entries
-        .push(syn::parse_quote!(customer = ::cq_gpu_sequence_runtime::RangeProvider [customer];));
+        .push(syn::parse_quote!(customer = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];));
     entries.push(
-        syn::parse_quote!(supplier = ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];),
+        syn::parse_quote!(supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];),
     );
-    program.sequence = syn::parse_quote! {
+    program
+        .structures
+        .structures
+        .declare(&cq_gpu_sequence::providers::declarations())
+        .unwrap();
+    program.program.sequence = syn::parse_quote! {
         sequence {
             R1 = store map r1 compact region_selected rows region_base;
             N = store rows nation_base;

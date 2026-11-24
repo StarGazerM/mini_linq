@@ -1,3 +1,2 @@
-structures { r0 host scan = :: core :: iter :: Map < _ , _ > [];
- r1 canon = :: cq_storage :: HashSet < _ >;
+structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r0 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
  }

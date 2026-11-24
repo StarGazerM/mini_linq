@@ -1,0 +1,9 @@
+query	sf	stage	field	head_binding	producer_bits	domain_bits	reason
+h11	1	0	supplier_key	__cq_5_1	32	14	opaque authored head Bind; downstream measured bounds retained
+h11	1	0	part_key	__cq_5_0	32	18	opaque authored head Bind; downstream measured bounds retained
+h11	1	0	quantity	__cq_5_2	32	14	opaque authored head Bind; downstream measured bounds retained
+h11	1	3	part_key	__cq_3_0	32	18	opaque authored head Bind; downstream measured bounds retained
+h11	10	0	supplier_key	__cq_5_1	32	17	opaque authored head Bind; downstream measured bounds retained
+h11	10	0	part_key	__cq_5_0	32	21	opaque authored head Bind; downstream measured bounds retained
+h11	10	0	quantity	__cq_5_2	32	14	opaque authored head Bind; downstream measured bounds retained
+h11	10	3	part_key	__cq_3_0	32	21	opaque authored head Bind; downstream measured bounds retained

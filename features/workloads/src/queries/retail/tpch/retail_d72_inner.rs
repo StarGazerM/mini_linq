@@ -38,8 +38,8 @@ AND l.l_quantity > 20.00 AND ps.ps_availqty > 0"#;
     answer(order_key: i64, part_key: i64, supplier_key: i64, nation_key: i32) :-
         Orders(order_key, customer_key),
         Lineitem(order_key, part_key, supplier_key, ship_date, quantity),
-        if *ship_date >= start && *ship_date < end, if *quantity > minimum,
-        PartSupp(part_key, supplier_key, available), if *available > 0,
+        where ship_date >= start && ship_date < end, where quantity > minimum,
+        PartSupp(part_key, supplier_key, available), where available > 0,
         Supplier(supplier_key, nation_key), Part(part_key), Customer(customer_key, nation_key),
         Nation(nation_key);
 }

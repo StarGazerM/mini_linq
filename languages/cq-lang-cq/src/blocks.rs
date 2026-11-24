@@ -1,8 +1,8 @@
 //! Scoped disjunctions. The interface is the intersection of branch binders;
 //! prefix names used inside are free variables. Other branch binders are local.
 //! Union projects to the common heading and combines sets; fallback selects the
-//! first nonempty branch. A branch panic is bottom. Union order and witness
-//! short circuiting may remove bottom; fallback order is part of its meaning.
+//! first nonempty branch. Rust expressions in either form are total by premise
+//! and may be placed wherever their lexical free variables are available.
 
 use crate::{BodyItem, CommaList, rust, symbol_name};
 use quote::{ToTokens, quote};
@@ -167,6 +167,24 @@ impl Block {
             .collect();
         result
     }
+
+    /// A hoisted arm without a generator for some free column (or with a
+    /// negation over one) takes its finite domain from the written prefix.
+    pub fn needs_domain(&self, facts: &Analysis) -> bool {
+        self.branches.iter().any(|branch| {
+            let generated: BTreeSet<_> = walk(&branch.body)
+                .into_iter()
+                .filter_map(BodyItem::atom)
+                .flat_map(cq_syntax::Atom::variables)
+                .map(symbol_name)
+                .collect();
+            facts.free.keys().any(|name| !generated.contains(name))
+                || walk(&branch.body).into_iter().any(|item| {
+                    matches!(item, BodyItem::Negation(n)
+                        if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
+                })
+        })
+    }
 }
 
 /// Visible binders at the end of a body, respecting nested block interfaces.
@@ -233,11 +251,25 @@ pub fn walk(body: &CommaList<BodyItem>) -> Vec<&BodyItem> {
     items
 }
 
-pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<String>) {
+pub(crate) fn resolve_constraints(
+    body: &mut CommaList<BodyItem>,
+    logical: &BTreeSet<String>,
+    captures: &BTreeSet<String>,
+) {
     let mut prefix = BTreeSet::new();
     let mut forbidden = BTreeSet::new();
-    let mut result = CommaList::new();
+    let mut resolved = CommaList::new();
     for mut item in std::mem::take(body) {
+        // A-Capture: a previously resolved equality can lose its query binder
+        // when a closed let is hoisted. Reclassify it without inspecting Rust.
+        if let BodyItem::Equality(equality) = &item {
+            if equality
+                .variables()
+                .any(|variable| captures.contains(&symbol_name(variable)))
+            {
+                item = BodyItem::Constraint(crate::Constraint::from_equality(equality));
+            }
+        }
         match &mut item {
             BodyItem::Block(block) => {
                 let facts = block.analyze(&prefix);
@@ -247,7 +279,7 @@ pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<St
                         .cloned()
                         .chain(bound(&branch.body).into_keys())
                         .collect();
-                    split_guards(&mut branch.body, &branch_logical);
+                    resolve_constraints(&mut branch.body, &branch_logical, captures);
                 }
                 forbidden.extend(facts.locals.into_iter().flatten());
                 prefix.extend(facts.interface.into_keys());
@@ -259,28 +291,38 @@ pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<St
             BodyItem::For(binding) => {
                 prefix.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
-            BodyItem::Filter(filter) => {
-                let names = logical.union(&forbidden).cloned().collect();
-                let split = cq_syntax::guard::split(&filter.condition, &names);
-                for c in split.constraints {
-                    result.push(match c.equality() {
-                        Some(e) => BodyItem::Equality(e),
-                        None => BodyItem::Constraint(c),
-                    });
-                }
-                if let Some(condition) = split.residual {
-                    result.push(BodyItem::Filter(crate::Filter {
-                        condition,
-                        ..filter.clone()
-                    }));
-                }
-                continue;
+            BodyItem::Constraint(constraint) => {
+                constraint.map_terms(&mut |term| {
+                    if let crate::syntax::constraint::Term::Variable(variable) = term {
+                        if captures.contains(&symbol_name(variable)) {
+                            *term = crate::syntax::constraint::Term::Closed(
+                                syn::parse_quote!(#variable),
+                            );
+                        }
+                    }
+                });
+                constraint.resolve(&logical.union(&forbidden).cloned().collect());
             }
             _ => (),
         }
-        result.push(item);
+        append_resolved(item, &mut resolved);
     }
-    *body = result;
+    *body = resolved;
+}
+
+fn append_resolved(item: BodyItem, body: &mut CommaList<BodyItem>) {
+    match item {
+        BodyItem::Constraint(crate::Constraint::Or(mut branches)) if branches.len() == 1 => {
+            for constraint in branches.pop().unwrap() {
+                append_resolved(BodyItem::Constraint(constraint), body);
+            }
+        }
+        BodyItem::Constraint(constraint) => body.push(match constraint.equality() {
+            Some(equality) => BodyItem::Equality(equality),
+            None => BodyItem::Constraint(constraint),
+        }),
+        item => body.push(item),
+    }
 }
 
 /// Infer declared visible types and check each branch's common interface.
@@ -290,16 +332,35 @@ pub fn types(
     body: &CommaList<BodyItem>,
     prefix: &BTreeMap<String, syn::Type>,
 ) -> syn::Result<BTreeMap<String, syn::Type>> {
+    type_facts(schema, body, prefix, &BTreeMap::new()).map(|(types, _)| types)
+}
+
+fn type_facts(
+    schema: &BTreeMap<String, &crate::RelationDecl>,
+    body: &CommaList<BodyItem>,
+    prefix: &BTreeMap<String, syn::Type>,
+    inherited_ids: &BTreeMap<String, cq_syntax::LogicalTypeId>,
+) -> syn::Result<(
+    BTreeMap<String, syn::Type>,
+    BTreeMap<String, cq_syntax::LogicalTypeId>,
+)> {
     let mut result = prefix.clone();
+    let mut logical_type_ids = inherited_ids.clone();
     for item in body {
         match item {
             BodyItem::Positive { atom } => {
                 let declaration = crate::check_input_atom(schema, atom)?;
                 for (argument, column) in atom.args.iter().zip(&declaration.columns) {
                     if let Some(id) = rust::variable(argument) {
-                        result
-                            .entry(symbol_name(id))
-                            .or_insert_with(|| column.ty.clone());
+                        let name = symbol_name(id);
+                        if result.contains_key(&name) {
+                            if logical_type_ids.get(&name).copied() != column.logical_type_id {
+                                logical_type_ids.remove(&name);
+                            }
+                        } else if let Some(logical_id) = column.logical_type_id {
+                            logical_type_ids.insert(name.clone(), logical_id);
+                        }
+                        result.entry(name).or_insert_with(|| column.ty.clone());
                     }
                 }
             }
@@ -321,9 +382,13 @@ pub fn types(
                 let branches = block
                     .branches
                     .iter()
-                    .map(|b| types(schema, &b.body, &result))
+                    .map(|b| type_facts(schema, &b.body, &result, &logical_type_ids))
                     .collect::<syn::Result<Vec<_>>>()?;
                 for (name, id) in &facts.interface {
+                    let declared_ids: Vec<_> = branches
+                        .iter()
+                        .filter_map(|(_, ids)| ids.get(name).copied())
+                        .collect();
                     let declared: Vec<_> = branches
                         .iter()
                         .zip(&block.branches)
@@ -334,10 +399,10 @@ pub fn types(
                                 .flat_map(crate::Atom::variables)
                                 .any(|id| symbol_name(id) == *name)
                         })
-                        .filter_map(|(b, _)| b.get(name))
+                        .filter_map(|((types, _), _)| types.get(name))
                         .filter(|ty| !matches!(ty, syn::Type::Infer(_)))
                         .collect();
-                    if declared.windows(2).any(|pair| pair[0] != pair[1]) {
+                    if declared_ids.windows(2).any(|pair| pair[0] != pair[1]) {
                         return Err(syn::Error::new_spanned(
                             id,
                             format!(
@@ -345,12 +410,22 @@ pub fn types(
                             ),
                         ));
                     }
+                    if declared_ids.len() == branches.len() {
+                        if let Some(logical_id) = declared_ids.first() {
+                            logical_type_ids.insert(name.clone(), *logical_id);
+                        }
+                    }
                     result.insert(
                         name.clone(),
                         declared
                             .first()
                             .map(|ty| (*ty).clone())
-                            .or_else(|| branches.first().and_then(|b| b.get(name)).cloned())
+                            .or_else(|| {
+                                branches
+                                    .first()
+                                    .and_then(|(types, _)| types.get(name))
+                                    .cloned()
+                            })
                             .unwrap_or_else(|| syn::parse_quote!(_)),
                     );
                 }
@@ -358,5 +433,5 @@ pub fn types(
             _ => (),
         }
     }
-    Ok(result)
+    Ok((result, logical_type_ids))
 }

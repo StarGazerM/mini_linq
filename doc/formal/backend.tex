@@ -41,13 +41,93 @@ $r_1,\ldots,r_k$ and output $r$, is
  \alpha_r(\mathsf{op}_{\rho}(x_1,\ldots,x_k))
  =\mathsf{op}(\alpha_{r_1}(x_1),\ldots,\alpha_{r_k}(x_k)).
 \]
-Here $\mathsf{op}$ is the bag realization of the Physical step; extend
-$\alpha(\bot)=\bot$ for partial steps. Initialization and reads obey the same
-commuting law. Structural coverage does not prove the storage laws: fetch
+Here $\mathsf{op}$ is the bag realization of the Physical step.
+Initialization and reads obey the same commuting law.
+Structural coverage does not prove the storage laws: fetch
 must equal the indicated column of \code{row_at}, and builds and reads must
 preserve multiplicity. The target of $\alpha$ is a bag, not a set;
 \code{canon} takes support and re-establishes the set boundary. Positional
 representation alone proves neither uniqueness nor ordered enumeration.
+
+\paragraph{Build statistics.}
+The provider declaration owns each statistic's field, unit, precision,
+producer, accessor ABI, placement, availability, computation and aggregation
+law. A \code{publications} record binds that declaration to one immutable
+Physical build, provider token, complete ordered layout and code-domain epochs.
+\begin{mathpar}
+\Rule{STR-BuildStats}{
+ s\in\mathsf{declaredStats}(p)\quad
+ (b,p,L)\in\mathsf{selectedBuilds}\quad
+ \mathsf{domainsMatch}(b,L,s)\quad\mathsf{aggregationLegal}(s)
+}{\mathsf{publication}(b,p,L,s)\text{ is well formed}}
+\end{mathpar}
+Exact distinct keys and maximum buckets are not sums over overlapping
+segments; full-key counts never describe a scalar projection. Numeric accessor
+ABI is a read-only, constant-time \code{Option<u64>}: absence is not zero
+and neither availability nor a read may force lazy work. Code bounds are not
+numeric count operands. No statistic is selected automatically by this contract.
+
+\paragraph{CPU runtime publication laws.}
+\textsc{RT-BuildStats} requires every present scalar to equal its stored
+occurrence oracle: rows count occurrences, keys count complete grouping keys,
+and maximum group counts the largest bucket (zero for completed empty data).
+The \code{stat\_rows}, \code{stat\_keys}, \code{stat\_max\_group} accessors,
+and run providers' \code{stat\_runs}, read metadata in constant time.
+An unfinalized lazy hash returns absence, not zero. Multi-run global keys and
+maxima remain absent unless already established by an existing materialization;
+neither access nor availability may trigger that work.
+Structures records ordinary versus statistics construction and a demand mask.
+Provider \code{statistics\_build} declares the accumulation fields; selected
+publications supply each demanded bit's immutable build/layout witness.
+The checker validates these witnesses without rerunning selection.
+The printer emits ordinary \code{Build::build}, or the recorded
+\code{BuildWithStatistics} call, never deriving protocol support from accessors.
+\code{BuildWithStatistics} and \code{BuildWithSidecar} take independent
+\code{ROWS,MAX\_GROUP} const-generic method parameters while preserving the
+normal lazy boundary. Demanded initializer dispatch occurs outside the
+ordinary \code{OnceCell} closure, preserving its hot-loop register allocation.
+Ordinary \code{Build} requests no accumulation; cheap lengths remain available.
+Explicit direct \code{from\_pairs} constructors retain their documented defaults.
+\begin{mathpar}
+\Rule{STR-Construction}{
+ d=\mathsf{recordedDemand}(b,p,L)\quad
+ \forall f\in d:\ \mathsf{supportsAccumulation}(p,f)\land
+ \mathsf{selectedPublication}(b,p,L,f)\quad
+ \forall f:\ \mathsf{supportsAccumulation}(p,f)\land
+ \mathsf{selectedPublication}(b,p,L,f)\implies f\in d
+}{\mathsf{construction}(b,p,L)=
+ \begin{cases}\mathsf{Ordinary}&d=\varnothing\\
+ \mathsf{Statistics}(d)&d\ne\varnothing\end{cases}}
+\end{mathpar}
+\begin{mathpar}
+\Rule{RT-BuildStats}{
+ \mathsf{stat}(x,f)=\mathsf{Some}(n)
+}{n=\mathsf{oracle}_{f}(\alpha(x))}
+\end{mathpar}
+\textsc{RT-RunFilter} governs borrowed ordered scalar run views. Point tests
+are exact; an interval test uses lower-bound search and OR across all runs.
+The selected scalar must be the complete stored layout; arbitrary composite
+projections are not licensed by lexicographic order.
+\begin{mathpar}
+\Rule{RT-RunFilter}{
+ F=\mathsf{borrowedRunView}(x)\quad K=\mathsf{scalarKeys}(x)
+}{
+ F.\mathsf{test}(k)\iff k\in K\quad
+ F.\mathsf{anyIn}(l,h)\iff \exists k\in K.\ l\le k\le h
+}
+\end{mathpar}
+The provider token fact \code{run\_filter} declares the source capability;
+\code{borrowed\_filter} and \code{attached\_filter} declare mutually exclusive,
+explicitly advised realizations. With neither fact, the default conditionally
+builds projected \code{Keys::distinct\_keys} through \code{Build} after activation.
+Default activation retains ordinary construction and exact
+\code{Keys::key\_count}. Only authored optional-statistic policies finalize the
+source with a unit sidecar before reading metadata; scalar accessors never force work.
+For explicit attachment, \code{BuildSidecar} supplies an incremental builder
+and \code{BuildWithSidecar} returns the completed index and filter together.
+Tuple builders observe the same construction without projected-key staging.
+Conservative filters may admit false positives but never false negatives;
+every exact covering operator remains.
 
 \paragraph{Lookup witnesses.}
 Either representation may append \code{witness \{ b [K] at s as Type \}}.
@@ -81,17 +161,14 @@ and the force consumes it before any boundary can expose the carrier.
 \end{proof}
 
 \subsection{E: evaluation unit as strictness}
-A \emph{stage} is a maximal $\bot$-free segment of a pipe's definition chain,
-within its producer and consumption boundaries. The total Physical kernels
-are \code{unit}, \code{rename}, \code{project}, relational
-\code{select}/\code{point}/\code{range}, and
-\code{probe}/\code{semi}/\code{anti}/\code{merge} over admissible keys.
-Recognized comparison guards have already become relational \code{select}
-predicates; a Physical \code{guard} is always opaque.
-The Order premise makes comparisons total; an arbitrary Rust \code{Ord}
-implementation is not a proof. An opaque \code{guard} or \code{bind} is partial
-and ends the preceding stage. Totality of a kernel does not assert totality
-of a producer or of a lazily forced build.
+A \emph{stage} is a representable segment of a pipe's definition chain,
+within its producer and consumption boundaries. All admitted Rust expressions
+and relational kernels are total under the premises. Only explicit
+\code{where} predicates become relational \code{select}; a Physical
+\code{guard} remains the original Rust expression.
+The checked batch vocabulary below is a representation capability, not a
+totality classification. A Rust operation outside that vocabulary may end a
+stage without acquiring a different meaning or a fixed written position.
 For the checked stage rule, let
 $\mathcal T_{\rm stage}=\{\mathsf{unit},\mathsf{rename},\mathsf{project},
 \mathsf{select},\mathsf{point},\mathsf{range},\mathsf{semi},\mathsf{anti}\}$:
@@ -101,9 +178,8 @@ $\mathcal T_{\rm stage}=\{\mathsf{unit},\mathsf{rename},\mathsf{project},
  \mathsf{admissibleKeys}(S)\quad \mathsf{totalInputs}(S)
 }{\mathsf{total}(S)}
 \end{mathpar}
-Here inputs already materialized are values; a new producer demand must be
-$\bot$-free or retain the scalar demand boundary described below. This does
-not allow a stage to traverse partial Rust in a build source.
+Materialized inputs are values; new producers obey the same totality premises.
+The stage checker records supported producer and consumption representations.
 
 Structures records its evaluation unit by \code{r stage = batch N;} with
 $N>0$: the chain from the preceding boundary (or producer) through $r$ runs
@@ -122,7 +198,7 @@ strictness, not an additional relational rewrite.
 \begin{mathpar}
 \Rule{ST-Stage}{
  \mathsf{total}(S)\quad \mathsf{producer}(S):\mathsf{for}\quad N>0\\
- \mathsf{boundaryBeforePartial}(S)\quad \mathsf{preserveDemand}(S)
+ \mathsf{representedSegment}(S)\quad \mathsf{preserveDemand}(S)
 }{r\;\mathsf{stage}=\mathsf{batch}\ N\text{ is admissible}}
 \end{mathpar}
 The staging pass records the previous fixed probe optimization as
@@ -157,15 +233,16 @@ The retained memo satisfies $\mathsf{memo}=\mathsf{lookup}_b(k)$ at both demands
 \begin{proof}
 Host immutability and the earlier let, or the shared snapshot lifetime,
 keep the provider unchanged. The checked chain preserves key terms.
-IndexRead's occurrence-preserving lookup law therefore identifies both total
-reads; no partial evaluation moves.
+IndexRead's occurrence-preserving lookup law (STR-SortedRun and STR-RunRead
+for runs) therefore identifies both total reads without changing the recorded
+expression placement.
 \end{proof}
 
 \begin{mathpar}
 \Rule{ST-Expand}{
  r=\mathsf{probe}[K](l,b)\quad \mathsf{declaresExpand}(b,K)\\
  \mathsf{totalSegment}(l,r)\quad \mathsf{producer}(l):\mathsf{for}
- \quad N>0\quad\mathsf{boundaryBeforePartial}(r)
+ \quad N>0\quad\mathsf{representedSegment}(l,r)
 }{r\;\mathsf{stage}=\mathsf{batch}\ N\ \mathsf{expand}\text{ is admissible}}
 \end{mathpar}
 The declared expansion contract supplies a Copy exact-size cursor, checked by
@@ -180,8 +257,8 @@ prefix shapes it cannot realize. The CUDA Sequence terminal rejects native
 Structures witnesses, staging and join filters rather than treating them as
 ordinary device lookups. Legacy provider names grant no exception.
 A Smallest intersection records expansion only at its introducing probe.
-Its forcing read is part of that same total intersection, not an independent
-cursor; subsequent staged probes may cross it without adding a force-stage.
+Its membership checks are part of that same total intersection, not independent
+cursors; subsequent staged probes may cross them without adding a force-stage.
 \begin{lemma}[Segmented flatten]
 Flattening $N$ finite ranges is total and length-known: with exclusive
 offsets $o_i=\sum_{j<i}|R_j|$, its length is $M=\sum_i|R_i|$.
@@ -190,7 +267,7 @@ Each output position identifies exactly one nonempty owner range and offset.
 \begin{proof}
 Exclusive scan (Blelloch's prefix-sum construction) preserves range order;
 concatenation preserves every occurrence. Chunks of the virtual array
-therefore preserve the scalar bag without crossing a partial step.
+therefore preserve the scalar bag and the recorded operator sequence.
 \end{proof}
 
 For total predicates $p_1,\ldots,p_k$ and a chunk $(x_j)_{j<n}$, initialize
@@ -200,30 +277,21 @@ $\{j<n\mid\bigwedge_i p_i(x_j)\}$. Evaluating later predicates on rows rejected
 by earlier ones is safe because no evaluation is $\bot$. Finite Set with
 union and $\emptyset$ is a commutative idempotent monoid, so regrouping these
 total contributions does not change the answer. At the bag level masks keep
-each surviving occurrence once. A selection vector is needed only at the
-boundary before the first partial step: only surviving positions may enter
-that step, in the unchanged pinned order. It need not be materialized between
-total predicates. Early-stop consumers can change the number of total
-evaluations, not their meaning; lookahead may not extend partial evaluation.
+each surviving occurrence once. A selection vector materializes surviving
+positions at a representation boundary; it need not be materialized between
+supported predicates. Early-stop consumers can change evaluation counts,
+not the answer or the recorded plan.
 
-\begin{lemma}[Forcing a lazy build with pinned Rust]
-Suppose a scalar keyed read forces a lazy index on its first demanded key,
-consumes its build source once, and preserves that source's Rust Before sets.
-Replacing only the total outer scan by chunk evaluation is a refinement if
-an empty survivor stream still does not force the build and the first
-surviving key forces it at the same demand boundary. This holds even when
-the build source contains pinned Rust.
+\begin{lemma}[Forcing a lazy build]
+Suppose a keyed read consumes its immutable build source once and subsequent
+reads reuse the resulting index. Scalar and chunked realization of the same
+recorded operations return the same bag.
 \end{lemma}
 \begin{proof}
-If no key survives, neither execution demands the build. Otherwise the scalar
-execution already demands the whole build on the first surviving key. Chunk
-lookahead adds only total outer work. Every Rust step in the build retains
-its free-variable binders, Rust predecessors and source-before relational
-facts, so its evaluation domain has not grown by moving it before a Before
-requirement. Subsequent reads reuse the same build. Thus no new partial
-source is forced and no new panic is introduced. Eagerly forcing that build
-before a surviving key, or batching across partial steps in its source, is
-not justified by this lemma or by kernel totality.
+Every build expression is pure and total and retains its free-variable
+bindings. Repeated reads therefore observe one unchanged relation. Chunk
+lookahead changes evaluation counts but neither index contents nor lookup
+answers. Build timing remains a recorded representation decision.
 \end{proof}
 
 \subsection{C: control as fold/unfold duality}
@@ -236,18 +304,16 @@ then yields the same set. This is a control choice, not a new IR entry.
 
 An early-stop consumer must already determine its answer from the consumed
 prefix (for example a positive existential witness); arbitrary truncation of
-returned answers is not allowed. Pull may omit later work, but may not reorder
-pinned Rust or demand a partial step skipped by the corresponding exhaustive
-push execution. Writing $P$ for that push execution and $L$ for pull:
+returned answers is not allowed. Pull may omit later work once the answer is
+determined, while preserving the supplied operator plan and free-variable
+bindings. Writing $P$ for push execution and $L$ for pull:
 \begin{mathpar}
 \Rule{BK-Dual}{
  \mathsf{sameStreamAlgebra}(P,L)\quad \mathsf{sameRE}(P,L)\\
- \mathsf{preserveBefore}(L)\quad \mathsf{answerDeterminedStop}(L)
+ \mathsf{sameRecordedPlan}(P,L)\quad \mathsf{answerDeterminedStop}(L)
 }{\sem P\sqsubseteq\sem L}
 \end{mathpar}
-On total streams, fold/unfold fusion gives bag equality on exhaustion and
-answer equality at an admissible stop. In the partial case, a successful
-push execution has no panic for pull to add; a failing push execution may
-become successful if pull omits the failing suffix. Thus pull may only remove
-panics, never introduce one or change a successful answer. This is an abstract
-emitter obligation, not a claim that a source marker proves emitted Rust.
+Fold/unfold fusion gives bag equality on exhaustion and answer equality at
+an admissible stop. Rust totality is a premise, not a distinction between
+pull and push; a panic violates the contract. This is an abstract emitter
+obligation, not a claim that a source marker proves emitted Rust.

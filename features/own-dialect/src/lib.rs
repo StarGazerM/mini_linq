@@ -3,21 +3,25 @@
 //! A standalone external consumer with a terminal Structures → Rust push pass:
 //!
 //! ```rust
-//! let R = [(1_i32,), (1,), (2,)];
+//! // R is a set of distinct rows; dropping `y` leaves two distinct answers.
+//! let R = [(1_i32, 10_i32), (1, 20), (2, 30)];
 //! let answers: Vec<_> = mini_linq::compile! {
-//!     pipeline { print = own_push::push; }
+//!     pipeline { print_input = structures; print = own_push::push; }
 //!     struct Q;
-//!     relation R(x: i32);
-//!     answer(x) :- R(x);
+//!     relation R(x: i32, y: i32);
+//!     answer(x) :- R(x, y);
 //! }.collect();
 //! assert_eq!(answers.len(), 2);
 //! ```
 //!
-//! The printer receives a complete checked Structures program through
-//! `cq_stage::pass`. It preserves the Physical graph and uses its recorded
-//! build, host read, retained row, canonical boundary and computed-head types.
+//! The printer receives checked Structures annotations through
+//! `cq_stage::Structures::pass`, with a separate Physical reference; Structures
+//! does not embed the Physical program. Compiler helpers take Physical first.
+//! Continuations carry both programs in the realization envelope. The printer
+//! preserves the Physical graph and uses the recorded build, host read, retained
+//! row, canonical boundary and computed-head types.
 //! Authored Structures can also start directly at
-//! `own_push::push! { pipeline {}; physical { ... } structures { ... } }`.
+//! `own_push::push! { pipeline {}; physical { ... } structures { providers { ... } ... } }`.
 //! The pass accepts no arguments and ends the queue.
 //!
 //! Nested loops push answers into a Vec endpoint. Shared source preparation

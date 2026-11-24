@@ -60,7 +60,7 @@ printed pages.
   ear in the textbook presentation. Occurrence duplicates require the stated
   projection to the underlying textbook hypergraph.
 - Dependency facts, valuation schedules, immutable RA prime definitions,
-  bottom + finite Set denotation, Rust chain/Before constraints, core block
+  finite-set denotation, pure-total Rust free-variable dependencies, core block
   interfaces, union/anti origins, and staged contexts are compiler specification
   constructs. They are not attributed to AHV as textbook definitions.
 - A sort is a set of attribute names. Lexically sorting those names chooses
@@ -76,8 +76,8 @@ printed pages.
   Structural lineage coverage is checked; storage laws remain premises.
   `canon`, not representation choice, re-establishes sets.
 - **Evaluation unit (E)** records scalar or chunk demand. A **stage** is a
-  maximal bottom-free pipe segment, ending before partial Rust. Total
-  predicate masks may be ANDed before materializing surviving positions.
+  representable indexable pipe segment. Every admitted Rust expression is total
+  by premise; stage boundaries record capabilities, not expression partiality.
   **For producer** means finite, known-length, indexable input; **unfold
   producer** means state-dependent cursor advancement. This distinction follows
   [Kiselyov et al., *Stream Fusion, to Completeness* (POPL 2017)](https://doi.org/10.1145/3009837.3009880).

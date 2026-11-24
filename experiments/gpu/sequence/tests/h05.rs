@@ -1,16 +1,19 @@
 #[allow(dead_code)]
 #[path = "support/h05_program.rs"]
 mod h05_program;
+include!("support/stack.rs");
 
-use cq_lang_sequence::{Capability, Len, OutputProtocol, Term, Tiling};
+use cq_lang_sequence::structures::Capability;
+use cq_lang_sequence::{Len, OutputProtocol, Term, Tiling};
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
-fn checked() -> (cq_lang_sequence::Program, cq_lang_sequence::Analysis) {
-    let program = h05_program::program();
-    let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
+fn checked() -> (Stack, cq_lang_sequence::Analysis) {
+    let mut stack = h05_program::program();
+    stack.program = cq_gpu_sequence_core::runs::record_representation(&stack.physical, &stack.structures, &stack.program).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&stack.physical, &stack.structures, &stack.program, &cq_gpu_sequence::machine())
         .expect("the written H05 program must be graded without planner decisions");
-    (program, analysis)
+    (stack, analysis)
 }
 
 #[test]
@@ -32,8 +35,8 @@ fn repeated_translations_have_distinct_cuda_exports() {
         (module.ident.clone(), kernels)
     }
     let (program, analysis) = checked();
-    let first = export_names(cq_gpu_sequence::translate(&program, &analysis).unwrap());
-    let second = export_names(cq_gpu_sequence::translate(&program, &analysis).unwrap());
+    let first = export_names(cq_gpu_sequence::translate(&program.physical, &program.structures, &program.program, &analysis).unwrap());
+    let second = export_names(cq_gpu_sequence::translate(&program.physical, &program.structures, &program.program, &analysis).unwrap());
     assert_ne!(first.0, second.0, "query expansions need distinct modules");
     assert!(
         first.1.iter().all(|name| !second.1.contains(name)),
@@ -44,9 +47,9 @@ fn repeated_translations_have_distinct_cuda_exports() {
 #[test]
 fn later_dispatch_omits_unreferenced_earlier_store_parameters() {
     let mut program = h05_program::program();
-    program.graded.as_mut().unwrap().grades[0] = syn::parse_quote!(RegionASIA at device;);
-    let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
-    let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    program.program.graded.as_mut().unwrap().grades[0] = syn::parse_quote!(RegionASIA at device;);
+    let analysis = cq_lang_sequence::check_grading(&program.physical, &program.structures, &program.program, &cq_gpu_sequence::machine()).unwrap();
+    let expression = cq_gpu_sequence::translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let mut functions = Functions::default();
     functions.visit_expr(&expression);
     assert_eq!(functions.queries.len(), 3);
@@ -98,7 +101,7 @@ fn every_generated_kernel_fits_the_parameter_area() {
                             "u32" => (4, 4),
                             "usize" | "i64" => (8, 8),
                             "ColumnView" => (40, 8),
-                            "RangeView" => (64, 8),
+                            "RangeView" => (72, 8),
                             other => panic!("unknown emitted ABI type {other}"),
                         },
                         other => panic!("unknown emitted ABI type {}", other.to_token_stream()),
@@ -115,14 +118,13 @@ fn every_generated_kernel_fits_the_parameter_area() {
         }
     }
     let (program, analysis) = checked();
-    ParameterBytes.visit_expr(&cq_gpu_sequence::translate(&program, &analysis).unwrap());
+    ParameterBytes.visit_expr(&cq_gpu_sequence::translate(&program.physical, &program.structures, &program.program, &analysis).unwrap());
 }
 
 #[test]
 fn physical_and_sequence_contracts_preserve_the_written_join_chain() {
     let program = h05_program::program();
-    let analysis = cq_lang_sequence::contract::check(&program).unwrap();
-    assert!(program.structures.physical.program.host_sets.is_empty());
+    let analysis = cq_lang_sequence::contract::check(&program.physical, &program.structures, &program.program).unwrap();
     assert_eq!(analysis.results["C"], "rnc");
     assert_eq!(analysis.results["result"], "answer");
     assert_eq!(
@@ -149,6 +151,7 @@ fn physical_and_sequence_contracts_preserve_the_written_join_chain() {
     }
     // Regression: the original formal C accidentally stopped after Nation.
     let c = &program
+        .program
         .sequence
         .definitions
         .iter()
@@ -284,9 +287,11 @@ impl<'ast> Visit<'ast> for NoQueryConstants {
     }
 }
 
-fn check_generated(program: &cq_lang_sequence::Program) {
-    let analysis = cq_lang_sequence::check_grading(program, &cq_gpu_sequence::machine()).unwrap();
-    let expression = cq_gpu_sequence::translate(program, &analysis).unwrap();
+fn check_generated(stack: &Stack) {
+    let Stack { physical, structures, program } = stack;
+    let program = cq_gpu_sequence_core::runs::record_representation(physical, structures, program).unwrap();
+    let analysis = cq_lang_sequence::check_grading(physical, structures, &program, &cq_gpu_sequence::machine()).unwrap();
+    let expression = cq_gpu_sequence::translate(physical, structures, &program, &analysis).unwrap();
     let mut functions = Functions::default();
     functions.visit_expr(&expression);
     assert_eq!(
@@ -322,8 +327,8 @@ fn check_generated(program: &cq_lang_sequence::Program) {
         "providers must be built before query execution"
     );
     assert!(
-        tokens.contains("PackedCanon"),
-        "canonicalization must use the runtime packed-key protocol"
+        tokens.contains("build_set"),
+        "canonicalization must use the ordinary full-row set build"
     );
     assert!(!tokens.contains("cq_gpu :: print"));
     assert!(!tokens.contains("h05_reference"));
@@ -334,7 +339,7 @@ fn translation_emits_two_query_kernels_and_builds_without_query_constant_filters
     for capacity in [1024, 1048576] {
         let program = h05_program::program_with_capacity(capacity);
         assert!(matches!(
-            &program.sequence.definitions.last().unwrap().term,
+            &program.program.sequence.definitions.last().unwrap().term,
             Term::Store { capacity: Some(recorded), .. } if *recorded == capacity
         ));
         check_generated(&program);
@@ -357,13 +362,17 @@ fn translation_is_not_specialized_to_h05_date_literals_or_store_names() {
 #[test]
 fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
     let (program, analysis) = checked();
-    let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    let expression = cq_gpu_sequence::translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let mut functions = Functions::default();
     functions.visit_expr(&expression);
     let query = functions.queries[1].to_token_stream().to_string();
     assert!(!query.contains("__row"));
     assert!(!query.contains("__stored"));
-    assert!(query.contains("decode_u32"));
+    assert!(query.contains("device :: decode ("));
+    assert!(
+        !query.contains("decode_u32"),
+        "parent carriers use the recorded i64 ABI"
+    );
     assert!(query.contains("__parent_"));
     assert!(query.contains("__found_count"));
 
@@ -405,25 +414,26 @@ fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
 
 #[test]
 fn semijoin_device_store_builds_provider_after_publication() {
-    let program: cq_lang_sequence::Program = syn::parse_quote! {
+    let mut program: Stack = syn::parse_quote! {
         physical {
             relation Region(region:u32) = (&data.region);
             relation Nation(nation:u32,region:u32) = (&data.nation);
             relation Customer(customer:u32,nation:u32) = (&data.customer);
-            r1 = let rename Region@0 {region -> region};
-            nation_base = pipe rename Nation@1 {nation -> nation,region -> region};
+            r1 = let rename Region {region -> region};
+            nation_base = pipe rename Nation {nation -> nation,region -> region};
             r2 = let semi eager [region] nation_base,r1;
-            customer = pipe rename Customer@2 {customer -> customer,nation -> nation};
-            answer = pipe canon semi eager [nation] customer,r2;
+            customer = pipe rename Customer {customer -> customer,nation -> nation};
+            answer = let canon semi eager [nation] customer,r2;
             return answer as answer(customer,nation);
         }
-        structures {
-            r1 host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
-            nation_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
-            customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
-            r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
-            r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            r1 host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+            nation_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            customer host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            r1 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+            r2 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+            answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+            answer canon = rows;
         }
         sequence {
             R1 = store rows r1;
@@ -443,11 +453,12 @@ fn semijoin_device_store_builds_provider_after_publication() {
     };
     // The authored source must satisfy BE-Scope before any scheduling rewrite.
     // A later EXT-SeqStore pass cannot supply the earlier materialization fact.
-    let contract = cq_lang_sequence::contract::check(&program)
+    let contract = cq_lang_sequence::contract::check(&program.physical, &program.structures, &program.program)
         .expect("lookup r2 must have an earlier authored Sequence store");
     assert_eq!(contract.results["R2"], "r2");
     assert!(contract.stores.contains_key("R2"));
-    let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
+    program.program = cq_gpu_sequence_core::runs::record_representation(&program.physical, &program.structures, &program.program).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&program.physical, &program.structures, &program.program, &cq_gpu_sequence::machine())
         .expect("the semijoin store and its provider capability are explicitly recorded");
     assert_eq!(analysis.results["R2"], "r2");
     assert!(analysis.stores.contains_key("R2"));
@@ -455,7 +466,7 @@ fn semijoin_device_store_builds_provider_after_publication() {
         analysis.capabilities[&("r2".into(), vec!["nation".into()])],
         Capability::Membership
     );
-    let generated = cq_gpu_sequence::translate(&program, &analysis)
+    let generated = cq_gpu_sequence::translate(&program.physical, &program.structures, &program.program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string();

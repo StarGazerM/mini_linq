@@ -1,0 +1,2 @@
+[ perf record: Woken up 998 times to write data ]
+[ perf record: Captured and wrote 250.028 MB /data/mini_linq/experiments/storage-bench/results/cpu-h01-perf-2026-10-29.data (15738 samples) ]

@@ -1,0 +1,365 @@
+{
+  "schema": "mini-linq.planner-evidence.v1",
+  "dataset": {
+    "name": "tiny-bag",
+    "hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+    "date": "2026-11-05",
+    "schema_hash": "sha256:4293699e1ce84d7e45ef84c529e98d0481f555edb6ce2d8a3920ae2636618e12",
+    "formulation": "fixture-query",
+    "manifest": {
+      "schema": {
+        "R": {
+          "semantics": "set",
+          "columns": {
+            "a": {
+              "kind": "signed_integer"
+            },
+            "b": {
+              "kind": "signed_integer"
+            }
+          },
+          "null_handling": "reject",
+          "set_certification": null
+        }
+      },
+      "formulation": "fixture-query",
+      "files": {
+        "R.csv": {
+          "role": "data",
+          "content_hash": "sha256:44b7ca5a9a60a2a3b7b52e6291304e7f150553472ca54de2507c0a62a25fdb10",
+          "encoding_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "missing_as_empty": false
+        }
+      },
+      "dictionaries": {},
+      "loader_options": {
+        "hash_mode": "typed-row-stream-v1",
+        "format": "csv",
+        "header": "absent",
+        "nulls": "reject"
+      }
+    }
+  },
+  "relations": {
+    "R": {
+      "semantics": "set",
+      "scope": "recursive_final",
+      "columns": {
+        "a": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": {
+            "id": "R.a.distinct",
+            "source": "exact",
+            "claim": "equal",
+            "value": 2,
+            "lower": null,
+            "upper": null,
+            "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+            "provenance": {
+              "producer": "cq-syntax fixture",
+              "method": "authored tiny fixture, not workload evidence",
+              "locator": "inline:R.csv",
+              "run": {
+                "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "admission": "insert_only_set",
+                "run_id": "fixture-run",
+                "completed": true
+              },
+              "artifact_hash": null
+            },
+            "unit": "distinct"
+          },
+          "max_degree": {
+            "id": "R.a.degree",
+            "source": "exact",
+            "claim": "equal",
+            "value": 2,
+            "lower": null,
+            "upper": null,
+            "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+            "provenance": {
+              "producer": "cq-syntax fixture",
+              "method": "authored tiny fixture, not workload evidence",
+              "locator": "inline:R.csv",
+              "run": {
+                "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "admission": "insert_only_set",
+                "run_id": "fixture-run",
+                "completed": true
+              },
+              "artifact_hash": null
+            },
+            "unit": "degree"
+          },
+          "min": null,
+          "max": null
+        },
+        "b": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": {
+            "id": "R.b.distinct",
+            "source": "exact",
+            "claim": "equal",
+            "value": 4,
+            "lower": null,
+            "upper": null,
+            "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+            "provenance": {
+              "producer": "cq-syntax fixture",
+              "method": "authored tiny fixture, not workload evidence",
+              "locator": "inline:R.csv",
+              "run": {
+                "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "admission": "insert_only_set",
+                "run_id": "fixture-run",
+                "completed": true
+              },
+              "artifact_hash": null
+            },
+            "unit": "distinct"
+          },
+          "max_degree": {
+            "id": "R.b.degree",
+            "source": "exact",
+            "claim": "equal",
+            "value": 1,
+            "lower": null,
+            "upper": null,
+            "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+            "provenance": {
+              "producer": "cq-syntax fixture",
+              "method": "authored tiny fixture, not workload evidence",
+              "locator": "inline:R.csv",
+              "run": {
+                "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "admission": "insert_only_set",
+                "run_id": "fixture-run",
+                "completed": true
+              },
+              "artifact_hash": null
+            },
+            "unit": "degree"
+          },
+          "min": {
+            "id": "R.b.min",
+            "source": "exact",
+            "claim": "equal",
+            "value": {
+              "kind": "signed_integer",
+              "value": 1
+            },
+            "lower": null,
+            "upper": null,
+            "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+            "provenance": {
+              "producer": "cq-syntax fixture",
+              "method": "authored tiny fixture, not workload evidence",
+              "locator": "inline:R.csv",
+              "run": {
+                "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "admission": "insert_only_set",
+                "run_id": "fixture-run",
+                "completed": true
+              },
+              "artifact_hash": null
+            },
+            "unit": "scalar"
+          },
+          "max": {
+            "id": "R.b.max",
+            "source": "exact",
+            "claim": "equal",
+            "value": {
+              "kind": "signed_integer",
+              "value": 4
+            },
+            "lower": null,
+            "upper": null,
+            "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+            "provenance": {
+              "producer": "cq-syntax fixture",
+              "method": "authored tiny fixture, not workload evidence",
+              "locator": "inline:R.csv",
+              "run": {
+                "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "admission": "insert_only_set",
+                "run_id": "fixture-run",
+                "completed": true
+              },
+              "artifact_hash": null
+            },
+            "unit": "scalar"
+          }
+        }
+      },
+      "rows": {
+        "id": "R.rows",
+        "source": "exact",
+        "claim": "equal",
+        "value": 4,
+        "lower": null,
+        "upper": null,
+        "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+        "provenance": {
+          "producer": "cq-syntax fixture",
+          "method": "authored tiny fixture, not workload evidence",
+          "locator": "inline:R.csv",
+          "run": {
+            "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "admission": "insert_only_set",
+            "run_id": "fixture-run",
+            "completed": true
+          },
+          "artifact_hash": null
+        },
+        "unit": "rows"
+      },
+      "key_sets": [],
+      "keys": [],
+      "recursive": {
+        "stratum": "0",
+        "final_rows": {
+          "id": "R.final",
+          "source": "exact",
+          "claim": "equal",
+          "value": 4,
+          "lower": null,
+          "upper": null,
+          "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+          "provenance": {
+            "producer": "cq-syntax fixture",
+            "method": "authored tiny fixture, not workload evidence",
+            "locator": "inline:R.csv",
+            "run": {
+              "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "admission": "insert_only_set",
+              "run_id": "fixture-run",
+              "completed": true
+            },
+            "artifact_hash": null
+          },
+          "unit": "rows"
+        },
+        "rounds": {
+          "id": "s0.rounds",
+          "source": "exact",
+          "claim": "equal",
+          "value": 2,
+          "lower": null,
+          "upper": null,
+          "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+          "provenance": {
+            "producer": "cq-syntax fixture",
+            "method": "authored tiny fixture, not workload evidence",
+            "locator": "inline:R.csv",
+            "run": {
+              "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "admission": "insert_only_set",
+              "run_id": "fixture-run",
+              "completed": true
+            },
+            "artifact_hash": null
+          },
+          "unit": "rounds"
+        },
+        "round_convention": "executed-steady-rounds-excluding-seed-and-terminal-empty",
+        "run": {
+          "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "admission": "insert_only_set",
+          "run_id": "fixture-run",
+          "completed": true
+        },
+        "seed_rows": {
+          "id": "R.seed",
+          "source": "exact",
+          "claim": "equal",
+          "value": 1,
+          "lower": null,
+          "upper": null,
+          "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+          "provenance": {
+            "producer": "cq-syntax fixture",
+            "method": "authored tiny fixture, not workload evidence",
+            "locator": "inline:R.csv",
+            "run": {
+              "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "admission": "insert_only_set",
+              "run_id": "fixture-run",
+              "completed": true
+            },
+            "artifact_hash": null
+          },
+          "unit": "rows"
+        },
+        "unconsumed_final_delta_rows": {
+          "id": "R.unconsumed",
+          "source": "exact",
+          "claim": "equal",
+          "value": 0,
+          "lower": null,
+          "upper": null,
+          "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+          "provenance": {
+            "producer": "cq-syntax fixture",
+            "method": "authored tiny fixture, not workload evidence",
+            "locator": "inline:R.csv",
+            "run": {
+              "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "admission": "insert_only_set",
+              "run_id": "fixture-run",
+              "completed": true
+            },
+            "artifact_hash": null
+          },
+          "unit": "rows"
+        }
+      }
+    }
+  },
+  "premises": [
+    {
+      "id": "R.subset",
+      "kind": "delta_subset",
+      "relations": [
+        "R"
+      ],
+      "source": "declared",
+      "dataset_hash": "sha256:a076ec54e439eca0a9328dc11ebd0331c2b2f56666c04eb7a3c10256d6ff7c50",
+      "provenance": {
+        "producer": "cq-syntax fixture",
+        "method": "authored tiny fixture, not workload evidence",
+        "locator": "inline:R.csv",
+        "run": {
+          "program_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "configuration_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "admission": "insert_only_set",
+          "run_id": "fixture-run",
+          "completed": true
+        },
+        "artifact_hash": null
+      }
+    }
+  ],
+  "relative": [],
+  "targets": {},
+  "observations": {
+    "rounds": [],
+    "steps": []
+  }
+}

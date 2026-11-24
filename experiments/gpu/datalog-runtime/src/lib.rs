@@ -1,21 +1,40 @@
-//! GPU-resident packed Datalog tuples and immutable, disjoint accepted runs.
-//! All device work uses the owning [`Pool`]'s legacy default stream.
-//! [`DeviceLayout`] retains typed, immutable run inputs and uploads only their
-//! erased descriptors. [`CandidateArena`] leases packed output lanes to Sequence
-//! terminals; [`CandidateBatch`] retains those lanes and input owners without a
-//! candidate-row download. Signed packing preserves numeric lexicographic order.
+//! GPU-resident packed Datalog tuples and immutable full-key radix sets.
+//! All device work uses an explicitly ordered [`Pool`] stream.
+//! [`RadixLayout`] retains typed immutable radix snapshots and field metadata.
+//! [`CandidateArena`] leases packed output lanes to Sequence terminals.
+//! [`HeadCursors`] collects a publication's per-head counts and failures in one
+//! readback; [`CandidateBatch`] retains the initialized lanes and input owners
+//! without a candidate-row download. Signed packing preserves numeric order.
+//! [`DeviceRadixRun`] is the occurrence-preserving grouped index engine;
+//! [`RadixLayout`] is its typed relational view over one immutable publication.
 pub mod arena;
+pub mod capture;
 pub mod layout;
 pub mod pack;
-pub mod runs;
+mod pair_bitmap;
+#[cfg(feature = "packed-radix")]
+pub mod packed_run;
 pub mod phases;
+mod publish;
+pub mod radix_run;
+mod runs;
 mod stats;
-pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
+pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease, HeadCursors};
 pub use gpu_device_columns::{Buffer, Pool};
-pub use pack::{Column, Packing, Word};
-pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
-pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
-pub use layout::{device, DeviceLayout, PackedField, PackedRunView, RunsView, Scalar, ScalarTuple};
+pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};
+pub use pack::{Column, PackedRow, Packing, Word};
+pub use publish::OutputStaging;
+pub use radix_run::{
+    DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixItemsView, RadixKeysView,
+    RadixLayout, RadixLayoutView, RadixMatch, RadixMatches, RadixRunParams, RadixSnapshot,
+    SourceItemColumns, SourceLane,
+};
+pub use runs::SortedBatch;
+pub use stats::{
+    readback_count, record_readback, release_at_stratum_boundary, reset_work_counters,
+    profile_enter, profile_report, profiling, trace_kernels, trace_memory, trace_work,
+    work_counters, MemoryUse, SortWork, WorkCounters,
+};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 /// Host-side bijection between logical symbols and their device integer codes.
@@ -25,6 +44,7 @@ pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 /// codec: uploads and captured constants call `code`, downloads call `decode`.
 pub trait SymbolCodec<T> {
     fn code(value: &T) -> u32;
+    // DECODE P: datalog print output reconstruction invokes this inverse for final host answer rows.
     fn decode(code: u32) -> T;
 }
 
@@ -66,6 +86,7 @@ mod symbol_tests {
             }
         }
 
+        // DECODE P: diagnostic Text codec exposes logical strings for round-trip assertions.
         fn decode(code: u32) -> String {
             match code {
                 0 => String::new(),
@@ -80,8 +101,17 @@ mod symbol_tests {
     fn codecs_restore_owned_logical_values_across_the_full_code_domain() {
         for value in ["", "first", "last"] {
             let logical = value.to_owned();
+            // DECODE P: diagnostic direct symbol round trip publishes its reconstructed String.
             assert_eq!(Text::decode(Text::code(&logical)), logical);
         }
         assert_eq!(Text::code(&"last".to_owned()), u32::MAX);
+        type TextScalar = super::Symbol<String, Text>;
+        for value in ["", "first", "last"] {
+            let logical = value.to_owned();
+            let code = <TextScalar as super::Scalar>::encode(&logical);
+            assert_eq!(code, Text::code(&logical) as i64);
+            // DECODE P: diagnostic Scalar symbol round trip publishes its reconstructed logical value.
+            assert_eq!(<TextScalar as super::Scalar>::decode(code as i128), logical);
+        }
     }
 }

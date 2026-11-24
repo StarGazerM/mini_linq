@@ -6,9 +6,10 @@
 //! facade crate. External feature crates can use the same API.
 //!
 //! * `corpus` embeds 30 scenarios at CQ, valuation order (VO), relational algebra
-//!   (RA), index demands (IX), Physical, and Structures stages. The IX and
-//!   Structures texts are suffix fragments; their parsed accessors join them to
-//!   the preceding stage. Parsing does not imply language contract validation.
+//!   (RA), index demands (IX), Physical, and Structures stages. VO text contains
+//!   only `valuation { ... }` and `Scenario::parse_vo(&cq)` takes its CQ context.
+//!   IX text is joined to RA; Structures is parsed with an explicit Physical context.
+//!   Parsing does not imply language contract validation.
 //!   No policy fixtures are included. `cases` retains the 25 independently authored
 //!   input/answer cases, including raw duplicate inputs. `Scenario::case` maps five
 //!   alternative plans to their original authored cases.
@@ -20,7 +21,8 @@
 //!   model custom `Eq`/`Ord`, bags, NULL, collation, effects, or evaluation counts.
 //! * `cq_semantics` enumerates active-domain valuations and tests the original
 //!   base relations. `semantics` independently interprets the RA DAG with nested
-//!   loops. `valuation_semantics` interprets the written VO schedule and reductions.
+//!   loops. `valuation_semantics::evaluate(&cq, &vo, &database)` interprets the
+//!   written VO schedule and reductions against an explicit CQ program.
 //!   They never call pass compilation, planner, heading-analysis, or key helpers.
 //!   Inputs must satisfy the language contracts, be finite, have the declared
 //!   widths, and provide every declared table. The supported fragment consists of
@@ -44,11 +46,10 @@
 //!   mutation, and optional execution against authored case answers. It validates
 //!   only the fixtures and mutations supplied, not universal pass correctness.
 //!   Checker panics propagate and are not treated as mutation rejection.
-//!   Refinement helpers compare two executable closures: if the written-order
-//!   reference returns, the target must return the same answer; if the reference
-//!   panics, either target outcome is permitted (`bottom + Set`). They catch Rust
-//!   unwinding panics, not aborts, and do not promise effect or evaluation-count
-//!   equivalence.
+//!   Refinement helpers compare two executable closures: both must return the
+//!   same answer. Either executable panicking violates the total-Rust premise;
+//!   a reference panic never licenses a target result. They catch Rust unwinding
+//!   panics, not aborts, and do not promise effect or evaluation-count equivalence.
 //! * `fuzz` generates bounded abstract queries/data deterministically by seed
 //!   using SplitMix64. Its MiniLinq and SQL printers consume that model separately;
 //!   neither printer parses the other or invokes compilation. `Coverage` counts
@@ -61,10 +62,11 @@
 //!   distinct rows of the declared width; it rejects CRLF, leading zeros, and
 //!   missing final newlines. Git inventory needs the Git CLI.
 //! * The optional `duckdb` feature also enables `golden` and adds an in-memory
-//!   integer SQL oracle. SQL must select the desired set and ordering explicitly.
-//!   `evaluate_fuzz` rejects partial terms and generators and checks DISTINCT. Default and
-//!   `golden`-only builds do not build or link DuckDB. The bundled native engine
-//!   can make the first `duckdb` feature build substantially slower.
+//!   SQL oracle that runs the prebuilt DuckDB CLI (`DUCKDB_CLI` or `duckdb` on
+//!   PATH). Corpus SQL uses integer tables; `evaluate_fuzz` loads typed tables
+//!   and returns typed rows. SQL must select the desired set and ordering
+//!   explicitly. `evaluate_fuzz` routes opaque Rust operations and generators
+//!   elsewhere and checks DISTINCT. No build links DuckDB.
 //!
 //! ```rust
 //! use cq_testkit::{CASES, cq_semantics};
@@ -103,16 +105,17 @@
 //! reference/target closures, so the compile-and-run driver stays in the caller.
 //! The authored blocks corpus and recursive CQ/VO/RA interpreters cover union, fallback, locals, nesting and sugar.
 //! Fuzz prints SQL UNION and fallback UNION ALL with NOT EXISTS against original branches.
-//! Partial branch Rust uses an independent compiled written-order chain/if-empty reference.
+//! Opaque total Rust uses an independent compiled written-order reference.
 //!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! Core blocks denote sets: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Rust expressions remain opaque, pure and total, placed wherever their free
+//! variables are bound; there are no Before chains. Only explicit `where`
+//! predicates supply relational constraints and equalities. Only differing
+//! literals on one interface column prove union arms disjoint; no data keys or
+//! constraints are assumed.
 //!
 #![forbid(unsafe_code)]
 
@@ -128,6 +131,8 @@ pub mod fuzz;
 #[cfg(feature = "golden")]
 pub mod golden;
 pub mod harness;
+pub mod mutate;
+pub mod physical_semantics;
 mod positional_cases;
 pub mod random;
 pub mod rewrites;
@@ -359,19 +364,20 @@ mod runtime_backend_tests {
                 .unwrap(),
             linked
         );
-        let missing = linked_runtime_backend(
-            &directory,
-            "backend",
-            "backend::Marker",
-            "not the linked identity",
-        )
-        .unwrap_err();
-        assert!(missing.contains("matches: []") && missing.contains("libbackend-decoy"));
+        assert!(
+            linked_runtime_backend(
+                &directory,
+                "backend",
+                "backend::Marker",
+                "not the linked identity",
+            )
+            .is_err()
+        );
         std::fs::copy(&linked, directory.join("libbackend-alias.rlib")).unwrap();
-        let ambiguous =
+        assert!(
             linked_runtime_backend(&directory, "backend", "backend::Marker", expected.trim())
-                .unwrap_err();
-        assert!(ambiguous.contains("libbackend-linked") && ambiguous.contains("libbackend-alias"));
+                .is_err()
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

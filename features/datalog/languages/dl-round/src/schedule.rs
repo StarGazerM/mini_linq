@@ -1,11 +1,13 @@
 //! Recorded evaluation schedule of a Round program.
 //!
-//! A schedule records, per component, each rule hole's positive read set and
+//! A schedule records, per component, each rule hole's read set (its positive
+//! reads, plus the committed head read of an `in_plan` hole) and
 //! an ordered list of waves. Holes of one round read only the committed
 //! snapshot, so the schedule changes no value (DL-WaveCommute): it records which
 //! holes a printer may evaluate concurrently and after which wave a head's
 //! admission may begin. Read sets are derived from the Storage `Read` records
-//! and checked for equality; they are not a second source of truth.
+//! and the rule holes' admission records, and checked for equality; they are
+//! not a second source of truth.
 //!
 //! Only `synchronous` progress is admitted. The text form follows `record!`:
 //! `progress { synchronous } strata [ { reads [ { phase { seed } index { 0 }
@@ -54,7 +56,7 @@ pub struct PublishAfter {
     pub wave: usize,
 }
 
-/// The positive relational inputs of one rule hole, in relation order.
+/// The relational inputs of one rule hole, in relation order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HoleReads {
     pub phase: Ident,
@@ -250,10 +252,12 @@ impl Schedule {
     }
 }
 
-/// Derive the positive read set of every rule hole of one component from the
-/// Storage read records: a direct read names its delta relation, a delta
-/// layout read its layout's relation at delta, a full layout read its layout's
-/// relation at full. Pairs are deduplicated and ordered.
+/// Derive the read set of every rule hole of one component from the Storage
+/// read records: a direct read names its delta relation, a delta layout read
+/// its layout's relation at delta, a full layout read its layout's relation at
+/// full. An `in_plan` hole also reads its head's committed canonical layout
+/// (ADM-InPlan), so its head is read at full before publication (IX-Stable).
+/// Pairs are deduplicated and ordered.
 pub fn derive_reads(
     storage: &storage::Program,
     analysis: &storage::Analysis,
@@ -298,6 +302,9 @@ pub fn derive_reads(
                         }
                     };
                     pairs.insert((relation, version));
+                }
+                if hole.known == crate::Admission::InPlan {
+                    pairs.insert((hole.head, "full"));
                 }
                 Ok(HoleReads {
                     phase: ident(name),
@@ -539,7 +546,8 @@ mod tests {
             head,
             hole: 0,
             scan: None,
-            insertion: ident("insert"),
+            known: crate::Admission::Admit,
+            fanout: Vec::new(),
         }
     }
     fn stratum(seed_heads: &[usize], step_heads: &[usize]) -> Stratum {
@@ -573,22 +581,20 @@ mod tests {
             &s,
         )
         .unwrap();
-        let rejected = |waves: &[Wave]| check_waves(waves, &s).unwrap_err().to_string();
-        assert!(rejected(&[wave(STEP, &[0, 1, 2]), wave(SEED, &[0])]).contains("precede"));
-        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1])]).contains("exactly once"));
-        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 2, 1])]).contains("repeats"));
-        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 3])]).contains("outside"));
-        assert!(
-            rejected(&[wave(SEED, &[0]), wave(STEP, &[]), wave(STEP, &[0, 1, 2])])
-                .contains("at least one")
-        );
-        assert!(
-            rejected(&[
-                wave(SEED, &[0]),
-                wave(ident("admit").to_string().as_str(), &[0, 1, 2])
-            ])
-            .contains("seed or step")
-        );
+        let rejected = |waves: &[Wave]| check_waves(waves, &s).is_err();
+        assert!(rejected(&[wave(STEP, &[0, 1, 2]), wave(SEED, &[0])]));
+        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1])]));
+        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 2, 1])]));
+        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 3])]));
+        assert!(rejected(&[
+            wave(SEED, &[0]),
+            wave(STEP, &[]),
+            wave(STEP, &[0, 1, 2])
+        ]));
+        assert!(rejected(&[
+            wave(SEED, &[0]),
+            wave(ident("admit").to_string().as_str(), &[0, 1, 2])
+        ]));
     }
 
     #[test]

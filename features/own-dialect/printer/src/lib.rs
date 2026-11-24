@@ -1,13 +1,13 @@
-//! Structures → Rust push printer, composed with `pipeline { print = own_push::push; }`.
+//! Structures → Rust push printer, composed with `pipeline { print_input = structures; print = own_push::push; }`.
 //!
 //! This explicit terminal keeps its Structures boundary. The default pull route
 //! instead lowers through `sequence`, checks `sequential` grading, and ends at
 //! `translate_pull`; direct comparisons must supply that complete pass queue.
 //!
 //! The complete checked Structures program is the only compiler input. Its
-//! Physical operators and concrete read, build, retention and canonical state
-//! types are preserved. `push` collects nested-loop results into a Vec endpoint;
-//! `push_into` invokes its consumer immediately without an endpoint buffer.
+//! Physical operators and concrete read, build, retention and canonicalization
+//! strategies are preserved. `push` collects results into a Vec endpoint;
+//! `push_into` invokes its consumer after any recorded canonicalization barrier.
 //! Retained construction shares the recorded Build, FromIterator and Selection
 //! providers with pull. Positional pipes fetch survivors directly into their sink.
 //!
@@ -24,7 +24,7 @@
 //! the admissible scalar bound rather than being refused.
 
 //! Push realizes standalone union/anti loops and consumes the prepared fused-dependent pipe once before pushing tuples to its sink.
-//! Recorded canonical providers and any/all witness choices are retained.
+//! Recorded canonicalization strategies and any/all witness choices are retained.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
@@ -32,8 +32,8 @@
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
 //! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! its existing recognition. Only fallback construction proves union arms
+//! disjoint; literal values prove nothing, and no data keys or constraints are assumed.
 //!
 use cq_lang_structures as structures;
 use cq_print::{Context, Repr, access::Access, error, index, sorted};
@@ -47,11 +47,11 @@ use structures::syntax::symbol_name;
 /// A terminal Structures → Rust pass with no arguments.
 #[proc_macro]
 pub fn push(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<structures::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |physical, source, arguments| {
         if !arguments.is_empty() {
             return error(&arguments, "own_push::push accepts no arguments");
         }
-        compile(source, None)
+        compile(physical, source, None)
     })
     .into()
 }
@@ -77,14 +77,15 @@ impl syn::parse::Parse for Consumer {
 
 /// Structures → unit, invoking an `FnMut(Row)` consumer once per answer.
 ///
-/// Select `print = own_push::push_into(consumer { callback };)`
+/// Select `print_input = structures; print = own_push::push_into(consumer { callback };)`
 /// or use `arguments { consumer { callback }; };` at a direct pass entry.
-/// Consumer evaluation happens once; no result Vec or iterator is constructed.
+/// Consumer evaluation happens once. Whole-stream canon buffers before callbacks;
+/// paths without a canon barrier invoke the callback as rows become available.
 #[proc_macro]
 pub fn push_into(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<structures::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |physical, source, arguments| {
         let consumer: Consumer = syn::parse2(arguments)?;
-        compile(source, Some(&consumer.0))
+        compile(physical, source, Some(&consumer.0))
     })
     .into()
 }
@@ -103,10 +104,10 @@ impl<'a> std::ops::Deref for Push<'a> {
     }
 }
 
-fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
-    let analysis = structures::contract::check(module)?;
+fn compile(physical: &physical::Program, module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
+    let analysis = structures::contract::check(physical, module)?;
     // Refuse unsupported written choices even in an otherwise unused result.
-    for definition in &module.physical.program.definitions {
+    for definition in &physical.program.definitions {
         match &definition.operator {
             Operator::Merge(..) => {
                 return error(&definition.name, "own_push: merge is unsupported");
@@ -152,15 +153,16 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
         }
     }
     let mut positions = BTreeMap::new();
-    let context = cq_physical_realization::sources_with(module, &analysis, |name, repr| {
+    let prepared = |name: &str, repr: &Repr| {
         if let Repr::Positions(Some(ids)) = repr {
             positions.insert(name.to_owned(), ids.clone());
         }
-    })?;
+    };
+    let context = cq_physical_realization::sources_with(physical, module, &analysis, prepared)?;
     let chunked = analysis
         .stages
         .keys()
-        .filter(|name| selection_chain(module, &analysis, name).is_some())
+        .filter(|name| selection_chain(physical, &analysis, name).is_some())
         .cloned()
         .collect();
     let mut push = Push {
@@ -176,20 +178,34 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
             *id = format_ident!("__push_value_{}", column, span = Span::mixed_site());
         }
     }
-    let returned = &module.physical.program.returned;
+    let returned = &physical.program.returned;
     let name = symbol_name(returned);
     let out = temporary("out", &name);
+    let head_rows = temporary("head_rows", &name);
+    let canonical_head = analysis.head_dedup.get(&name);
     let body = push.head(
         &name,
-        &module.physical.program.head,
-        &out,
-        consumer.is_some(),
+        &physical.program.head,
+        if canonical_head.is_some() {
+            &head_rows
+        } else {
+            &out
+        },
+        canonical_head.is_none() && consumer.is_some(),
     );
     let body = push.emit(&name, body)?;
-    let head_state = analysis.head_dedup.get(&name).map(|ty| {
-        let seen = temporary("head_seen", &name);
-        let constructor = cq_print::canonical_set(ty);
-        quote!(let mut #seen = #constructor;)
+    let head_state = canonical_head.map(|_| quote!(let mut #head_rows = ::std::vec::Vec::new();));
+    let head_publish = canonical_head.map(|provider| {
+        let rows = cq_physical_realization::RowEmitter::canon(
+            &provider.ty,
+            quote!(#head_rows),
+            physical.program.head.args.len(),
+        );
+        if consumer.is_some() {
+            quote!(for __push_answer in #rows { (#out)(__push_answer); })
+        } else {
+            quote!(#out.extend(#rows);)
+        }
     });
     let statements = &push.statements;
     let (endpoint, result) = match consumer {
@@ -199,16 +215,22 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
             quote!(::core::iter::IntoIterator::into_iter(#out)),
         ),
     };
+    // IF-Capture: `if` captures decide once whether the push loops run at all.
+    let gates = &push.gates;
+    let run = if gates.is_empty() {
+        quote!(#body #head_publish)
+    } else {
+        quote!(if #(#gates)&&* { #body #head_publish })
+    };
     let mut expression = syn::parse2(quote!({
-        #[allow(unused_imports)]
-        use ::cq_storage::HashSetConstructor as _;
         #(#statements)*
         #endpoint
         #head_state
-        #body
+        #run
         #result
     }))?;
-    cq_print::own_captures(&mut expression, &push.owned);
+    // Move closures own clones of the capture values they read.
+    cq_print::own_captures(&mut expression, &push.owned, &push.captured_values);
     Ok(expression)
 }
 
@@ -216,24 +238,15 @@ fn temporary(role: &str, result: &str) -> syn::Ident {
     format_ident!("__push_{}_{}", role, result, span = Span::mixed_site())
 }
 
-fn cloned_key(fields: impl Iterator<Item = Tokens>) -> Tokens {
-    cq_print::group(
-        &fields
-            .map(|field| quote!(::core::clone::Clone::clone(&#field)))
-            .collect::<Vec<_>>(),
-    )
-}
-
 /// The supported stage is one uninterrupted selection spine over a host scan.
 fn selection_chain(
-    module: &structures::Program,
+    physical: &physical::Program,
     analysis: &structures::Analysis,
     result: &str,
 ) -> Option<()> {
     let mut current = result.to_owned();
     loop {
-        let definition = module
-            .physical
+        let definition = physical
             .program
             .definitions
             .iter()
@@ -271,7 +284,12 @@ impl Push<'_> {
         let mut fields = Vec::new();
         for (i, expression) in head.args.iter().enumerate() {
             if let Some(variable) = structures::syntax::rust::variable(expression) {
-                fields.push(self.access(result, &symbol_name(variable)));
+                let name = symbol_name(variable);
+                // A capture copies its host value; it is never a row column.
+                fields.push(
+                    self.capture_value(&name)
+                        .unwrap_or_else(|| self.access(result, &name)),
+                );
             } else {
                 let id = temporary(&format!("head_{i}"), result);
                 fields.push(id.to_token_stream());
@@ -293,18 +311,7 @@ impl Push<'_> {
         } else {
             quote!(#out.push((#(#fields,)*));)
         };
-        let insert = if self.analysis.head_dedup.contains_key(result) {
-            let seen = temporary("head_seen", result);
-            let key = cloned_key(fields.iter().cloned());
-            quote! {
-                let __push_key = #key;
-                ::cq_storage::require::leibniz(&__push_key);
-                if #seen.insert(__push_key) { #emit }
-            }
-        } else {
-            emit
-        };
-        quote! { #evaluations #insert }
+        quote! { #evaluations #emit }
     }
 
     // Shared preparation preserves fused branches and recorded built-probe
@@ -317,7 +324,7 @@ impl Push<'_> {
                 continue;
             }
             let definition = self.context.physical[&name];
-            if !matches!(definition.mode, physical::Mode::Pipe(_)) {
+            if !self.streamed(&name) {
                 continue;
             }
             if matches!(&definition.operator,Operator::Union(u) if u.fused.is_some())
@@ -331,9 +338,16 @@ impl Push<'_> {
         false
     }
 
+    /// A pipe, or a stored result whose single-consumer rows record is moved
+    /// into its reader (STR-RowsByValue): both are prepared row streams.
+    fn streamed(&self, result: &str) -> bool {
+        matches!(self.context.physical[result].mode, physical::Mode::Pipe(_))
+            || matches!(self.context.reprs.get(result), Some(Repr::Pipe(_)))
+    }
+
     fn emit(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.context.physical[result];
-        if matches!(definition.mode, physical::Mode::Pipe(_)) && self.prepared_dependency(result) {
+        if self.streamed(result) && self.prepared_dependency(result) {
             if !self.consumed.insert(result.to_owned()) {
                 return error(&definition.name, "own_push: prepared pipe is read twice");
             }
@@ -396,27 +410,42 @@ impl Push<'_> {
             );
         }
         if definition.canon.is_some() {
-            let seen = temporary("seen", result);
-            let key = cloned_key(
-                self.heading(result)
-                    .iter()
-                    .map(|column| self.access(result, column)),
+            let pattern = self.bind_columns(result, self.carried(result), false);
+            let provider = match self.analysis.canonical[result].clone() {
+                structures::CanonSource::Host => {
+                    let rows = cq_physical_realization::RowEmitter::ordered_source(
+                        &self.context,
+                        cq_physical_realization::CanonTarget::Sequential,
+                        result,
+                    );
+                    return Ok(quote!(for #pattern in #rows { #sink }));
+                }
+                structures::CanonSource::Rows(provider)
+                    if matches!(definition.mode, physical::Mode::Let(_)) =>
+                {
+                    provider
+                }
+                structures::CanonSource::Rows(_) | structures::CanonSource::Index(_) => {
+                    return self.operator(result, sink);
+                }
+            };
+            let buffer = temporary("canon_rows", result);
+            let row = self.carrier(result, |column| self.access(result, column));
+            let rows = cq_physical_realization::RowEmitter::canon(
+                &provider.ty,
+                quote!(#buffer),
+                self.carried(result).len(),
             );
-            let ty = &self.analysis.dedup[result];
-            let constructor = cq_print::canonical_set(ty);
-            let initialize = quote!(let mut #seen = #constructor;);
-            let body = self.operator(
-                result,
-                quote! {
-                    let __push_key = #key;
-                    ::cq_storage::require::leibniz(&__push_key);
-                    if #seen.insert(__push_key) { #sink }
-                },
-            )?;
-            return Ok(quote!({ #initialize #body }));
+            let body = self.operator(result, quote!(#buffer.push(#row);))?;
+            return Ok(quote!({
+                let mut #buffer = ::std::vec::Vec::new();
+                #body
+                for #pattern in #rows { #sink }
+            }));
         }
         self.operator(result, sink)
     }
+
 
     fn operator(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.context.physical[result];
@@ -447,7 +476,7 @@ impl Push<'_> {
                 }
                 Ok(body)
             }
-            Operator::Anti(_, keyed) => self.membership(keyed, sink, true),
+            Operator::Anti(_, keyed) => self.membership(result, keyed, sink, true),
             Operator::Unit(_) => Ok(sink),
             Operator::Rename(_) => {
                 let rows = self.host_scan(result);
@@ -484,18 +513,22 @@ impl Push<'_> {
             }
             Operator::Select(select) => self.select(select, sink),
             Operator::Guard(guard) => {
-                let condition = &guard.condition;
                 let input = symbol_name(&guard.input);
-                let shadows = self.rust_aliases(&input, condition, guard.environment.as_ref());
+                let shadows =
+                    self.rust_aliases(&input, &guard.condition, guard.environment.as_ref());
+                let condition = guard.test();
                 self.emit(&input, quote!(if { #(#shadows)* #condition } { #sink }))
             }
             Operator::Bind(bind) => {
                 let pattern = &bind.pattern;
                 let annotation = &bind.annotation;
-                let expression = &bind.expression;
                 let input = symbol_name(&bind.input);
-                let shadows = self.rust_aliases(&input, expression, bind.environment.as_ref());
-                let expression = self.generator_expressions.get(result).unwrap_or(expression);
+                let shadows =
+                    self.rust_aliases(&input, &bind.expression, bind.environment.as_ref());
+                let expression = match self.binding_functions.get(result) {
+                    Some((function, arguments)) => quote!(#function(#(#arguments),*)),
+                    None => bind.value().to_token_stream(),
+                };
                 self.emit(
                     &input,
                     {
@@ -534,7 +567,25 @@ impl Push<'_> {
                 let left = symbol_name(&keyed.left);
                 let right = symbol_name(&keyed.right);
                 let columns = sorted(&keyed.columns);
-                let (lookup, payload) = match self.keyed(&keyed.right, &columns)? {
+                let (lookup, payload) = match self.keyed(result, &keyed.right, &columns)? {
+                    Access::Rows => {
+                        let row = self.carrier(result, |column| {
+                            let source = if self.heading(&right).iter().any(|c| c == column) {
+                                &right
+                            } else {
+                                &left
+                            };
+                            let value = self.access(source, column);
+                            if source == &left && self.infos[source].computed.contains(column) {
+                                quote!(::core::clone::Clone::clone(&#value))
+                            } else {
+                                value
+                            }
+                        });
+                        let pattern = self.bind_columns(result, self.carried(result), false);
+                        let inner = self.emit(&right, quote!(let #pattern = #row; #sink))?;
+                        return self.emit(&left, inner);
+                    }
                     Access::Host(access) => (
                         self.host_lookup(&left, &access, false, false),
                         access.payload,
@@ -563,7 +614,14 @@ impl Push<'_> {
                         None => self
                             .constant_value(&right, column)
                             .filter(|_| !columns.iter().any(|key| key == column))
-                            .unwrap_or_else(|| self.access(&left, column)),
+                            .unwrap_or_else(|| {
+                                let value = self.access(&left, column);
+                                if self.infos[&left].computed.contains(column) {
+                                    quote!(::core::clone::Clone::clone(&#value))
+                                } else {
+                                    value
+                                }
+                            }),
                     }
                 });
                 let pattern = self.bind_columns(result, self.carried(result), false);
@@ -577,7 +635,7 @@ impl Push<'_> {
                     },
                 )
             }
-            Operator::Semi(_, keyed) => self.membership(keyed, sink, false),
+            Operator::Semi(_, keyed) => self.membership(result, keyed, sink, false),
             Operator::Merge(..) => error(&definition.name, "own_push: merge is unsupported"),
         }
     }
@@ -596,7 +654,7 @@ impl Push<'_> {
                 _ => unreachable!("chunked stages are plain selection chains"),
             }
         }
-        let host = self.host_access(&current, &[]).value;
+        let host = self.host_access(&current, None, &[]).value;
         let chunk = temporary("chunk", result);
         let id = temporary("position", result);
         let mut predicates = Vec::new();
@@ -655,6 +713,7 @@ impl Push<'_> {
 
     fn membership(
         &mut self,
+        reader: &str,
         keyed: &physical::Keyed,
         sink: Tokens,
         negative: bool,
@@ -665,7 +724,13 @@ impl Push<'_> {
         let test = if let Some(test) = self.keyset_contains(&left, &right, &columns) {
             test
         } else {
-            match self.keyed(&keyed.right, &columns)? {
+            match self.keyed(reader, &keyed.right, &columns)? {
+                Access::Rows => {
+                    let label =
+                        syn::Lifetime::new(&format!("'__cq_nonempty_{reader}"), Span::mixed_site());
+                    let rows = self.emit(&right, quote!(break #label true;))?;
+                    quote!(#label: { #rows false })
+                }
                 Access::Host(access) => self.host_lookup(&left, &access, true, negative),
                 Access::Built(structure) => self.chained_contains(
                     &left,
@@ -697,29 +762,14 @@ impl Push<'_> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn certificates_distinguish_local_checks_from_discharged_facts() {
-        for (fact, certified) in [
-            (quote!(host_set R;), true),
-            (quote!(host_set R discharged;), false),
-        ] {
-            let module = syn::parse2(quote! {
-                physical {
-                    relation R(a:i32); #fact
-                    r = pipe rename R@0 {a -> a};
-                    return r as answer(a);
-                }
-                structures { r host scan = ::core::iter::Map<_,_> []; }
-            })
-            .unwrap();
-            let printed = compile(&module, None)
-                .unwrap()
-                .to_token_stream()
-                .to_string();
-            assert_eq!(printed.contains("__cq_host_set_seen"), certified);
-            assert_eq!(printed.contains("certificate failed"), certified);
-        }
+    fn parse_stack(tokens: Tokens) -> syn::Result<(physical::Program, structures::Program)> {
+        syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+            let physical = input.parse()?;
+            let structures = structures::Program::parse(input, &physical)?;
+            Ok((physical, structures))
+        }, tokens)
     }
+
 
     #[test]
     fn canonical_consumer_expansion_has_no_local_answer_set() {
@@ -730,20 +780,20 @@ mod tests {
         ] {
             let projection = project.then(|| quote!(p = pipe project r keep {a};));
             let returned = if project { quote!(p) } else { quote!(r) };
-            let module = syn::parse2(quote! {
+            let (physical, module) = parse_stack(quote! {
                 physical {
                     relation R(a:i32,b:i32);
                     consumer canonical;
-                    r = pipe rename R@0 {a -> a,b -> b};
+                    r = pipe rename R {a -> a,b -> b};
                     #projection
                     return #returned as answer(#head);
                 }
-                structures { r host scan = ::core::iter::Map<_,_> []; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
             })
             .unwrap();
             let callback = syn::parse_quote!(consume);
             for consumer in [None, Some(&callback)] {
-                let printed = compile(&module, consumer)
+                let printed = compile(&physical, &module, consumer)
                     .unwrap()
                     .to_token_stream()
                     .to_string();

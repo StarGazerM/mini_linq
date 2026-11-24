@@ -1,8 +1,8 @@
 [package]
 name = "cq-datalog-fork"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.85.1"
 license.workspace = true
 publish = false
 
@@ -17,10 +17,15 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+cq-evidence.workspace = true
 cq-datalog-storage.workspace = true
 cq-datalog-stratify.workspace = true
 cq-datalog-incremental.workspace = true
 cq-datalog-print.workspace = true
+cq-order.workspace = true
+cq-planning.workspace = true
+cq-lang-vo.workspace = true
+serde_json.workspace = true
 
 [package.metadata.cq]
 source = "cq-lang-datalog-storage"

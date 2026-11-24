@@ -3,12 +3,24 @@
 Design: `doc/formal/backend_ir.tex` (Section "Sequence"). Sequence is the
 shipped default CPU target. This file records the crates, their public
 functions and contracts, with their dependencies and acceptance criteria.
-Nothing here names a data structure or an algorithm; implementations live in
-runtime crates behind traits.
+Recorded provider/codec types select runtime implementations behind traits;
+the translator consumes those facts rather than rediscovering an algorithm.
 
-Set `CQ_SEQUENCE_PLAN_TIMING=1` while compiling query macros to report each
-rule-based Sequence planning invocation in seconds. GPU TPC-H build reports
-also record `generation_seconds` per query, scale, and mode.
+Audit baseline: `7e187597` (2026-11-02). Box acceptance narratives, timings
+and command outcomes below are historical checkpoints, not checks rerun for
+this audit or claims about the current tree. Every numerical observation is
+sourced to this document at that commit unless a more specific dated result
+artifact is cited. `/tmp` and external `/data/tpch-gpu` reports are not
+checked-in evidence and cannot independently substantiate those checkpoints.
+Current contracts and later cutovers take precedence over their historical
+mechanism descriptions; see `PLANNING-REDESIGN.md` Progress.
+
+Current host realization uses recorded per-reader direct calls and
+`Build::build`, not autoref dispatch, a `build!` macro, or `AutoDense`.
+Closed captures use plain values cloned at consuming move-closure creation
+(`passes/cq-print/src/ownership.rs`), not inserted `Arc` capture handles.
+
+GPU TPC-H build reports record `generation_seconds` per query, scale, and mode.
 
 `cq_lang_sequence::contract::Checker` owns proof reuse for one planning
 invocation. Its `check`, `check_rewrite_in`, and `check_grading` methods retain
@@ -68,7 +80,7 @@ Output   ::= "output" ("count" | "reserve" | "bounded") ";"
 Public API:
 
 ```rust
-pub struct Program { pub structures: cq_lang_structures::Program, pub sequence: Sequence, pub graded: Option<Graded>, pub evidence: Evidence }
+pub struct Program { pub structures: cq_lang_structures::Program, pub sequence: Sequence, pub graded: Option<Graded>, pub evidence: Evidence, pub representation: Representation }
 pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(Ident, Box<Term>),
                 Tile{n: usize, items: Option<usize>, inner: Box<Term>}, Lookup{provider: Ident, keys: Vec<Ident>, inner: Box<Term>},
                 Fold(Monoid, Box<Term>), Group(Ident, Box<Term>), Canon(Box<Term>), Store{capacity: Option<usize>, inner: Box<Term>},
@@ -76,13 +88,18 @@ pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
 pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_threshold: usize, pub key_partition_cache_threshold: usize, pub root: LevelNode }
-pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
+pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub host_rust: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
 
-/// Target catalogs are ordered syntax/capability data, with no target dependency here.
-pub struct Catalog { pub providers: Vec<ProviderToken>, pub codecs: Vec<CodecToken>, pub canons: Vec<CanonToken> }
-pub struct ProviderToken { pub ty: syn::Type, pub capabilities: Vec<Capability>, pub supports: Vec<cq_lang_structures::ProviderCapability>, pub levels: Vec<Vec<String>>, pub elements: Option<Vec<syn::Type>> }
-pub struct CodecToken { pub ty: syn::Type, pub ordered: bool, pub levels: Vec<Vec<String>> }
-pub struct CanonToken { pub ty: syn::Type, pub levels: Vec<Vec<String>>, pub max_packed_bits: Option<u32> }
+/// Target catalogs are ordered declaration/level data, with no target dependency here (PL-Catalog).
+/// Entries are keyed by provider token id (and inner token); a program declaration of a
+/// catalog-declared token must equal it. No catalog fact is read from a Rust spelling.
+pub struct Catalog { pub declarations: Vec<cq_lang_structures::Declaration>, pub providers: Vec<CatalogEntry>, pub codecs: Vec<CodecToken> }
+pub struct CatalogEntry { pub provider: cq_lang_structures::Provider, pub levels: Vec<Vec<String>> }
+/// `codec_id` is the Structures declaration-local identity (`None`: identity).
+/// BE-Code admission compares ids, ordering and levels; `codec` is only printed.
+pub struct CodecToken { pub codec_id: Option<cq_lang_structures::provider::CodecId>, pub codec: Option<syn::Type>, pub ordered: bool, pub levels: Vec<Vec<String>> }
+/// Canonical rows records are typed by tokens declaring `distinct` (PL-Distinct); a canon
+/// obligation is admitted at its graded level through its recorded rows or answer-index token.
 
 /// Lengths as symbolic expressions (size types).
 pub enum Len { Input(String), Scan(String), Lit(usize), Add(Box<Len>, Box<Len>), CeilDiv(Box<Len>, usize), Unknown(/*capacity*/ Option<usize>) }
@@ -96,29 +113,63 @@ pub struct Analysis {
     pub publications: BTreeMap<String, Publication>,    // checked BorrowHost | Alias | OwnRows { staged } | DeferredRows { consumer } | Parts
     pub host_sources: BTreeMap<String, String>,         // pure base provenance before reheading
     pub host_tiles: BTreeMap<String, Vec<Option<String>>>, // Tile input provenance in preorder
-    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>, // checked native ABI inner types
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, cq_lang_structures::Provider>>, // recorded inner instances of routed tokens (STR-Routed)
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>, // provider reads: Exact | Range | Membership | Ordered
     pub levels: BTreeMap<String, Vec<String>>,          // grade of every Def (empty when ungraded)
     pub dispatches: Vec<Dispatch>,                      // derived (BE-Boundary): outer store, members, inner stores
     pub collectives: Vec<(String, Monoid, Vec<String>)>, // fold/scan Defs and their level
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
     pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
-    pub evidence: Evidence,                           // estimates and author-asserted key premises
+    pub evidence: Evidence,                           // sourced advice and explicitly trusted keys
+    pub representation: Representation,               // recorded column sets and blocked CPU execution
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
 pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE-Scope…BE-Abort against m
-pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // checked equal support; join motion preserves pinned Rust domains
+pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // equal support, unchanged Rust payloads and free-variable bindings
 impl cq_stage::Language for Program { … }
 ```
+`Representation { identity: BTreeSet<String>, encoded: BTreeSet<String>,
+blocks: blocks::Execution }` prints as optional trailing
+`representation { identity [...]; encoded [...]; blocks { ... } }`
+after evidence. The optional CPU blocks section records source scan references,
+native position carriers, ordered predicate phases, fused predicate runs and
+exact read-consumer identities. Vector extent and bounded scratch derive from
+the Structures-owned source geometry, not duplicate Sequence fields.
+It references Structures representations and predicate decisions rather than
+selecting families or reinterpreting Rust types. `BE-Blocks` checks phase coverage,
+single-consumer fusion paths, aligned disjoint tiles and demanded-read placement
+independently of the producer; a lawful split run is not rejected merely because
+the lowering prefers one reused mask. Pull and Tasks print these checked facts.
+Ordinary programs have no blocks records and retain their prior realization.
+Recorded `route` entries also identify each `PartitionK` source key's
+Structures representation. Routing compares/hashes compatible global ordinal
+carriers, never block-relative residuals or reconstructed logical rows. The
+checker validates exact constructor-key demand independently of the routing
+producer; native blocked source chunks remain bounded and source-borrowed.
+`Fold Sum` rejects a still-encoded base column, including through retained
+references; a computed owned value and `Fold Count` remain legal. This is an
+ownership refusal, not an implicit decoding or uniqueness policy.
+Unknown columns do not justify device Rust. `LevelNode.host_rust`
+is true for host and CPU task execution, false for device/block/lane execution.
+Every Rust expression is pure-total by premise and emitted unchanged; device
+evaluation additionally requires identity representations for all read columns
+and closed captures for other inputs. Encoded comparisons use `where`.
+Publishing a host-filtered row below host requires a recorded identity or encoded
+representation for every retained column, unless the receiving level executes
+host Rust. A projected key can therefore cross without carrying its host-only
+payload. Structural renames and membership reads do not infer host execution from
+the spelling of a payload type.
+
 `BE-Publication` derives named Store ownership once for both PL-Cost and Tasks.
 Borrowed host stores and aliases do not allocate rows. Owned flat staging and
 key-part publication do; their lengths contribute a retained-row traffic
 tie-breaker after compute span, without equating a copy with row-expression
 evaluation. Provider insertion still pays work and span. Alias reheading
-does not license raw-buffer reuse unless the carrier is unchanged. Native
-`cq_storage::sharded::Sharded` representation arguments and routing coverage of
-the stored outer key (after constant elision) are checked before emission;
-the printer consumes the checked inner types, never a last-path-name heuristic.
+does not license raw-buffer reuse unless the carrier is unchanged. A routed
+provider is the recorded inner instance of a token declaring `routed`
+(STR-Routed); routing coverage of the stored outer key (after constant
+elision) is checked before emission, and the printer consumes the recorded
+inner instances, never a type path.
 `DeferredRows { consumer }` is a checked Store-consumer fusion, not general lazy
 Store semantics. Only an owned flat staging input can receive it: every row or
 written length demand must belong to one `Parts` publication whose leading
@@ -129,9 +180,9 @@ no retained-row requirement, no direct part-row replay or alias, and is not the
 final output publication. Original input and consumer carriers must agree;
 support-equal reheading alone is insufficient. Pure named producer views and
 previously published `BorrowHost` sources are followed; prior owned or nested
-Stores remain pinned. The checker traverses Physical dependencies using
-`Analysis::opaque`, rejects scan dependencies with shadowable
-join-filter bindings, and rejects intervening publications of source dependencies.
+Stores remain retained. The checker traverses Physical dependencies using
+free-variable and representation facts, rejects scan dependencies with
+shadowable join-filter bindings and intervening publications of dependencies.
 Everything failing these premises retains its original ownership record.
 
 On a recorded worker-singleton leaf reached without counting the staged input,
@@ -153,9 +204,30 @@ and task machines use one item with dynamic widths. Each target exports
 `machine()` and `catalog()`. Catalog levels are explicit absolute paths beginning
 with `host`; an empty list admits no levels. Provider type patterns allow `_`
 type/const arguments and `'_` lifetimes while retaining the author's actual type.
-Native catalogs describe the storage providers, identity/dense codecs and set
-canonicalizers; the GPU catalog describes resident `RangeProvider`,
-`DenseDictionary`/identity codes and publication-level `PackedCanon`/`WideCanon`.
+Native catalogs describe the storage providers, identity codec and set
+canonicalizers; the GPU catalog describes resident `RangeProvider`, identity
+codes and publication-level `radix_set` full-row sets. There are no builtin
+syntactic `Dense` codec tokens: a target cannot authorize an arbitrary
+declaration-local codec id by recognizing its type.
+
+`cq_lang_structures::provider::CodecId(pub u32)` names a codec within a
+Structures declaration context. `InputColumn` records `codec_id: Option<CodecId>`
+beside `codec: Option<syn::Type>`. Source `codec Type` may omit the id; the
+declaration boundary interns it once by opaque token spelling. Automatically
+interned equal spellings share an id, but explicit `codec [0] Type` and
+`codec [1] Type` remain distinct. `None` is identity, not an unresolved encoded
+codec. `Obligation::Codec` and `CodecToken` retain the id and type; subsequent
+checking and admission compare only the id, while the type is a printing
+payload. Conflicting ids for one logical type reject even if the codec
+spellings match.
+
+Custom GPU admission is explicit:
+`decompose(codecs [CodecToken { codec_id: Some(0), codec: Some(Type),
+ordered: true, levels: [[host], [host, device]] }])`.
+`codec_id` is `Some(u32)` or `None`; identity pairs `None` with `codec: None`.
+The fields precede `ordered` and `levels` as shown. Each token must name the
+recorded local id and satisfy the requested ordering and all graded levels.
+Omitting `codecs` adds no custom capabilities; codec types never grant them.
 
 Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Alpha: every Term is well-formed over Structures (named results exist, `map` names a total segment, `lookup` key ⊆ heading, `compact` names a select).
@@ -163,10 +235,16 @@ Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Offsets / BE-Length: lengths computed for every Def; a `store` at a separated level whose Len is `Unknown` must carry a capacity; host (and ungraded) stores need none.
 - BE-Collective: applies to `fold`/`scan`/`flatten` graded at a level with members; at a leaf level they are sequential loops.
 - BE-Group: `group result input` names a Physical Group and consumes exactly its complete, flat, distinct valuation heading. Grouping executes at host, never per tile or at a separated pool/task. Global grouping has length one, including empty input; keyed grouping has data-dependent length and no empty groups.
-- `union [d, ...]` is a view with α = ⊎ and summed Len; opaque Guard/Bind are `map` Defs that must be graded at host (BE-Partial).
+- `union [d, ...]` is a view with α = ⊎ and summed Len; Rust Guard/Bind maps use BE-RustRepresentation, not a partial-expression classification.
 - BE-Code: codec premises are deferred to traits (recorded as obligations in Analysis, like Leibniz).
 - BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support). `workers < N` requires a positive bound and observes the target-wide available worker count, a uniform scheduling parameter that neither changes support nor supplies size evidence; a final `else` covers its remaining cases.
-- Grading: BE-Scope (reads inside extent, inner level), BE-Collective (fold/scan at collaborative level, whole level), BE-Separate (siblings exchange only via a store at an ancestor), BE-Boundary (derive `dispatches`), BE-Partial (no opaque Rust below host), BE-Abort (every dispatch has a failure channel).
+- STR-BuildStats / BE-StatsRead: provider declarations own typed fields, units,
+  precision, scalar ABI and publication provenance. `stat ready (reference) < N`
+  or `>= N` requires a preceding flat Store of that immutable build, matching
+  complete layout/domain/epoch/unit/precision and a host execution scope.
+  Missing `Option<u64>` takes mandatory `else`; code bounds and statistics used
+  as lengths/capacities are rejected. No statistics are selected automatically.
+- Grading: BE-Scope (extent/level), BE-Collective (whole-level participation), BE-Separate (ancestor publication), BE-Boundary (dispatches), BE-RustRepresentation (host-Rust capability or identity device inputs), BE-Abort (failure channel).
 
 Acceptance: round-trip of every form; one rejection test per rule; `rules.tsv` rows switch to `implementation`; `tools/public-api/cq-lang-sequence.txt`.
 
@@ -205,7 +283,7 @@ failure channels are paths back to host, with their runtime flag behavior
 recorded as obligations. The structural rewrite checker compares construction
 normal forms under support. A changed Structures prefix additionally requires
 an evidence-independent join/semijoin equivalence certificate with unchanged
-opaque Rust domains; it does not prove arbitrary Rust or runtime trait laws.
+Rust payloads and free-variable identities; it does not prove arbitrary Rust or runtime laws.
 The flat definition list defines lexical extents: a store is visible from its
 definition onward, at its level and descendants. Cross-level views require
 an explicit ancestor store. A distributed publication tile needs a unique
@@ -214,8 +292,8 @@ without descending, so block scans inside them retain whole-block
 participation. Nonhost collectives require a collaborative grade and
 uniform guards. Each separated store must be named by a definition so that dispatch
 domains and publications have unambiguous names. Host and collaborative
-stores may remain nested. Opaque Physical dependencies require a host
-Sequence store before their values enter descendant execution.
+stores may remain nested. Physical dependencies without an eligible descendant
+representation require a host publication before descendant reads.
 
 `BE-Code` stays abstract: there is no static rejection test for a runtime
 trait law. Its analysis-obligation tests replace such a test; all thirteen
@@ -248,7 +326,6 @@ checked by `check_rewrite`:
 | `tile(d, n [, items m])` | a Def | `tile n [items m]` around it | BE-Partition (views are bijections) |
 | `choose(d, len x < k => a, else => b)` or `choose(d, workers < k => a, else => b)` | guards + two Defs | `choose` | BE-Choose |
 | `output(protocol)` | `count` / `reserve` / `bounded(n)` | set the final store's protocol | output paragraph |
-| `codec(R.c => Type)` | host column, codec type token | record codec obligation | BE-Code |
 | `canon(d => Type)` | canon provider type token | record | BE-Canon |
 
 Acceptance per macro: applies, round-trips, `check_rewrite` passes, and a
@@ -259,8 +336,12 @@ rejection case (e.g. `tile` over a `store` at an unknown length).
 ```rust
 pub fn translate(p: &cq_lang_sequence::Program, a: &Analysis) -> syn::Result<syn::Expr>;
 ```
-One function per Term constructor; `tile` groups contiguous rows and `choose`
-evaluates recorded first-match guards; lifted constructors preserve outer groups.
+One function per Term constructor; `tile` groups contiguous rows. Ordinary pull
+selects the support-equivalent Else arm for choices without worker guards;
+worker-guarded pull and target hooks evaluate recorded first-match guards.
+Lifted constructors preserve outer groups. Carrier publications for runtime
+Choice and non-borrowable task Tile drivers are recorded in `Analysis.task_execution`
+and charged as symbolic retained-row traffic (BE-CarrierPublication).
 Pull realizes `workers` as `1usize`. The target-hook `translate_with` and
 `translate_profile_with` APIs take an explicit `syn::Expr` worker count before
 the hook; Tasks supplies `rayon::current_num_threads()`. This expression must
@@ -288,36 +369,74 @@ both pool and task levels rather than reducing each chunk independently.
 Acceptance: conformance with [4] on the corpus; the parallel
 Datalog extension's sharded admission expressible as `tile` + `canon`.
 
-## [6] `experiments/gpu/sequence` (CUDA translation; replaces `experiments/gpu/printer` at cutover)
+## [6] `experiments/gpu/sequence` (CUDA translation; former printer removed)
 
 Same signature. Machine `gpu { host > device(separated, dynamic) > block(collaborative) > lane }` (no warp level).
-Templates: dispatch (one kernel per `Dispatch`, grid = length of its outer
-stored space, dynamic claiming), `tile` at block → block of lanes, `items`
-→ per-lane loop, `flatten` at block → scan in shared memory + owner search,
-`store` at device → buffer sized by Len or capacity with overflow flag,
-output protocols, `canon` → runtime provider. Reusable execution primitives
-live in `experiments/gpu/sequence-runtime` (`cq-gpu-sequence-runtime`) and
-reuse `cq-gpu-runtime` pools, streams and `DeviceColumns`. Acceptance: the
-H05 term in the design section translates to two query kernels and RCCL
-build/canonicalization calls; exact at SF1/SF10; target within 20% of 9.7 ms
-at SF10, with measured results reported separately.
+Templates: dispatch (one query kernel plus recorded completion steps per `Dispatch`, dynamic tile claiming), `tile`
+at block → block of lanes, `items` → per-lane loop, `flatten` at block → scan
+in shared memory + owner search, `store` at device → buffer sized by Len or
+capacity with overflow flag, output protocols, `canon` → runtime provider.
+Reusable execution primitives live in `experiments/gpu/sequence-runtime`
+(`cq-gpu-sequence-runtime`) and reuse `cq-gpu-runtime` pools, streams and
+`DeviceColumns`. Acceptance: the H05 term in the design section translates to
+two query kernels and RCCL build/canonicalization calls; exact at SF1/SF10;
+target within 20% of 9.7 ms at SF10, with measured results reported separately.
+
+**Contract (T-Gpu, `backend_ir.tex` §"Refinement and the emitter"):** the
+emitter decides nothing; kernels, barriers and launch shapes are derived from
+the grading and recorded analysis. Recorded today: dispatch boundaries
+(`analysis.dispatches`), publication kinds (BE-Publication), output protocol
+(`output …`), distributed tile parts (`Dispatch::parts`), range access
+(`883d60f8`). The 2026-10-28 launch violations are now recorded in
+`Dispatch::gpu` by `languages/cq-lang-sequence/src/gpu.rs`, with launch
+preparation owned by the target's `gpu::realization::Realization.launches`:
+
+| Decision | Recorded fact / consumer | Status |
+|---|---|---|
+| Grid size | `Partition::{One,Tiles,Spread}` plus `Realization.launches`; invocation occupancy or one optional program-owned one-block/resident envelope per fixed kernel specialization; checked final ABI records live parameters, witnesses and preparation entry; recorded tile caps and sharing determine each grid within that envelope | exact implementation, gates not rerun (GPU-ProgramLaunch; cache hits avoid symbol lookup, allocation and repeated preparation queries) |
+| Deferred lookup range | `Publication::DeferredRange { provider, keys }`; grading resolves catalog identity and consumers before BE-Resource; accounting and emission share that record | exact (was independent emitter/resource choices) |
+| Range-offset completion | `OffsetScan::DeviceExclusive`; CUB device-wide scan and parallel overflow check before consumers, with per-pool module/workspace reuse | exact (was serial one-block finalize) |
+| Whole-input fold | `FoldCompletion::BlockPartials`; distributed block partials followed by stream-ordered combine | exact (was one-block finalize) |
+| Host metadata synchronization | `Synchronization::{CountAndFailure,HeadCursor,RangeOffsets}`: check an individual dispatch, check a group of heads at their publication point, or read a completed range total. Replay consumes the recorded check. | checked |
+| Datalog candidate reservation | An eligible `reserve_previous` terminal reserves directly in the head's buffer. Counts persist across producers until the recorded publication barrier; heads publishing together share one metadata download. | GPU-HeadCursor |
+
+Historical measurement before the cutover (H05 automatic, SF10, `nsys`, 2026-10-28): dispatch 27
+scans all of Lineitem with a deferred range on one block, 783 ms per launch,
+against 1.96–2.02 ms for the seven identical Lineitem scans on 2272 blocks;
+one-block launches are 10.5 s of 10.7 s profiled kernel time.
+
+After the checked-launch cutover and scan workspace reuse (2026-10-28;
+`/tmp/h05-after.json`, five measured runs), all four variants are exact:
+
+| H05 | SF1 total ms | SF10 total ms |
+|---|---:|---:|
+| Automatic | 14.693 | 114.355 |
+| Advised R | 1.113 | 8.562 |
+
+SF10 automatic improves from the historical 1859 ms; advised remains within
+noise of 8.55 ms. An intermediate regression was traced with Nsight to
+1.68–3.72 ms host gaps between the prefix dispatch and offset completion,
+not to the expansion kernel: the prefix remained one block (5–7 μs), and
+expansion used 710 blocks (344–362 μs per count/write attempt). Reusing the
+offset module, CUB program and workspace removed repeated preparation cost.
 
 ## [7] runtime traits (`cq-storage`, `cq-gpu-runtime`)
 
-```rust
-pub trait RangeCursor<K> { fn range(&self, k: &K) -> (usize, usize); }   // contiguous bucket
-pub trait Membership<K>  { fn contains(&self, k: &K) -> bool; }
-pub trait Codec<T> { type Code: Copy + Eq; fn enc(&T) -> Option<Self::Code>; fn dec(Self::Code) -> T; }  // injective; Ord impl ⇒ monotone
-pub trait Canon<Row> { fn canon(rows) -> Self; }
-```
-Storage-law tests per implementation (α commutes), as today's `cq-storage`.
+The public CPU contracts are `cq_storage::RangeCursor` (associated `Item`,
+`items()` and `range(key)`), `ExactMembership::contains`, `IndexRead`, and
+`SequenceCodec::{encode, decode}` with an associated `Code: Copy + Eq`.
+See `runtime/cq-storage/src/{sequence,membership}.rs` for exact signatures
+and laws. The original `Membership`, `Codec`, and `Canon` sketch was design
+pseudocode, not public Rust API. Canonicalization uses the recorded provider;
+storage-law tests check each implementation's abstraction obligations.
 
 The GPU implementations are `RangeBuilder`/`RangeProvider` (stable RCCL
 radix ordering, dense-code lower-bound offsets and gathered packed payload),
 `DenseDictionary` (gpu-compress domain adapter), `SelectedRows` (stable
-flagged selection for scan-only sources), and `canon::PackedCanon` (packed
-keys sorted and uniqued). `canon::packed_columns` preserves duplicates when
-no canon is recorded. Device scan/owner/membership helpers share gpu-tiles
+flagged selection for scan-only sources), and `radix_set`
+(`RadixLayout<EncodedRow, (), PackedRow, u64, ()>`, complete packed keys sorted
+and uniqued). Non-set column publications preserve duplicates.
+Device scan/owner/membership helpers share gpu-tiles
 and device-columns; selected sources do not invent an unused index key.
 
 ## [8] facade
@@ -372,15 +491,16 @@ The `sequence_conformance_*` integration tests compare Sequential and Tasks
 translations of the same corpus programs: one crate per classic case (10), one
 per retail case (10), and eleven triangle-kernel planner families. Classic and
 retail reuse the executable corpus's pairwise configuration lists. The kernel
-crates do not replay the executable 2,848-row product: they keep the full
+crates do not replay the executable 1,424-row product: they keep the full
 product only over choices that change the compared program (planner x join x
-intersection) and cover host representation and the four rewrite axes pairwise
+intersection) and cover host representation and the three rewrite axes pairwise
 (`tests/support/sequence_matrix.rs`, 26 or 32 rows per planner; printer rows
 are omitted because conformance replaces the printer). Registration,
 comparison and reporting stay in `tests/support/sequence_conformance.rs`. Run
 them from `features/workloads` with
 `cargo test -p cq-workload-corpus --test 'sequence_conformance*' -- --nocapture`.
-Compile cost, not execution, dominated: one 224/320-row kernel crate took over
+Historical compile cost, before removal of the ordered-dedup axis, was dominated
+by compilation rather than execution: one 224/320-row kernel crate took over
 20 minutes in rustc (24 GB RSS for the former single retail crate, of which
 codegen 45%, monomorphization 24%, borrow checking 20%, macro expansion 15%).
 Tasks programs cost about four times a Sequential program in monomorphization
@@ -411,7 +531,7 @@ are removed.
 ## [10] `passes/cq-sequence-plan` (decomposition planner; P-Decompose)
 
 The planner is an advice generator over Sequence, exposed as
-`cq_sequence_plan::plan(program: &Program, machine: &Machine, catalog: &Catalog)
+`cq_sequence_plan::decompose(program: &Program, machine: &Machine, catalog: &Catalog)
 -> syn::Result<Planned>`, where `Planned { program, trace: Vec<Advice> }`.
 `Program` and the target-data-only `Catalog` belong to `cq-lang-sequence`;
 target crates export their catalogs without introducing target dependencies
@@ -526,8 +646,10 @@ Decision procedure (bounded enumeration, no search):
 4. Obligations: validate each reported codec/canon/provider obligation
    against catalog capabilities at its level. Structures already records
    provider and canon types; planning does not replace them or introduce
-   codec/canon selection syntax. Codec laws remain abstract runtime
-   premises, with catalog support validated here. Missing support rejects
+   codec/canon selection syntax. Codec obligations carry the recorded
+   `codec_id`; a single catalog token must match that id, required ordering
+   and all graded levels. Codec types are printing payloads, not admission
+   keys. Codec laws remain abstract runtime premises. Missing support rejects
    with the obligation.
 
 Integration acceptance contracts (not a report of executed checks):
@@ -567,62 +689,69 @@ were respectively 4.28% and 5.13% above their authored references, within the
 
 ## [11] Lookup & Expand planning, evidence advice, swappable planners
 
-**automatic = robust default (no CE); performance plans are authored through the advisory.**
-Unadvised CQ and Sequence entry use the deterministic two-phase Lookup/Expand
-rule: filtering Lookups first in the GYO/LargestRoot transfer order, Expands
-as late as their consumers permit, and segmentation-first resource recovery.
-Explicit ordering, selection, Physical/Structures, realization, staging and decomposition advice retain precedence;
-`plan(preserve_order)` also requests order-preserving decomposition explicitly.
-The 31 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
-generation enables automatic entries by default (`CQ_GPU_TPCH_AUTOMATIC=0`
-opts out). Handoff gates are exact SF1/SF10 execution of all 14 supported entries,
-all-crate conformance agreement, and scoped API/lint/formal checks. Timings are reported,
-not compared against an automatic-versus-advised performance gate.
+Sequence decomposition preserves the recorded relational construction.
+Automatic `lookup_first` replanning and adaptive optional-filter discovery
+have been removed (P3.3-lite). Authored Sequence recipes, `choose`, and checked
+key partitions remain supported. GPU suite `automatic` entries are opt-in
+(`CQ_GPU_TPCH_AUTOMATIC=1`) and now use decomposition plus existing grading;
+the advised path is unchanged.
 
 Sources: Birler, Kemper, Neumann, "Robust Join Processing with Diamond
 Hardened Joins" (VLDB 2024); Zhao et al., "Debunking the Myth of Join
 Ordering" (RPT, SIGMOD 2025); Qiao, Boncz, Zhang, "Robust Predicate
 Transfer with Dynamic Execution" (RPT+, VLDB 2026).
 
-Observation: Sequence terms already have L&E semantics. `lookup` yields
-the match range per row (L&E's iterator), `flatten` is Expand,
-`compact(lookup)` is a filtering Lookup, and a `store` of looked-up rows
-with a provider built over it is "a hash table that stores iterators"
-(L&E §3.2, Figure 4). The authored H05 plan R is L&E's two-phase plan;
-the generic path keeps written atom order and expands first (61 ms vs
-10 ms at SF10). No new primitive is needed, only ordering rewrites.
+What the sources say (read 2026-10-28; quote them, do not paraphrase from
+memory):
+- L&E: a Lookup finds the match iterator, the Expand walks *that* iterator
+  (§3.2); a binary hash join is a Lookup immediately followed by its Expand
+  (Figure 2). Lookups are reordered; Expands go as late as possible (§4).
+  The two-phase guarantee (all Lookups, then all Expands) is for α-acyclic
+  queries (§3.4); cyclic queries use ternary joins and Expand3 with secondary
+  indexes (§3.5). Its sideways information passing (§4.1) builds **Bloom
+  filters during the existing hash-table builds**, one pass ordered small →
+  large by input cardinality, and is evaluated as a separate switch (`SIP`).
+- RPT transfers predicates with Bloom filters; it does not store reduced
+  relations.
 
-Rewrites (checked by `check_rewrite`; laws Motion, BE-Offsets, BE-Scope):
-1. `lookup_first`: derive the join graph and deterministic GYO/LargestRoot
-   transfer order, with the deepest-parent chain tie break. Predicate-bearing
-   relations and bridges filter before keyed provider builds. Scan-only roots
-   and their one-consumer forward filters stream; nonroot keyed forwards retain
-   rows. Schedule filtering Lookups before growth and place Expands at their
-   first required consumer. Cyclic keys become available only after their
-   required preceding Expand. The untested restricted-expansion-root experiment
-   is not part of the default; explicit order and early-Expand advice remain
-   available through the advisory.
-2. `choose` on the published count of a filtered store when no evidence
-   says the filter is selective (RPT+ §5 dynamic pipeline; our BE-Choose).
-3. PL-Cost prefers Lookup-before-Expand (shrinking before growing) at
-   equal work.
+What the retired Sequence replanner did (historical code and dumps):
+- `transfer` / forward steps are **exact semijoins** (`semi eager`); in `let`
+  mode they lower to a stored `compact` plus a new `RangeProvider`. This is
+  neither L&E SIP nor RPT (`STATUS.md`: "not the paper's vectorized Bloom
+  pipeline").
+- A pushed Lookup is `compact … lookup P [k]` and its later Expand is a
+  separate `flatten lookup P [k]`: the same provider is **probed twice**
+  (five provider/key pairs in H05 automatic). Sequence can express the
+  fused form `flatten lookup P [k]` (one probe); whether it can carry an
+  unexpanded range across other Lookups is not verified.
+- The authored H05 plan R is **not** a two-phase L&E plan: every join is a
+  fused `flatten lookup` (a binary probe) in Region→Nation→Customer→Orders→
+  Lineitem order, plus a final Supplier membership `compact lookup`. H05 is
+  not α-acyclic (order–customer–nation–supplier cycle), so no plan for it is
+  guaranteed two-phase.
+- Historical pre-cutover measurement (SF10, 2026-10-28): automatic H05
+  1859 ms vs advised (= R) 8.55 ms. That automatic plan had 96 Sequence
+  definitions, 46 global stores, 9 Lineitem scans, 7 `choose` alternatives
+  (all alternatives executed), 33 query kernels vs 2. The checked-launch
+  cutover in [6] measures 114.355 ms automatic and 8.562 ms advised, exact.
+  The remaining automatic/advised gap has not been attributed here.
 
-Evidence advice: estimation is not part of the query. An `evidence { … }`
-advice block carries facts about data (row counts, keys, foreign keys,
-selectivities, bounds, sortedness), hand-written or generated (build.rs
-from a manifest, DuckDB statistics, a sampling pass). Recorded in the
-Analysis beside obligations. Law PL-Evidence: estimates select among checked
-candidates; a wrong estimate costs time, not answers. Keys are explicit author
-assertions: false keys can change answers through BE-GroupKey. Consumers: Lookup order and early Expand placement (L&E §4
-`earlyExpand`), the transfer-tree root (LargestRoot sizes), static
-filter-worthiness (RPT+ threshold) instead of `choose`.
+Current rewrites are checked by `check_rewrite` (Motion, BE-Offsets, BE-Scope).
+They select execution shape without rediscovering relational order.
+Authored `choose` alternatives remain subject to BE-Choose equal support.
+
+Evidence advice: estimation is not part of the query. A sourced evidence block
+carries row counts, foreign keys, selectivities, bounds and sortedness.
+Every fact records `from authored("source")` or the original
+`from vo("source")`; mapping subjects preserves that source. PL-Evidence lets
+estimates select checked shapes only. Compiler inputs are sets at the IO
+boundary; that proves uniqueness of the full heading, not a partial key.
 
 Evidence syntax (a complete advice block, also serialized in a planner trace):
 
 ```text
-evidence {
+evidence from authored("manifest and schema") {
     count Lineitem = 60000000;
-    key Orders [order_key];
     foreign_key Lineitem [order_key] -> Orders [order_key];
     selectivity filtered_part = 1 / 10;
     bounds Orders.order_key = 0 ..= 60000000;
@@ -630,34 +759,15 @@ evidence {
 }
 ```
 
-Facts validate names and syntax, not their truth. Later facts of a kind take
-precedence for planning; no fact establishes totality, uniqueness, referential
-integrity, or a codec law for correctness checking. `Program.evidence` and
-`Analysis.evidence` retain the advice independently of the obligations.
+Facts validate names, nonempty provenance and syntax, not their truth. Later
+scalar estimates take precedence for planning and never establish a memory
+bound or uniqueness proof.
+`Program.evidence` and `Analysis.evidence` retain their original sources.
 `Advice` implements parsing and token printing, so author-written
 `store(name)`, `store_level(name)`, `publish(name, producer)`,
 `tile(name, n, items m)`, `partition(name, n)`, `segment(name, n, items m)`,
 `output(reserve)`, and `grade(gpu, name at host.device)` are the same
 replayable operations as generated trace entries.
-Lookup ordering uses
-`lookup_first(using Provider, order [r, s, t], transfer [s], early [t])`:
-all relation names denote checked Physical leaves, and omitted ordering
-decisions are filled from the join graph and evidence. Generated traces freeze
-those decisions explicitly. Runtime filter advice is
-`adaptive(filter, published_store, threshold)`; an optional
-`, select true` or `, select false` freezes a static evidence-based choice.
-Both arms retain the exact joins and are independently checked.
-
-`cq_sequence_plan::plan` obtains and replays `LookupFirst`, freezes the complete
-adaptive candidate list before inserting any choices, replays every entry in
-that list, then decomposes the result and prepends the ordering/adaptive trace.
-The separate `decompose` entry preserves authored relational order. Retained
-forward filters and multiply indexed/scanned leaves have explicit row providers;
-the Lookup-first index provider must support Exact and Membership. Retained rows
-use the generic Structures collection carrier, independently of keyed indexes. Adaptive
-arms duplicate only pure pipe prefixes back to a publication or reusable host
-scan, never opaque Rust or retained results. Reexpression preserves live host
-adapters, while obsolete keyed host fallbacks become explicit retained indexes.
 
 The Step 0 SF10 gate used one warmup and five measured runs: generic advised
 H05 was **10.208480 ms**, versus authored R **10.308352 ms**, with all 72,983
@@ -667,16 +777,14 @@ the suite and authored path use the same domain-coded input storage.
 
 For complete Sequence input, the facade's named `plan = path` phase operates
 on that Sequence program; for CQ input, the existing phase continues to
-select relational order before lowering. Opaque guards keep their written
-Before sets in either mode. To author a predicate-bearing leaf, put its atom
-and guard first, as H09 does for Part; this is query syntax, not guard motion.
+select relational order before lowering. Rust placement uses only free-variable
+dependencies at CQ-to-VO; Sequence refinements preserve that recorded placement.
+Predicate-bearing relational leaves use explicit `where`, never recognized Rust.
 
 Swappable planner: `cq_sequence_plan::Planner` trait,
 `plan(program, machine, catalog, evidence) -> Planned { program, trace }`;
-the facade phase `plan = ::mini_linq::passes::plan` preserves authored order
-by default; explicit `plan(lookup_first)` enables the rule-based planner.
-`plan = ::other::dp_plan` swaps in a DP/Cascades search over
-Lookup orders written as an ordinary pass. Any planner is tested by the
+the facade phase `plan = ::mini_linq::passes::plan` preserves authored order.
+`plan = ::other::dp_plan` selects an ordinary authored pass. Any planner is tested by the
 same replayable trace and the conformance harness.
 
 Not covered: Expand3 (worst-case optimal cyclic joins), eager aggregation
@@ -750,25 +858,19 @@ owner-offset construction, segment-local monoid reduction and publication.
 
 ### Box 12d key-aware grouped fold
 
-`evidence { Lineitem(l_orderkey, l_linenumber) key; }` asserts that no two
-physical input rows have the same key. The prefix spelling
-`key Lineitem [l_orderkey, l_linenumber];` denotes the same premise.
-These assertions are not inferred from counts, bounds or sampled statistics.
-Unlike estimates, a false key can change answers: the author is responsible
-for its truth. The manifest-driven TPC-H suite asserts dbgen's declared keys
-only when a loader projection carries every key column.
+Compiler input relations are sets at the IO boundary. Rename therefore proves
+full-heading uniqueness without an authored key annotation. A projection keeps
+that proof only when it retains a proven key; input set semantics alone never
+proves uniqueness of a proper subset of the input heading. Counts, bounds and
+sampled statistics remain planning estimates, not uniqueness premises.
 
-`group_without_canon(grouped_definition)` is checked by BE-GroupKey and
-BE-Group: the rewritten input must retain positional uniqueness after every
-valuation canonicalizer is removed. Keys transfer through renaming, filters,
-scalar binds and joins; projections must preserve them. Missing keys, unions
-and expanding Rust binds do not supply a certificate. The planner records
-successful rewrites in its replay trace. GPU groups can then read resident
-columns directly, evaluating group arguments without materializing complete
-named valuations. With no key advice the existing canonical path is unchanged.
+Physical lowering owns canonicalization, including inherited uniqueness,
+disjoint union arms and consumer canonicalization. Sequence preserves that
+decision; it does not remove valuation canonicalizers or record a second
+canon-removal decision in its replay trace.
 
 Measured SF10 acceptance (advised suite, one warmup and five measured runs;
-before: baseline suite, after: key-aware grouping plus CQ-Arith):
+before: baseline suite, after: historical key-aware grouping and retired arithmetic recognition):
 
 | Query | Before total ms | After total ms | Speedup | After wall ms | Exact rows |
 |---|---:|---:|---:|---:|---:|
@@ -798,7 +900,7 @@ omits the scalar average-balance subquery and grouped balance totals.
 
 `LateLineitem` and `BadSupplier` are filtered input relations, constructed
 once per CPU invocation before the CQ rule. Negation uses the existing
-CQ-Neg/E-Neg semantics, including anonymous existential arguments in
+CQ-Neg/RL-Neg semantics, including anonymous existential arguments in
 `!Orders(_, custkey)`; it does not encode membership as a Rust guard.
 The real-data kernels retain their independent embedded DuckDB SQL.
 Synthetic prefiltered peers live in the extended fixture catalog because
@@ -808,7 +910,8 @@ fixture scenarios, independent DuckDB goldens, and a direct existential
 reference check that does not invoke the compiler.
 Full-key intersection shapes exclude native HashMap merge (no OrderedRead)
 and own-push merge (unsupported); the two anti-only cores retain the full
-list, and the combined corpus still checks all 367 axis pairs.
+list, and the combined corpus requires coverage of all 311 remaining axis pairs
+after removal of the ordered-dedup axis. This count update is not a new test result.
 
 The exporter discovers the added date, comment, and phone projections from
 the authored declarations and records derived-relation names, exact
@@ -859,7 +962,7 @@ DuckDB DISTINCT-valuation oracle inside the test; no precomputed golden is used.
 
 The pending GPU item above is implemented: the retained Physical Anti node
 supplies negative polarity to `compact(lookup)`, and GPU translation uses the
-same provider membership probe with an inverted keep bit (E-Neg/RA-Anti).
+same provider membership probe with an inverted keep bit (RL-Neg/RA-Anti).
 Inspection of all four suite lowering artifacts found the required polarity;
 default lowering is unchanged. H04 is the positive membership control, while
 H04-not-exists, H16 and H22 retain `anti eager`.
@@ -902,6 +1005,9 @@ and `Machine.layout: Option<fn(&DispatchShape) -> syn::Result<usize>>`.
 types and codec facts, tile and item counts; it contains no GPU byte constants.
 `Analysis.resources` records checked shape, required bytes and capacity per
 publication. BE-Resource rejects oversized authored or generated dispatches.
+Payload carriers consume Structures' shared carried-column demand, including
+canonical valuations, storage keys, filtered payloads and native keyed-read
+layouts. Sequence does not repeat the Physical DAG demand propagation.
 
 The planner starts at the machine width and preferred items. It first tries
 nested inner-flatten segmentation, then plain tiling, and compares legal
@@ -960,8 +1066,13 @@ in the replayable trace. Partition/segment construction returns its already
 checked program instead of immediately replaying the same rewrite list a second
 time. Resource alternatives first use nested `segment` stores and tiles;
 named `store_level` and choice publications split dispatches only as a last resort.
-`CQ_SEQUENCE_PLAN_TIMING` additionally reports ordering, adaptive-choice and
-decomposition times; these are measured stages, not estimates.
+An index build over a declared `abi columns` scan retains its host publication
+boundary when no other row work requires a descendant grade: GPU realization
+records a source provider build from resident column descriptors. A different
+index token alone must not introduce an identity-copy device publication.
+Rebuilding row-oriented `range`, `radix_relation`, or `radix` scans still selects
+descendant row work. The distinction uses declared ABI facts, and the selected
+grades remain subject to the ordinary independent catalog/grading checks.
 
 Generated keyed tokens account for their reader layouts as well as provider
 payloads: a String-carrying host reader requires a host-capable catalog token.
@@ -1140,9 +1251,9 @@ preprocessing and terminal counts/zeros union are preserved. Stage timings are
 summed, and the same-Physical Sequential reference executes the complete graph.
 Device-planning failures remain explicit on host-planned stage artifacts.
 H14/H19 retain opaque String-valued witnesses and are rejected when opaque values
-lack a supported device encoding. The `WideCanon` catalog provider removes H10's
-former 128-bit complete-valuation limit; no witness projection or truncated
-equality key is substituted.
+lack a supported device encoding. The `radix_set` catalog provider supports
+arbitrary-width complete valuations, including H10's former 128-bit limit;
+no witness projection or truncated equality key is substituted.
 
 Host row codecs now support sixteen columns (H10 requires fifteen). Downloaded
 host publications map their carried layout to the downstream consumer's demand;
@@ -1151,8 +1262,8 @@ A terminal stored group followed by a stored alias emits one GPU grouped
 collective, not a redundant CPU group and host reupload. The ten Sequence core
 and six device-column unit tests passed in release CUDA builds.
 
-The unrestricted advised GPU executable builds. Final exact grouped timings
-(one warmup, median of five, milliseconds) are:
+Historical pre-`radix_set` evidence: the unrestricted advised GPU executable
+built, with these exact grouped timings (one warmup, median of five, milliseconds):
 
 | Query | SF1 total | SF10 total | Exact at both scales |
 |---|---:|---:|---|
@@ -1256,26 +1367,27 @@ and scoped formatting/clippy/API/formal checks.
 
 ### Box 12c arbitrary-width GPU canon
 
-`WideCanon` follows `PackedCanon` in the target catalog. Selection compares the
-complete declared scalar domains against each provider's maximum-bit
-capability; no data evidence establishes a codec premise. Runtime packing uses
-the recorded actual codec bounds to allocate N low-first u64 lanes. Stable
-least-significant-lane radix passes carry row indices, then adjacent complete-row
-equality retains one row in deterministic ascending packed-key order.
+The target catalog's `radix_set` provider uses the ordinary full-row
+`RadixLayout<EncodedRow, (), PackedRow, u64, ()>` form. Packing requires recorded
+codec bounds, not widths inferred from Rust scalar type syntax or data estimates.
+Declared and resident bounds support arbitrary-width complete keys in low-first
+u64 lanes. Stable least-significant-lane radix passes carry row indices, then
+adjacent complete-row equality retains one row in deterministic ascending
+packed-key order. Equality includes every lane; no truncated key is substituted.
 
-Both providers publish the same device count and decode through the same
-column adapter. Intermediate providers, host downloads, grouped inputs and
-union consumers all decode arbitrary-width fields, including lane crossings.
-The formal `GPU-WideCanon` instance cites `BE-Canon`; runtime tests cover
-three-lane duplicates, repeated calls and empty input, and catalog tests cover
-the 128/192-bit boundary and rejection without a sufficiently wide provider.
+The set publishes a resident device count and implicit unit occurrence offsets.
+Intermediate providers, host downloads, grouped inputs and union consumers decode
+arbitrary-width fields, including lane crossings. The formal `GPU-RadixSet`
+instance cites `BE-Canon`; runtime coverage includes three-lane duplicates,
+repeated calls and empty input.
 
-Acceptance on the release sm_89 build: all eight runtime provider tests and
-all ten catalog-selection tests passed. The formal inventory check passed
-(241 rules). H10's one warmup and all five measured runs matched the exported
-dbgen answers exactly; SF1 also passed Sequential-of-the-same-Physical
-conformance. GPU timing includes build, kernels and final publication work;
-DuckDB is the exported t24 median (not a new CPU measurement).
+Historical acceptance for the removed PackedCanon/WideCanon implementation,
+not validation or measurements of `radix_set`: on the release sm_89 build all
+eight runtime provider tests and ten catalog-selection tests passed, as did the
+then-current formal inventory (241 rules). H10's one warmup and five measured
+runs matched the exported dbgen answers; SF1 passed Sequential-of-the-same-
+Physical conformance. GPU timing included build, kernels and final publication
+work; DuckDB was the exported t24 median.
 
 | H10 advised | Exact rows | GPU total ms | Build ms | Kernels ms | Final publication ms | DuckDB t24 ms |
 |---|---:|---:|---:|---:|---:|---:|
@@ -1285,59 +1397,51 @@ DuckDB is the exported t24 median (not a new CPU measurement).
 Evidence: `/tmp/canon-h10.json`. The final-publication phase label is the
 suite's `dedup_ms`; intermediate canonicalization runs inside the kernel
 interval, so that column is not an isolated canon benchmark.
-## [15] CQ-Arith: earned arithmetic position independence
+## [15] One Rust expression and explicit relational predicates
 
-CQ defines `+`, `-`, `*`, and integer `/` by a nonzero literal as wrapping
-operations over declared integer types. Decimal arithmetic operates on the
-signed 64-bit coefficient (`Decimal::scaled`); integer-encoded dates retain
-their declared width. Total numeric `if` expressions and explicit lossless
-primitive `T::from` widening close the grammar. Arbitrary calls, lossy casts,
-mixed-width operands and nonliteral divisors remain opaque.
+Contract 7 supersedes arithmetic recognition. Every `if`, `let` and `for`
+expression is opaque, pure and total by premise, including calls, casts,
+conditionals and arithmetic. Its original Rust expression is emitted unchanged;
+there is no modular-arithmetic rewrite, type-name classifier or separate
+totality flag. Placement requires its free variables (the full environment
+when lexical analysis is opaque), not a written-order chain.
 
-The shared syntax recognizer returns the canonical wrapping expression.
-CQ-GuardRecognize extracts typed total conjuncts without splitting through
-opaque disjunctions or negations. CQ ordering and its independent VO checker
-admit arithmetic clauses when their inputs are available, while preserving
-opaque clauses' written Before domains. Bind/Guard syntax is retained in
-later IRs; Physical type facts rederive totality for planner placement and
-BE-Partial instead of trusting an annotation. Host and GPU row interpreters
-emit the same primitive wrapping operations, with no target placement choices
-inside translators.
+Only `where` supplies relational predicates. Query variables, literals and
+closed Rust operands are compared by representation equality/order; closed
+operands evaluate once at host. Device Rust requires recorded identity
+representations for all read columns and closed captures for other inputs;
+otherwise it executes at host. Encoded relational comparisons encode the
+closed operand at host. `host_rust` distinguishes CPU tasks from device levels.
 
-Acceptance: recognition/rejection (especially variable or zero divisors),
-overflow and signed-minimum division laws in debug CPU execution, arithmetic
-Motion with opaque-domain rejection, BE-Partial device acceptance/rejection,
-H06 DISTINCT-valuation exactness against DuckDB, and advised H06/H12 SF10
-device exactness with before/after timings.
+The following measurements are historical evidence from the superseded
+arithmetic-recognition implementation, not verification or performance claims
+for contract 7. The historical syntax/VO/order/planner, Sequence, GPU and CPU
+tests exercised that retired implementation's overflow rules; those rules are
+not the current expression contract.
 
-Observed acceptance: 124 syntax/VO/order/planner tests, 55 Sequence language
-tests, 13 GPU row/core tests, and all five H06/H10/H12 CPU tests passed.
-The CPU cases include debug-overflow laws, signed-minimum division by -1 and
-H06's independent DuckDB DISTINCT-valuation oracle. Scoped library clippy
-passed; the three changed public API snapshots were regenerated.
+The historical generic arithmetic-recognition + WideCanon path and combined
+key-covered grouping path used one warmup and five exact SF10 runs:
 
-Both the generic CQ-Arith + WideCanon path and the combined key-covered GPU
-grouping path were measured with one warmup and five exact runs at SF10:
 
-| Query | Exact answer rows | Baseline median ms | CQ-Arith + WideCanon ms | With key-covered grouping ms |
+| Query | Exact answer rows | Baseline median ms | Historical generic + WideCanon ms | With key-covered grouping ms |
 |---|---:|---:|---:|---:|
 | H06 | 1 | 3310.908 | 16.893 | 11.776 |
 | H12 | 2 | 44.427 | 30.955 | 25.930 |
 
-The generic path grades H06's range guards and multiplication (`r1`--`r4`)
-at `host.device.block`; H12's guards, join and numeric conditionals
-(`r1`--`r4`, `r6`--`r8`) likewise run there. The final column includes the
-separate grouped-input optimization, not just arithmetic recognition.
+The historical generic path graded H06's guards/multiplication and H12's
+guards, join and numeric conditionals at `host.device.block`. The final
+column additionally included grouped-input optimization. These placements
+are not a type-recognition license under the current contract.
 Baseline evidence is `/tmp/sweep3.json`; generic-path evidence is
 `/tmp/arith-h06-sf10.json` and `/tmp/arith-h12-sf10.json`; combined evidence
 is `/tmp/groupkeys-h06-sf10.json` and `/tmp/groupkeys-h12-sf10.json`.
-The generic canonical-publication path additionally needs declared primitive
-bounds for computed columns: wrapping expressions may cross either endpoint,
-so source codec bounds cannot be reused. WideCanon supplies complete keys when
-those full declared ranges exceed 128 bits.
-## [14] Staged programs in the GPU suite
+Current computed-column bounds must come from recorded representations;
+neither a Rust type spelling nor a source-column codec establishes the range
+of an arbitrary expression. WideCanon handles recorded complete keys wider
+than 128 bits.
+## [14] Historical staged-program integration evidence
 
-The importer retains the authored compile! graph, not merely its final rule:
+The original importer retained the authored compile! graph, not merely its final rule:
 H02/H18/H20 have two nodes, H15 has three, H11 has four, and H13 has two
 independent terminal branches. H13 also retains its authored one-time
 QualifiedOrders preprocessing and counts/zeros iterator composition. Each node
@@ -1345,6 +1449,12 @@ has a separately checked/advised plan and replay artifact. Resident numeric
 publications retain count, input key codec bounds, output column order and
 ancestor statuses; nullable or host-planned publications use host rows.
 Explicit caller advice is not discarded when device planning fails.
+
+Current cutover: `tpch/src/source.rs::SOURCES` loads authored `queries/*.stages`
+programs, checked by `tpch/src/stages.rs`; it does not extract compile macros
+or recognize host Rust pipelines. The stage DSL records inputs, domains,
+captures and dependencies. The following results describe the earlier importer
+and must not be read as execution evidence for the current DSL.
 
 The advised correctness gate passes at SF1 and SF10, including exact comparison
 against every exported answer TSV and same-Physical Sequential graph conformance
@@ -1360,7 +1470,7 @@ of stage times, including inter-stage host publication when required.
 | H18 | 57 | 624 | 493.079 / 87 | 5,393.855 / 771 | yes |
 | H20 | 186 | 1,804 | 399.399 / 21 | 4,219.653 / 128 | yes |
 
-These measurements include WideCanon but precede CQ-Arith/GroupKeys integration;
+These measurements include WideCanon but precede historical arithmetic/GroupKeys integration;
 they are not claims of fully device execution or performance acceptance. H02
 publishes its GPU minimum on the host because it is nullable; its final stage,
 all H11 stages, H15's anti-dominance stage and H18's final stage are host-planned.
@@ -1380,9 +1490,9 @@ Scoped clippy checks the runtime with warnings, but the suite lint gate reports
 44 `clippy::erasing_op` errors in generated zero-width CUDA allocations
 (`capacity * 0`); no translator change or lint suppression is included here.
 
-### Box 14b: arithmetic/key-aware staged replanning
+### Box 14b: historical arithmetic/key-aware staged replanning
 
-H15 now computes per-supplier revenue, a global grouped `max()`, and an equality
+At this historical checkpoint H15 computed per-supplier revenue, a global grouped `max()`, and an equality
 join retaining every tied supplier. The nullable maximum preserves empty-input
 semantics and removes the quadratic anti-dominance stage. Its independent
 DuckDB oracle SQL is unchanged.

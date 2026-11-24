@@ -9,7 +9,6 @@ mod bench;
 mod cargo;
 mod explain;
 mod extended;
-#[cfg(feature = "oracle")]
 mod fuzz;
 #[cfg(feature = "oracle")]
 use cq_testkit::golden;
@@ -65,18 +64,37 @@ fn run() -> Result<()> {
                 rerun_with_oracle("golden", &arguments)
             }
         }
-        "fuzz" | "differential" => {
-            #[cfg(feature = "oracle")]
-            {
-                fuzz::run(arguments, &repository_root())
+        "fuzz" | "differential" | "fuzz-quick" | "fuzz-full" => {
+            let mut arguments = arguments;
+            if command == "fuzz-quick" {
+                arguments.insert(0, "--quick".into());
+            } else if command == "fuzz-full" {
+                arguments.insert(0, "--full".into());
             }
-            #[cfg(not(feature = "oracle"))]
-            {
-                rerun_with_oracle(&command, &arguments)
-            }
+            fuzz::run(arguments, &repository_root())
         }
         "explain" => explain::run(arguments, &repository_root()),
         "bench" => bench::run(arguments),
+        "tpch-manifest" => {
+            #[cfg(feature = "oracle")]
+            {
+                tpch::certify_existing(arguments)
+            }
+            #[cfg(not(feature = "oracle"))]
+            {
+                rerun_with_oracle("tpch-manifest", &arguments)
+            }
+        }
+        "compile-tpch" => {
+            #[cfg(feature = "oracle")]
+            {
+                tpch::compile_all(arguments)
+            }
+            #[cfg(not(feature = "oracle"))]
+            {
+                rerun_with_oracle("compile-tpch", &arguments)
+            }
+        }
         "profile" => {
             #[cfg(feature = "oracle")]
             {
@@ -516,7 +534,7 @@ fn generation_config(case: &QueryCase, scenario: Scenario, scale: Scale) -> Gene
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask lives inside the workload workspace")
+        .expect("xtask lives inside the workload feature")
         .to_path_buf()
 }
 
@@ -547,11 +565,13 @@ MiniLinq workload tasks
   cargo xtask list
   cargo xtask generate [all|classic|retail|extended|CASE] [tiny|medium|large] [--scenario SCENARIO]
   cargo xtask golden [SELECTION] [SCALE] [--scenario SCENARIO] [--write]
-  cargo xtask fuzz [--cases N] [--seed S]
-  cargo xtask differential [--cases N] [--seed S]
+  cargo xtask fuzz-quick|fuzz-full [--cases N] [--seed S] [--duckdb]
+  cargo xtask fuzz|differential [--quick|--full] [--cases N] [--seed S] [--duckdb]
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
   cargo xtask bench --tpch --sf 0.1|1|10 [--runs N] [--cap-seconds N] [--query NAME] [--config NAME[,NAME...] | --reduction-comparison | --index-comparison]
+  cargo xtask compile-tpch
+  cargo xtask tpch-manifest --output FILE.json INPUT.parquet...
   cargo xtask profile --tpch --sf 0.1|1|10 [--query NAME] [--config NAME] [--output DIR]
 
 SCENARIO is coverage, empty-input, no-match, or all.
@@ -562,6 +582,9 @@ Bench always builds and runs in the release profile; time is never asserted.
 The synthetic bench reports scales N, 2N and 4N (default N=128).
 The TPC-H-derived bench enables the DuckDB oracle, caches data under target/,
 and reports warm medians for the selected scale factor.
+compile-tpch builds every catalog kernel in release and checks default/par route
+metadata, without generating/loading data or running queries. It accepts no options.
+This opt-in Main batch gate is not part of the default regression inventory.
 Runs must be positive and odd (1 is useful for smoke checks; default 5).
 --cap-seconds bounds configuration workers, including load and counting, not compilation or DuckDB;
 expired configurations report timeout with no query timing. The default is no cap.
@@ -571,9 +594,13 @@ The extended and typed corpora have tiny fixtures only. Typed CSV fixtures are
 authored; `golden typed --write` regenerates their Parquet copies and answers.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
-mode that changes those answers. `differential` is an alias for `fuzz`, which
-compiles seeded random CQs and compares their execution against DuckDB.
-`explain` records typed CQ, RA and IX payloads; it does not execute a backend."
+mode that changes those answers. `fuzz-quick` (64 fixed-seed cases, four CPU
+routes) and `fuzz-full` (2,000 cases from a logged run seed, every CPU route
+and host kind) compile seeded random CQs and compare every route with the
+typed model reference; `fuzz` and `differential` default to quick. `--duckdb`
+(needs `--features oracle`) adds the DuckDB CLI as a second SQL reference.
+`explain` observes checked facade boundaries from CQ and VO through Sequence,
+decomposition, grading and final Rust; it does not execute the query."
     );
 }
 

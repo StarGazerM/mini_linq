@@ -28,24 +28,21 @@ fn main() {
         relation S(a:i32,b:i32,c:i32);
         relation T(a:i32,b:i32);
         relation answer(a:i32,b:i32);
-        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
+        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), where y > 0;
     };
     let planned = boundaries(&directory, "planned", &source, true);
+    assert_eq!(planned.normal, source);
     let written = boundaries(&directory, "written", &source, false);
     // The GYO join tree: R under S under the root T.
     assert_eq!(
         cq::hypergraph::Analysis::of(&planned.normal).join_tree,
         Some(vec![(0, Some(1)), (1, Some(2)), (2, None)])
     );
-    // The Rust comparison is relational. The reducer goes up from R through S
+    // The explicit predicate is relational. The reducer goes up from R through S
     // to T and down again, before the first atom step.
-    let expected_vo: valuation::Program = syn::parse_quote! {
-        pub struct Overview;
-        relation R(a:i32,b:i32,c:i32,d:i32);
-        relation S(a:i32,b:i32,c:i32);
-        relation T(a:i32,b:i32);
-        relation answer(a:i32,b:i32);
-        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
+    let expected_vo = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| valuation::Program::parse(input, &planned.normal),
+        quote::quote! {
         valuation {
             reduce S@1 with R@0(_, k, tag, _);
             reduce T@2 with S@1(_, _, z);
@@ -54,17 +51,17 @@ fn main() {
             R@0(x, k, tag, unused);
             S@1(k, tag, z);
             T@2(z, y);
-            y > 0;
+            where y > 0;
         }
-    };
+    }).unwrap();
     assert_eq!(planned.valuation, expected_vo);
     let declarations = &source.declarations;
     let expected_ra: ra::Plan = syn::parse_quote! {
         #(#declarations)*
-        r0 = rename S@1 { a -> k, b -> tag, c -> z };
-        r1 = rename R@0 { a -> x, b -> k, c -> tag, d -> unused };
+        r0 = rename S { a -> k, b -> tag, c -> z };
+        r1 = rename R { a -> x, b -> k, c -> tag, d -> unused };
         r2 = semijoin r0 with r1;
-        r3 = rename T@2 { a -> z, b -> y };
+        r3 = rename T { a -> z, b -> y };
         r4 = select r3 if (y > 0);
         r5 = semijoin r4 with r2;
         r6 = semijoin r2 with r5;
@@ -77,10 +74,10 @@ fn main() {
     assert_eq!(planned.relational.plan, expected_ra);
     let expected_written: ra::Plan = syn::parse_quote! {
         #(#declarations)*
-        r0 = rename R@0 { a -> x, b -> k, c -> tag, d -> unused };
-        r1 = rename S@1 { a -> k, b -> tag, c -> z };
+        r0 = rename R { a -> x, b -> k, c -> tag, d -> unused };
+        r1 = rename S { a -> k, b -> tag, c -> z };
         r2 = natural_join r0 with r1;
-        r3 = rename T@2 { a -> z, b -> y };
+        r3 = rename T { a -> z, b -> y };
         r4 = select r3 if (y > 0);
         r5 = natural_join r2 with r4;
         r6 = project r5 keep { x, y };

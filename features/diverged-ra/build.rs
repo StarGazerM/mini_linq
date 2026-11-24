@@ -2,14 +2,14 @@ use quote::quote;
 
 fn main() {
     println!("cargo:rerun-if-changed=query.theta");
-    println!("cargo:rerun-if-changed=partial.theta");
+    println!("cargo:rerun-if-changed=total.theta");
     let mut functions = Vec::new();
-    for (text, probe_name, merge_name, partial) in [
+    for (text, probe_name, merge_name, callback) in [
         (include_str!("query.theta"), "run_probe", "run_merge", false),
         (
-            include_str!("partial.theta"),
-            "run_partial_probe",
-            "run_partial_merge",
+            include_str!("total.theta"),
+            "run_total_probe",
+            "run_total_merge",
             true,
         ),
     ] {
@@ -17,7 +17,7 @@ fn main() {
         let indexes = query.indexes().unwrap();
         for (name, merge) in [(probe_name, false), (merge_name, true)] {
             let name: syn::Ident = syn::parse_str(name).unwrap();
-            let parameters = partial.then(|| quote!(, partial: fn(&i32, &i32) -> bool));
+            let parameters = callback.then(|| quote!(, guard: fn(&i32, &i32) -> bool));
             let rewrite = merge.then(|| quote!(theta_passes::merge,));
             let inputs = merge.then(|| {
                 quote! {

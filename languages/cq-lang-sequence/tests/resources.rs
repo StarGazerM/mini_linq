@@ -1,5 +1,7 @@
+mod common;
+use common::Stack as Program;
 use cq_lang_sequence::{
-    Analysis, DispatchShape, LevelNode, Machine, Program, ResourceAllocation, check_grading,
+    Analysis, DispatchShape, LevelNode, Machine, ResourceAllocation,
 };
 use quote::quote;
 
@@ -7,6 +9,7 @@ fn machine() -> Machine {
     fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
         LevelNode {
             name: syn::parse_str(name).unwrap(),
+            host_rust: name == "host",
             collaborative: name == "team",
             dynamic: name == "engine",
             width: (name == "team").then_some(8),
@@ -15,6 +18,7 @@ fn machine() -> Machine {
         }
     }
     Machine {
+        gpu: None,
         name: syn::parse_quote!(target),
         items: 3,
         key_partition_threshold: 65536,
@@ -35,15 +39,15 @@ fn lookup_program(body: proc_macro2::TokenStream, grades: proc_macro2::TokenStre
     syn::parse2(quote! {
         physical {
             relation L(a:u32); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
-            j = pipe canon probe first [a] l,r;
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
             return j as answer(a,b);
-        } structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r = Provider [a];
-            j canon = Canon;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @provider as Provider [a];
+            j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
         } sequence { #body }
         graded target { #grades }
     })
@@ -71,22 +75,33 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32,x:i64,dead:i64); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a,x -> x,dead -> dead};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a,x -> x,dead -> dead};
+            r = let rename R {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             selected = pipe select j if (x > 0);
-            projected = pipe canon project selected keep {b};
+            projected = let canon project selected keep {b};
             return projected as answer(b);
-        } structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r = Provider [a];
-            projected canon = Canon;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @provider as Provider [a];
+            projected rows = @sort as ::cq_storage::dedup::Sort; projected canon = rows;
         } sequence {
             result = store map projected compact selected flatten lookup r [a] rows l;
         } graded target { result at engine; }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
+    let structures =
+        cq_lang_structures::contract::check(&program.physical, &program.structures).unwrap();
+    let carried = cq_lang_structures::demand::carried_columns(
+        &program.physical,
+        &program.structures,
+        &structures,
+    );
+    assert_eq!(carried["l"], ["a", "x"]);
+    assert_eq!(carried["r"], ["a", "b"]);
+    assert_eq!(carried["j"], ["b", "x"]);
+    assert_eq!(carried["projected"], ["b"]);
     let shape = shape(&analysis, "result");
     assert_eq!(shape.level, ["host", "engine", "team"]);
     assert_eq!(shape.width, Some(8));
@@ -111,7 +126,7 @@ fn every_choice_arm_contributes_in_order() {
         },
         quote!(result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let shape = shape(&analysis, "result");
     assert_eq!(shape.chains.len(), 2);
     for chain in &shape.chains {
@@ -128,7 +143,7 @@ fn fold_scope_precedes_its_input_payload_and_uses_only_the_sum_column() {
         },
         quote!(result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let chain = &shape(&analysis, "result").chains[0];
     assert_eq!(chain.len(), 2);
     assert_eq!(chain[0], ResourceAllocation::Fold);
@@ -143,7 +158,7 @@ fn a_fold_inside_a_child_tile_follows_the_parent_payload() {
         },
         quote!(result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let chain = &shape(&analysis, "result").chains[0];
     assert_eq!(chain.len(), 2);
     assert!(parents(&chain[0]).is_empty());
@@ -151,7 +166,7 @@ fn a_fold_inside_a_child_tile_follows_the_parent_payload() {
 }
 
 #[test]
-fn terminal_ranges_and_published_stores_do_not_allocate_payload_scratch() {
+fn ordinary_range_publications_allocate_payload_but_published_reads_do_not() {
     let program = lookup_program(
         quote! {
             view = flatten lookup r [a] rows l;
@@ -160,8 +175,13 @@ fn terminal_ranges_and_published_stores_do_not_allocate_payload_scratch() {
         },
         quote!(view at engine.team; first at engine; result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
-    assert!(shape(&analysis, "first").chains[0].is_empty());
+    let analysis = common::check_grading(&program, &machine()).unwrap();
+    // This machine has no deferred-range execution refinement. Its terminal
+    // lookup therefore expands rows; only the later read of the completed
+    // publication avoids allocating the lookup's payload scratch again.
+    let first = &shape(&analysis, "first").chains[0];
+    assert_eq!(first.len(), 1);
+    assert_eq!(parents(&first[0]), ["a"]);
     assert!(shape(&analysis, "result").chains[0].is_empty());
 }
 
@@ -171,21 +191,21 @@ fn membership_reads_do_not_allocate_payload_scratch() {
         let program: Program = syn::parse2(quote! {
             physical {
                 relation L(a:u32); relation R(a:u32);
-                l = pipe rename L@0 {a -> a};
-                r = let rename R@1 {a -> a};
-                j = pipe canon #operation eager [a] l,r;
+                l = pipe rename L {a -> a};
+                r = let rename R {a -> a};
+                j = let canon #operation eager [a] l,r;
                 return j as answer(a);
-            } structures {
-                l host scan = Reader [];
-                r host scan = Reader [];
-                r = Provider [a];
-                j canon = Canon;
+            } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+                l host scan = @reader as Reader [];
+                r host scan = @reader as Reader [];
+                r = @provider as Provider [a];
+                j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
             } sequence {
                 result = store tile 8 compact j lookup r [a] rows l;
             } graded target { result at engine; }
         })
         .unwrap();
-        let analysis = check_grading(&program, &machine()).unwrap();
+        let analysis = common::check_grading(&program, &machine()).unwrap();
         let shape = shape(&analysis, "result");
         assert_eq!(shape.tile, Some(8));
         assert_eq!(shape.items, 1);
@@ -198,25 +218,25 @@ fn later_lookup_keys_are_live_across_an_earlier_payload() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32,x:u32); relation R(a:u32,b:u32); relation S(x:u32,c:u32);
-            l = pipe rename L@0 {a -> a,x -> x};
-            r = let rename R@1 {a -> a,b -> b};
-            s = let rename S@2 {x -> x,c -> c};
+            l = pipe rename L {a -> a,x -> x};
+            r = let rename R {a -> a,b -> b};
+            s = let rename S {x -> x,c -> c};
             first = pipe probe first [a] l,r;
             second = pipe probe first [x] first,s;
-            projected = pipe canon project second keep {c};
+            projected = let canon project second keep {c};
             return projected as answer(c);
-        } structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            s host scan = Reader [];
-            r = Provider [a];
-            s = Provider [x];
-            projected canon = Canon;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            s host scan = @reader as Reader [];
+            r = @provider as Provider [a];
+            s = @provider as Provider [x];
+            projected rows = @sort as ::cq_storage::dedup::Sort; projected canon = rows;
         } sequence {
             result = store map projected flatten lookup s [x] flatten lookup r [a] rows l;
         } graded target { result at engine; }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let chain = &shape(&analysis, "result").chains[0];
     assert_eq!(chain.len(), 2);
     assert_eq!(parents(&chain[0]), ["x"]);
@@ -228,17 +248,17 @@ fn union_retains_every_arm_without_reusing_allocations() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let probe first [a] l,r;
-            out = pipe canon union j,j;
+            out = let canon union j,j;
             return out as answer(a,b);
-        } structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r = Provider [a];
-            j rows = Rows;
-            out canon = Canon;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @provider as Provider [a];
+            j rows = @rows as Rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         } sequence {
             result = store capacity 128 union [
                 flatten lookup r [a] rows l,
@@ -246,7 +266,7 @@ fn union_retains_every_arm_without_reusing_allocations() {
             ];
         } graded target { result at engine; }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let shape = shape(&analysis, "result");
     assert_eq!(shape.chains.len(), 2);
     for chain in &shape.chains {
@@ -260,17 +280,17 @@ fn a_host_consumer_requires_expanded_rows_instead_of_virtual_ranges() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             guarded = pipe guard j if (a % 2 == 0);
             return guarded as answer(a,b);
-        } structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r = Provider [a];
-            j rows = Rows;
-            j canon = Canon;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @provider as Provider [a];
+            j rows = @sort as ::cq_storage::dedup::Sort;
+            j canon = rows;
         } sequence {
             view = flatten lookup r [a] rows l;
             first = store view;
@@ -281,7 +301,7 @@ fn a_host_consumer_requires_expanded_rows_instead_of_virtual_ranges() {
             result at host;
         }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     assert!(
         !analysis
             .dispatches

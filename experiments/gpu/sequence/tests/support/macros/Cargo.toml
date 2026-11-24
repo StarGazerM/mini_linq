@@ -17,4 +17,5 @@ cq-sequence-lowering = { path = "../../../../../../passes/cq-sequence-lowering" 
 cq-sequence-pull = { path = "../../../../../../passes/cq-sequence-pull" }
 cq-structure-selection = { path = "../../../../../../passes/cq-structure-selection" }
 quote = "1"
+proc-macro2 = "1"
 syn = { version = "2", features = ["full"] }

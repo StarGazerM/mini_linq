@@ -197,8 +197,10 @@ fn main() -> Result<(), Error> {
             }
             let download_started = Instant::now();
             let mut actual: Vec<(i64, i64, i64)> = chained
+                // DECODE P: diagnostic final chained H05 answer publishes logical host tuples for exact checking.
                 .to_host()?
                 .into_iter()
+                // DECODE P: diagnostic final H05 answer inverts order, supplier and nation ordinal domains.
                 .map(|(o, s, n)| (orders.value(o), suppliers.value(s), nations.value(n)))
                 .collect();
             let download_ms = download_started.elapsed().as_secs_f64() * 1000.0;

@@ -1,2 +1,8 @@
 /target/
 /.oxide-artifacts/
+
+# cuda-oxide emits intermediate units beside crate sources.
+.units/
+*.ll
+*.opt.ll
+*.ptx

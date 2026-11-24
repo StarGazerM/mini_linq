@@ -1,6 +1,6 @@
 //! Printing central relational predicates; Rust guards are emitted verbatim.
-//! Only language-recognized comparisons and Boolean combinations reach this
-//! constraint printer; arbitrary host predicates remain opaque Rust guards.
+//! Only explicit `where` predicates reach this constraint printer; Rust
+//! predicates remain unchanged opaque guards.
 use cq_lang_structures::syntax::{
     EqualityValue,
     algebra::Theta,
@@ -19,7 +19,7 @@ pub fn relational_constraint(c: &Constraint, parameters: &BTreeMap<String, Ident
     let compare = |left: &Term, comparison: Comparison, right: &Term| {
         let l = term_reference(left, parameters);
         let r = term_reference(right, parameters);
-        comparison.expression(l, r, left.string_literal() || right.string_literal())
+        comparison.expression(l, r)
     };
     match c {
         Constraint::Compare {
@@ -65,17 +65,7 @@ pub fn relational_condition_with(
                 EqualityValue::Variable(v) => quote!(#v),
                 EqualityValue::Literal(v) => quote!(&(#v)),
             };
-            if matches!(
-                &e.right,
-                EqualityValue::Literal(syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(_),
-                    ..
-                }))
-            ) {
-                quote!(::cq_storage::relational_string_eq(#left, #right))
-            } else {
-                quote!(::cq_storage::relational_eq(#left, #right))
-            }
+            quote!(::cq_storage::relational_eq(#left, #right))
         })
         .chain(theta.constraints.iter().map(|c| {
             let test = relational_constraint(c, parameters);

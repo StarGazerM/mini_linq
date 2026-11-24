@@ -1,0 +1,35 @@
+program h21_positive {
+    domain OrderStatus = dictionary(orders.o_orderstatus);
+    domain NationName = dictionary(nation.n_name);
+    input Supplier(s_suppkey: i64, s_nationkey: i32) = table(supplier);
+    input Lineitem(l_orderkey: i64, l_suppkey: i64, l_receiptdate: Date, l_commitdate: Date) = table(lineitem);
+    input Orders(o_orderkey: i64, o_orderstatus: cq_load::StringCode in OrderStatus) = table(orders);
+    input Nation(n_nationkey: i32, n_name: cq_load::StringCode in NationName) = table(nation);
+    stage s0 {
+        inputs {
+            Supplier = Supplier;
+            Lineitem = Lineitem;
+            Orders = Orders;
+            Nation = Nation;
+        }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Supplier(s_suppkey: i64, s_nationkey: i32);
+            relation Lineitem(l_orderkey: i64, l_suppkey: i64, l_receiptdate: Date, l_commitdate: Date);
+            relation Orders(o_orderkey: i64, o_orderstatus: cq_load::StringCode);
+            relation Nation(n_nationkey: i32, n_name: cq_load::StringCode);
+            relation answer(order_key: i64, waiting_supplier: i64, other_supplier: i64);
+            answer(order_key, waiting_supplier, other_supplier) :-
+                Lineitem(order_key, other_supplier, _other_receipt, _other_commit),
+                Lineitem(order_key, waiting_supplier, receipt_date, commit_date), where receipt_date > commit_date,
+                Supplier(waiting_supplier, nation_key),
+                Nation(nation_key, "SAUDI ARABIA"), Orders(order_key, "F"),
+                where waiting_supplier != other_supplier;
+        }
+    }
+    terminal {
+        from s0 project [column(0), column(1), column(2)] dictionaries [];
+    }
+}

@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 [features]
 default = []
 hole-timing = []
+planner-calibration = ["cq-datalog-print/planner-calibration"]
 
 [dependencies]
 cq-lang-datalog-round = { path = "../../datalog/languages/dl-round" }

@@ -4,11 +4,6 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-[workspace]
-members = ["printer"]
-default-members = [".", "printer"]
-resolver = "3"
-
 [dependencies]
 own-push = { version = "0.0.0", path = "printer" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
@@ -19,6 +14,6 @@ cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 quote = "1"
 
 [dev-dependencies]
-cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
+cq-load = { version = "0.1.0", path = "../../io/cq-load" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage", features = ["counters"] }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }

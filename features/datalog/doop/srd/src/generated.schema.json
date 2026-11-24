@@ -215,6 +215,9 @@
     "isReferenceType": 1,
     "isType": 1
   },
+  "plans": 0,
+  "source_plans": 13,
   "source_rules": 85,
-  "source_sha256": "332e67f0f38b36708f213e644cf282c065ae5a96864a99eec4fe68a25606d640"
+  "source_sha256": "332e67f0f38b36708f213e644cf282c065ae5a96864a99eec4fe68a25606d640",
+  "unlowered_plan_flags": {}
 }

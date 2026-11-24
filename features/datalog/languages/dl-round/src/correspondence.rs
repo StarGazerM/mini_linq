@@ -2,12 +2,16 @@ use super::*;
 use cq_datalog_support::{Fresh, columns, equalities, filters};
 
 // Independently derive the exact input schema from the hole's relational reads.
-// Do not use the fork producer's declaration builder here.
+// Do not use the fork producer's declaration builder here. Layout and key-set
+// inputs declare their token's host reads on their recorded key (IF-HostDecl);
+// a key set collected by a non-batch key hole stores borrowed key columns.
 fn required_inputs(
+    tokens: &[storage::provider::Token],
+    holes: &[Hole],
     context: &RoundContext,
     keys: &[KeySet],
     query: &cq::Query,
-) -> Vec<RelationDecl> {
+) -> syn::Result<Vec<RelationDecl>> {
     let required: BTreeSet<_> = query
         .body
         .iter()
@@ -19,16 +23,6 @@ fn required_inputs(
         .collect();
     let mut declarations = Vec::new();
     for relation in &context.relations {
-        if required.contains(&symbol_name(&relation.declaration.name)) {
-            let mut declaration = relation.declaration.clone();
-            let host = &relation.all;
-            declaration.value = Some(if declaration.value.is_some() {
-                syn::parse_quote!(= (#host))
-            } else {
-                syn::parse_quote!(= (&#host))
-            });
-            declarations.push(declaration);
-        }
         if let Some(delta) = &relation.delta {
             if !required.contains(&symbol_name(delta)) {
                 continue;
@@ -37,6 +31,7 @@ fn required_inputs(
             declaration.name = delta.clone();
             let host = relation.delta_host.as_ref().expect("checked delta host");
             declaration.value = Some(syn::parse_quote!(= (&#host)));
+            declaration.hosts = Vec::new();
             declarations.push(declaration);
         }
     }
@@ -53,6 +48,8 @@ fn required_inputs(
             .collect();
         let host = &layout.host;
         declaration.value = Some(syn::parse_quote!(= (&#host)));
+        declaration.hosts =
+            declared_hosts(tokens, &layout.provider, &declaration, layout.key, false)?;
         declarations.push(declaration);
     }
     for key in keys {
@@ -63,7 +60,14 @@ fn required_inputs(
         declaration.name = key.name.clone();
         declaration.columns = if key.columns.is_empty() {
             let column = &declaration.columns[0].name;
-            syn::parse_quote!(#column: ())
+            let logical_type_id = holes[key.hole]
+                .cq
+                .declarations
+                .last()
+                .expect("checked key output")
+                .columns[0]
+                .logical_type_id;
+            syn::parse_quote!(#column: () #logical_type_id)
         } else {
             key.columns
                 .iter()
@@ -72,96 +76,35 @@ fn required_inputs(
         };
         let host = &key.name;
         declaration.value = Some(syn::parse_quote!(= (#host)));
+        // A unit key (no projected columns) stores an owned `()`.
+        let borrowed = !key.columns.is_empty()
+            && holes
+                .get(key.hole)
+                .is_some_and(|hole| hole.interface != HoleInterface::Batch);
+        let arity = declaration.arity();
+        declaration.hosts = declared_hosts(tokens, &key.provider, &declaration, arity, borrowed)?;
         declarations.push(declaration);
     }
-    declarations
+    Ok(declarations)
 }
 
-// Layouts change only positional host representation, never Rust-step order.
-pub fn use_layouts(
-    query: &mut cq_lang_cq::Query,
-    context: &RoundContext,
-    storage: &storage::Program,
-    variant: usize,
-) -> syn::Result<()> {
-    for read in storage.reads.iter().filter(|read| read.variant == variant) {
-        let Some(BodyItem::Positive { atom }) = query.body.iter_mut().nth(read.position) else {
-            return Err(syn::Error::new_spanned(
-                &*query,
-                "recorded read is not a positive occurrence",
-            ));
-        };
-        if read.kind == "direct" {
-            continue;
-        }
-        let layouts = if read.kind == "delta" {
-            &context.delta_layouts
-        } else {
-            &context.layouts
-        };
-        let layout = layouts
-            .get(read.index)
-            .ok_or_else(|| syn::Error::new_spanned(&*atom, "missing recorded layout"))?;
-        atom.args = read.columns.iter().map(|&i| atom.args[i].clone()).collect();
-        atom.relation = layout.name.clone();
-    }
-    Ok(())
-}
-
-pub fn scan_source(query: &cq_lang_cq::Query, context: &RoundContext) -> Option<InputSource> {
-    let BodyItem::Positive { atom } = query.body.first()? else {
-        return None;
-    };
-    if let Some(index) = context
-        .relations
+fn declared_hosts(
+    tokens: &[storage::provider::Token],
+    provider: &storage::Provider,
+    declaration: &RelationDecl,
+    key: usize,
+    borrowed: bool,
+) -> syn::Result<Vec<cq_syntax::HostDecl>> {
+    let token = storage::provider::lookup(tokens, &provider.token)?;
+    let key: Vec<Ident> = declaration
+        .columns
         .iter()
-        .position(|relation| relation.delta.as_ref() == Some(&atom.relation))
-    {
-        return Some(InputSource::Delta(index));
-    }
-    context
-        .layouts
-        .iter()
-        .position(|layout| layout.name == atom.relation && layout.key == 0)
-        .map(InputSource::Layout)
-}
-
-pub fn use_scan(
-    query: &mut cq_lang_cq::Query,
-    context: &RoundContext,
-    scan: &ScanBinding,
-) -> RelationDecl {
-    let mut declaration = match scan.source {
-        InputSource::Delta(index) => context.relations[index].declaration.clone(),
-        InputSource::Layout(index) => {
-            let layout = &context.layouts[index];
-            let mut declaration = context.relations[layout.relation].declaration.clone();
-            declaration.columns = layout
-                .columns
-                .iter()
-                .map(|&column| declaration.columns[column].clone())
-                .collect();
-            declaration
-        }
-    };
-    let binding = &scan.binding;
-    declaration.name = binding.clone();
-    declaration.value = Some(syn::parse_quote!(= (#binding)));
-    let BodyItem::Positive { atom } = &mut query.body[0] else {
-        unreachable!("checked scan source")
-    };
-    atom.relation = binding.clone();
-    declaration
-}
-
-fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
-    let name = &key.name;
-    if key.columns.is_empty() {
-        syn::parse_quote!(!#name(_))
-    } else {
-        let args = key.columns.iter().map(|&i| &atom.args[i]);
-        syn::parse_quote!(!#name(#(#args),*))
-    }
+        .take(key)
+        .map(|c| c.name.clone())
+        .collect();
+    Ok(storage::provider::host_decl(token, &key, borrowed)
+        .into_iter()
+        .collect())
 }
 
 /// Check complete CQ contracts, schedule preservation, key projections, and
@@ -226,8 +169,7 @@ pub(crate) fn check_storage_with_analysis(
             source,
             "fork changed relation schema or delta binding",
         )?;
-        add_name(&relation.all)?;
-        add_name(&relation.seen)?;
+        add_name(&relation.next_canonical)?;
         add_name(&relation.next)?;
         ensure(
             relation.delta_host.is_some() == relation.delta.is_some(),
@@ -255,7 +197,9 @@ pub(crate) fn check_storage_with_analysis(
                 && layout.columns == expected.columns
                 && layout.key == expected.key
                 && layout.provider == expected.provider
-                && layout.maintenance == expected.maintenance,
+                && layout.hasher == expected.hasher
+                && layout.maintenance == expected.maintenance
+                && layout.protocol == expected.protocol,
             source,
             "fork changed a selected host layout",
         )?;
@@ -298,6 +242,27 @@ pub(crate) fn check_storage_with_analysis(
         let mut used_keys = BTreeSet::new();
         for key in &stratum.keys {
             add_name(&key.name)?;
+            // A key set is a declared token over the inferred row `_` (no payload).
+            storage::provider::check_instance(
+                &source.tokens,
+                &key.provider,
+                &syn::parse_quote!(_),
+                &syn::parse_quote!(()),
+                key.hasher,
+            )?;
+            ensure(
+                source.negations.iter().any(|negative| {
+                    analysis.components.get(negative.component) == Some(members)
+                        && negative.relation == key.relation
+                        && negative.columns == key.columns
+                        && negative.filters == key.filters
+                        && negative.equalities == key.equalities
+                        && negative.provider == key.provider
+                        && negative.hasher == key.hasher
+                }),
+                source,
+                "fork key set provider differs from its Storage negation record",
+            )?;
             let projection = (
                 key.relation,
                 key.columns.clone(),
@@ -342,16 +307,15 @@ pub(crate) fn check_storage_with_analysis(
                 "fork repeated columns must refer to distinct projected first occurrences",
             )?;
             let hole = checked_hole(source, target, key.hole, &mut used_holes)?;
+            ensure(
+                target.holes[key.hole].planning.is_none(),
+                hole,
+                "key holes have no Incremental planning advice",
+            )?;
             let batch = target.holes[key.hole].interface == HoleInterface::Batch;
             add_name(&hole.name)?;
-            let literal_count = key
-                .filters
-                .iter()
-                .filter(|(_, expression)| cq_syntax::equality::literal(rust::unparen(expression)))
-                .count();
             ensure(
-                hole.query.body.len()
-                    == 1 + key.filters.len() - literal_count + key.equalities.len(),
+                hole.query.body.len() == 1 + key.filters.len() + key.equalities.len(),
                 source,
                 "key hole must retain its constant and repeated-variable filters",
             )?;
@@ -361,36 +325,38 @@ pub(crate) fn check_storage_with_analysis(
                     "key hole must read its completed relation",
                 ));
             };
+            // A completed relation is scanned through its canonical layout.
+            let canonical = &context.layouts[source.providers[key.relation].canonical];
             ensure(
-                atom.relation == declaration.name && atom.args.len() == declaration.arity(),
+                atom.relation == canonical.name && atom.args.len() == declaration.arity(),
                 source,
                 "key hole changed its input",
             )?;
-            let variables: Vec<_> = atom.args.iter().map(rust::variable).collect();
+            let mut args: Vec<&Expr> = atom.args.iter().collect();
+            for (position, &column) in canonical.columns.iter().enumerate() {
+                args[column] = &atom.args[position];
+            }
+            let variables: Vec<_> = args.iter().map(|arg| rust::variable(arg)).collect();
             ensure(
-                atom.args.iter().enumerate().all(|(column, argument)| {
-                    match key.filters.iter().find(|(i, expression)| {
-                        *i == column && cq_syntax::equality::literal(rust::unparen(expression))
-                    }) {
-                        Some((_, expression)) => argument == rust::unparen(expression),
-                        None => rust::variable(argument).is_some(),
-                    }
-                }) && variables
-                    .iter()
-                    .flatten()
-                    .map(|id| symbol_name(id))
-                    .collect::<BTreeSet<_>>()
-                    .len()
-                    == declaration.arity() - literal_count,
+                variables.iter().all(Option::is_some)
+                    && variables
+                        .iter()
+                        .flatten()
+                        .map(|id| symbol_name(id))
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        == declaration.arity(),
                 source,
-                "key projection requires distinct variables and unchanged literal columns",
+                "key projection requires distinct variables",
             )?;
             let mut output = declaration.clone();
             output.name = hole.name.clone();
             output.value = None;
             let expected_args: Vec<Expr> = if key.columns.is_empty() {
                 let column = &hole.declarations.last().expect("checked output").columns[0].name;
-                output.columns = syn::parse_quote!(#column: ());
+                let logical_type_id =
+                    hole.declarations.last().expect("checked output").columns[0].logical_type_id;
+                output.columns = syn::parse_quote!(#column: () #logical_type_id);
                 vec![syn::parse_quote!(())]
             } else {
                 output.columns = key
@@ -406,34 +372,27 @@ pub(crate) fn check_storage_with_analysis(
                         column
                     })
                     .collect();
-                key.columns.iter().map(|&i| {
-                    let argument = &atom.args[i];
-                    if batch {
-                        syn::parse_quote!(*#argument)
-                    } else {
-                        argument.clone()
-                    }
-                }).collect()
+                key.columns.iter().map(|&i| args[i].clone()).collect()
             };
-            let mut expected_declarations = required_inputs(context, &[], &hole.query);
+            let mut expected_declarations =
+                required_inputs(&source.tokens, &target.holes, context, &[], &hole.query)?;
             expected_declarations.push(output);
             let name = &hole.name;
-            let selections = key.filters.iter().filter_map(|(column, expression)| {
-                if cq_syntax::equality::literal(rust::unparen(expression)) {
-                    None
-                } else {
-                    let variable = variables[*column].expect("checked filter variable");
-                    Some(quote!(if *#variable == (#expression)))
-                }
+            let selections = key.filters.iter().map(|(column, expression)| {
+                let variable = variables[*column].expect("checked filter variable");
+                quote!(where #variable == (#expression))
             });
             let repeated = key.equalities.iter().map(|&(first, repeated)| {
                 let first = variables[first].expect("checked key variable");
                 let repeated = variables[repeated].expect("checked repeated variable");
-                quote!(if #first == #repeated)
+                quote!(where #first == #repeated)
             });
-            // Parse complete CQ to preserve recognition of authored predicates.
+            // Parse complete CQ to resolve the relational predicate's terms.
+            let declared_evidence =
+                crate::evidence::for_hole(source, context, key.hole, &expected_declarations)?;
             let expected: CqProgram = syn::parse2(quote! {
                 struct #name;
+                #declared_evidence
                 #(#expected_declarations)*
                 #name(#(#expected_args),*) :- #atom #(, #selections)* #(, #repeated)*;
             })?;
@@ -464,20 +423,90 @@ pub(crate) fn check_storage_with_analysis(
                 output.name = hole.name.clone();
                 let mut query = variant.query.clone();
                 query.head.relation = hole.name.clone();
-                use_layouts(&mut query, context, source, rule.variant)?;
-                ensure(
-                    rule.scan.as_ref().map(|scan| &scan.source)
-                        == scan_source(&query, context).as_ref(),
-                    source,
-                    "fork changed scan coverage or source",
-                )?;
+                // Check the recorded bindings, independently of fork's renaming.
+                for read in source
+                    .reads
+                    .iter()
+                    .filter(|read| read.variant == rule.variant)
+                {
+                    let BodyItem::Positive { atom } = &mut query.body[read.position] else {
+                        return Err(syn::Error::new_spanned(
+                            source,
+                            "read is not a positive occurrence",
+                        ));
+                    };
+                    if read.kind != "direct" {
+                        let layouts = if read.kind == "delta" {
+                            &context.delta_layouts
+                        } else {
+                            &context.layouts
+                        };
+                        let layout = &layouts[read.index];
+                        let original = atom.args.clone();
+                        atom.args = read
+                            .columns
+                            .iter()
+                            .map(|&column| original[column].clone())
+                            .collect();
+                        atom.relation = layout.name.clone();
+                    }
+                }
                 let scan_declaration = if let Some(scan) = &rule.scan {
                     add_name(&scan.binding)?;
-                    Some(use_scan(&mut query, context, scan))
+                    let Some(BodyItem::Positive { atom }) = query.body.first_mut() else {
+                        return Err(syn::Error::new_spanned(
+                            source,
+                            "scan must bind the first positive occurrence",
+                        ));
+                    };
+                    let mut declaration = match scan.source {
+                        InputSource::Delta(index) => {
+                            let relation = context.relations.get(index).ok_or_else(|| {
+                                syn::Error::new_spanned(source, "scan delta is out of range")
+                            })?;
+                            ensure(
+                                relation.delta.as_ref() == Some(&atom.relation),
+                                source,
+                                "scan must read the same delta",
+                            )?;
+                            relation.declaration.clone()
+                        }
+                        InputSource::Layout(index) => {
+                            let layout = context.layouts.get(index).ok_or_else(|| {
+                                syn::Error::new_spanned(source, "scan layout is out of range")
+                            })?;
+                            let original = context
+                                .layouts
+                                .iter()
+                                .find(|candidate| candidate.name == atom.relation);
+                            ensure(
+                                layout.key == 0
+                                    && original.is_some_and(|original| {
+                                        original.relation == layout.relation
+                                            && original.columns == layout.columns
+                                    }),
+                                source,
+                                "scan requires a complete key-zero layout of the same relation and columns",
+                            )?;
+                            let mut declaration =
+                                context.relations[layout.relation].declaration.clone();
+                            declaration.columns = layout
+                                .columns
+                                .iter()
+                                .map(|&column| declaration.columns[column].clone())
+                                .collect();
+                            declaration
+                        }
+                    };
+                    declaration.name = scan.binding.clone();
+                    let binding = &scan.binding;
+                    declaration.value = Some(syn::parse_quote!(= (#binding)));
+                    atom.relation = binding.clone();
+                    Some(declaration)
                 } else {
                     None
                 };
-                for item in &mut query.body {
+                for (position, item) in query.body.iter_mut().enumerate() {
                     if let BodyItem::Negation(negative) = item {
                         let relation = analysis.positions[&symbol_name(&negative.atom.relation)];
                         let projection = columns(&negative.atom);
@@ -500,10 +529,133 @@ pub(crate) fn check_storage_with_analysis(
                                 )
                             })?;
                         used_keys.insert(index);
-                        *item = negation(&negative.atom, key);
+                        let Some(BodyItem::Negation(recorded)) =
+                            hole.query.body.iter().nth(position)
+                        else {
+                            return Err(syn::Error::new_spanned(
+                                hole,
+                                "negative occurrence was lost",
+                            ));
+                        };
+                        let arguments_match = if key.columns.is_empty() {
+                            recorded.atom.args.len() == 1
+                                && matches!(&recorded.atom.args[0], Expr::Infer(_))
+                        } else {
+                            recorded.atom.args.len() == key.columns.len()
+                                && recorded.atom.args.iter().zip(&key.columns).all(
+                                    |(argument, &column)| argument == &negative.atom.args[column],
+                                )
+                        };
+                        ensure(
+                            recorded.atom.relation == key.name && arguments_match,
+                            hole,
+                            "negative occurrence must probe its recorded projected key",
+                        )?;
+                        *item = BodyItem::Negation(recorded.clone());
                     }
                 }
-                let mut expected_declarations = required_inputs(context, &stratum.keys, &query);
+                // DL-Fanout: the recorded fact agrees with the variant's reads
+                // and recorded keys. FK-Known: advice decides; otherwise a hole
+                // with a recorded planning invocation is in plan iff a later
+                // read is recorded `multiply`.
+                let strata_source = &source.incremental.strata.source;
+                ensure(
+                    rule.fanout
+                        == crate::fanout(&variant.query, &|relation| strata_source.keys(relation)),
+                    source,
+                    "fork must record the fan-out of every variant read",
+                )?;
+                let expected = match variant.known {
+                    Some(incremental::Known::At(_)) => Admission::InPlan,
+                    Some(incremental::Known::Admit) => Admission::Admit,
+                    None if source.device.is_none()
+                        && target.holes[rule.hole].plan.is_some()
+                        && crate::fanout_follows(&rule.fanout, crate::head_level(&query).0) =>
+                    {
+                        Admission::InPlan
+                    }
+                    None => Admission::Admit,
+                };
+                ensure(
+                    rule.known == expected,
+                    source,
+                    "fork admission placement disagrees with its advice or recorded fan-out",
+                )?;
+                let planning = target.holes[rule.hole].planning.as_ref().ok_or_else(|| {
+                    syn::Error::new_spanned(hole, "rule hole must record planning facts")
+                })?;
+                ensure(
+                    planning.delta == variant.delta
+                        && planning.driver == source.incremental.driver
+                        && planning.permutation == variant.order,
+                    hole,
+                    "ordering facts must preserve Incremental delta, driver and permutation",
+                )?;
+                if let Some(demands) = &planning.shared_demand {
+                    for demand in demands {
+                        ensure(
+                            context.layouts.iter().any(|layout| {
+                                context.relations[layout.relation].declaration.name == demand.relation
+                                    && layout.columns[..layout.key] == demand.columns
+                            }),
+                            hole,
+                            "shared index demand must name an existing Storage key prefix",
+                        )?;
+                    }
+                }
+                let order: Vec<_> = variant
+                    .query
+                    .body
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, item)| {
+                        matches!(item, BodyItem::Positive { .. }).then_some(variant.order[position])
+                    })
+                    .collect();
+                ensure(
+                    planning.order == order
+                        && planning.authored == variant.authored
+                        && planning.smallest == variant.smallest
+                        && planning.steps.len() == variant.steps.len()
+                        && planning
+                            .steps
+                            .iter()
+                            .zip(&variant.steps)
+                            .all(|(recorded, authored)| {
+                                recorded.occurrence == authored.occurrence
+                                    && recorded.columns == authored.columns
+                            }),
+                    hole,
+                    "planning facts must preserve Incremental occurrence advice",
+                )?;
+                let (last, reads) = crate::head_level(&query);
+                ensure(
+                    match (rule.known, planning.known) {
+                        (Admission::Admit, None) => true,
+                        (Admission::InPlan, None) => variant.known.is_none(),
+                        (Admission::InPlan, Some(level)) => {
+                            level >= last.max(1)
+                                && level <= reads
+                                && match variant.known {
+                                    Some(incremental::Known::At(authored)) => level == authored,
+                                    _ => false,
+                                }
+                        }
+                        _ => false,
+                    },
+                    hole,
+                    "known level must respect head binding and authored admission advice",
+                )?;
+                if rule.known == Admission::InPlan {
+                    admission_suffix(&mut query, hole, context, rule.head, &mut add_name)?;
+                }
+                let mut expected_declarations = required_inputs(
+                    &source.tokens,
+                    &target.holes,
+                    context,
+                    &stratum.keys,
+                    &query,
+                )?;
                 expected_declarations.extend(scan_declaration);
                 expected_declarations.push(output);
                 ensure(
@@ -512,8 +664,10 @@ pub(crate) fn check_storage_with_analysis(
                     "fork changed hole declarations",
                 )?;
                 let name = &hole.name;
+                let declared_evidence =
+                    crate::evidence::for_hole(source, context, rule.hole, &expected_declarations)?;
                 let expected: CqProgram =
-                    syn::parse2(quote!(struct #name; #(#expected_declarations)* #query))?;
+                    syn::parse2(quote!(struct #name; #declared_evidence #(#expected_declarations)* #query))?;
                 ensure(
                     hole == &expected,
                     source,
@@ -532,6 +686,100 @@ pub(crate) fn check_storage_with_analysis(
         source,
         "fork omitted a variant or contains an unused hole",
     )
+}
+
+/// Fork correspondence of an FK-Known record: an `in_plan` hole is its variant followed by exactly
+/// one synthetic suffix: optional `let h: T = e;` bindings naming computed head
+/// terms (`T` the declared head column type, `e` the variant's head term), then
+/// `!C(x̄)` over the head's committed canonical layout with the complete head
+/// key in canonical column order. Extend `query` by the checked suffix; exact
+/// equality with the recorded hole then rejects any other change.
+fn admission_suffix(
+    query: &mut cq::Query,
+    hole: &CqProgram,
+    context: &RoundContext,
+    head: usize,
+    add_name: &mut dyn FnMut(&Ident) -> syn::Result<()>,
+) -> syn::Result<()> {
+    let declaration = &context.relations[head].declaration;
+    let recorded: Vec<_> = hole.query.body.iter().collect();
+    let base = query.body.len();
+    ensure(
+        recorded.len() > base && hole.query.head.args.len() == query.head.args.len(),
+        hole,
+        "in-plan hole lacks its committed admission read",
+    )?;
+    let mut bound = BTreeSet::new();
+    for item in &recorded[base..recorded.len() - 1] {
+        let BodyItem::Let(binding) = item else {
+            return Err(syn::Error::new_spanned(
+                item,
+                "in-plan admission suffix admits only computed head bindings",
+            ));
+        };
+        let syn::Pat::Ident(pattern) = &binding.pattern else {
+            return Err(syn::Error::new_spanned(
+                item,
+                "head binding must name one variable",
+            ));
+        };
+        let position = hole
+            .query
+            .head
+            .args
+            .iter()
+            .position(|argument| rust::variable(argument) == Some(&pattern.ident));
+        let Some(position) = position.filter(|_| {
+            pattern.by_ref.is_none() && pattern.mutability.is_none() && pattern.subpat.is_none()
+        }) else {
+            return Err(syn::Error::new_spanned(
+                item,
+                "head binding must bind exactly one head variable",
+            ));
+        };
+        ensure(
+            rust::variable(&query.head.args[position]).is_none()
+                && bound.insert(position)
+                && binding.expression == query.head.args[position]
+                && binding
+                    .annotation
+                    .as_ref()
+                    .is_some_and(|annotation| annotation.ty == declaration.columns[position].ty),
+            item,
+            "head binding must carry its variant's computed head term at the declared column type",
+        )?;
+        add_name(&pattern.ident)?;
+        query.head.args[position] = hole.query.head.args[position].clone();
+        query.body.push((*item).clone());
+    }
+    let args: Vec<Expr> = query.head.args.iter().cloned().collect();
+    ensure(
+        args.iter()
+            .all(|argument| rust::variable(argument).is_some()),
+        hole,
+        "in-plan admission requires a complete head key of variables",
+    )?;
+    let Some(BodyItem::Negation(negative)) = recorded.last().copied() else {
+        return Err(syn::Error::new_spanned(
+            hole,
+            "admission suffix must end with a negative canonical read",
+        ));
+    };
+    let canonical = &context.layouts[context.relations[head].providers.canonical];
+    ensure(
+        negative.atom.relation == canonical.name
+            && negative.atom.args.len() == canonical.columns.len()
+            && negative
+                .atom
+                .args
+                .iter()
+                .zip(&canonical.columns)
+                .all(|(argument, &column)| argument == &args[column]),
+        hole,
+        "admission suffix must probe the complete canonical head key",
+    )?;
+    query.body.push(BodyItem::Negation(negative.clone()));
+    Ok(())
 }
 
 fn checked_hole<'a>(

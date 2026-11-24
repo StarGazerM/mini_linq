@@ -1,6 +1,6 @@
 //! # Stacked Trace IR
 //!
-//! This standalone Cargo workspace consumes the public core crates. Trace is an
+//! This feature group consumes the public core crates. Trace is an
 //! external, nonterminal language with this complete program syntax:
 //!
 //! ```text
@@ -19,8 +19,10 @@
 //! checks both contracts and requires an identical Physical AST, including every
 //! declaration, operator, mode, key, canonical boundary and Rust payload. Checkers
 //! never re-run compilation. The passes clone identifiers with their spans and
-//! preserve Rust's chain, order and binders. Meaning remains the core's Kleisli
-//! denotation over bottom + Set, written-order refinement, and Leibniz equality.
+//! preserve Rust payloads and their free-variable binders. Meaning remains the
+//! core's Set denotation with Leibniz equality and opaque, pure, total Rust.
+//! Rust placement follows free-variable dependencies, not written clause order;
+//! relational predicates use `where`.
 //!
 //! ## Composition
 //!
@@ -60,8 +62,8 @@
 //!     };
 //!     physical {
 //!         relation R(x: i32) = (rows);
-//!         r = pipe rename R@0 {x -> x};
-//!         out = pipe canon project r keep {x};
+//!         r = pipe rename R {x -> x};
+//!         out = let canon project r keep {x};
 //!         return out as answer(x);
 //!     }
 //! }.map(|(x,)| *x).collect();
@@ -112,37 +114,37 @@
 //! checks both scenario/test inventories and source agreement apart from the
 //! Trace insertion and formatting, executes both suites against the same authored
 //! answers, and compares all ten expanded `run` functions as raw bytes. It reads
-//! only this workspace and captures expansions and SHA256 sums under
-//! `target/expansions/{reference,stacked}/`. It requires `cargo-expand`.
+//! only this feature's fixtures and captures expansions and SHA256 sums under the
+//! repository root's `target/expansions/{reference,stacked}/`. It requires `cargo-expand`.
 //!
 //! The public `cq-testkit` supplies all 30 Physical corpus fixtures, independent
-//! integer Set oracles, the pass mutation harness, and executable written-order
-//! refinement. Tests check exact embedding/erasure, changed decisions and opaque
-//! Rust payloads, malformed programs, queue forwarding, both explicit stage
-//! entry points, repeated composites, and returning/empty/bottom inputs. The
+//! integer Set oracles and the pass mutation harness. Tests compare total answer
+//! sets and check exact embedding/erasure, changed decisions and opaque Rust
+//! payloads, malformed programs, queue forwarding, both explicit stage entry
+//! points, repeated composites, and nonempty/empty inputs. The
 //! corpus's selected/printed Rust ASTs and token texts are also unchanged.
 //! Fixture evidence is finite; it does not establish arbitrary Rust effect or
 //! evaluation-count equivalence.
 //!
-//! Run these commands from this directory; all six packages are default members:
+//! Run these commands from this directory, explicitly selecting all six packages:
 //!
 //! ```sh
 //! cargo fmt --check
-//! cargo clippy --all-targets -- -D warnings
-//! cargo test
+//! cargo clippy --all-targets -p stacked-ir -p trace-bridge -p physical-to-trace -p stacked-ir-test-passes -p trace-to-physical -p cq-lang-trace -- -D warnings
+//! cargo test -p stacked-ir -p trace-bridge -p physical-to-trace -p stacked-ir-test-passes -p trace-to-physical -p cq-lang-trace
 //! python3 check_expansions.py
 //! ```
 //!
 //! Core dependencies declare both a version and a development path in
-//! `workspace.dependencies`. The repository gate `python3 tools/check_external.py`
+//! the root's `workspace.dependencies`. The repository gate `python3 tools/check_external.py`
 //! substitutes packaged public crates and builds/tests a copy outside the checkout.
 //! Its package inventory must include `cq-testkit`, including the embedded corpus.
 
 //! Core blocks preserve union and ordered fallback through this consumer.
 //! Their laws are join distribution over union and `B1 else B2 = B1 union
 //! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
-//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
-//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//! IR retains union/anti, nested occurrence paths and branch-local bindings.
+//! Rust placement follows free-variable dependencies in each branch.
 //!
 pub use cq_lang_trace as trace;
 pub use physical_to_trace;

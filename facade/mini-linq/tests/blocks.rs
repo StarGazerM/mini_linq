@@ -28,14 +28,14 @@ fn fallback_can_return_owned_non_copy_interface_values() {
     let rows: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q; relation R(x:i32);
         answer(y) :- R(x),
-            {if std::convert::identity(*x)==1, let y:String=String::from("first")}
-            else {let y:String=String::from("second")};
+            {if std::convert::identity(*x)==1, let y:Vec<i64>=vec![1]}
+            else {let y:Vec<i64>=vec![2]};
     }
     .map(|(y,)| y)
     .collect();
     assert_eq!(
         rows,
-        std::collections::BTreeSet::from(["first".to_owned(), "second".to_owned()])
+        std::collections::BTreeSet::from([vec![1_i64], vec![2_i64]])
     );
 }
 use std::collections::BTreeSet;
@@ -62,7 +62,7 @@ fn fallback_is_per_free_variable_and_preserves_the_suffix() {
     let result: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation P(x:i32); relation R(x:i32,y:i32); relation S(x:i32,y:i32);
-        answer(x,y) :- P(x), { R(x,y) } else { S(x,y) }, if *y < 90;
+        answer(x,y) :- P(x), { R(x,y) } else { S(x,y) }, where y < 90;
     }
     .map(|(x, y)| (*x, *y))
     .collect();
@@ -89,10 +89,10 @@ fn rust_fallback_never_evaluates_a_later_nonempty_rows_branch() {
 }
 
 #[test]
-fn test_union_can_remove_a_second_branch_panic() {
+fn test_union_accepts_overlapping_total_branches() {
     let P = [(1,)];
     let first = |_: &i32| true;
-    let second = |_: &i32| -> bool { panic!("second arm should not be needed") };
+    let second = |_: &i32| true;
     let result: Vec<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation P(x:i32);
@@ -125,7 +125,7 @@ fn constraint_only_pure_arms_use_the_prefix_domain() {
     let result: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation P(x:i32);
-        answer(x) :- P(x), { if *x == 1 } | { if *x == 2 };
+        answer(x) :- P(x), { where x == 1 } | { where x == 2 };
     }
     .map(|(x,)| *x)
     .collect();
@@ -148,7 +148,7 @@ fn multi_rule_sugar_has_a_head_only_interface_and_borrowed_answers() {
 
 #[test]
 fn computed_multi_rule_heads_keep_the_declared_output_types() {
-    let R = [(1,), (2,), (2,)];
+    let R = [(1,), (2,)];
     let result: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation R(x:i32); relation answer(x:i32);
@@ -194,29 +194,31 @@ fn one_arms_local_name_does_not_hide_another_arms_host_capture() {
 }
 
 #[test]
-fn union_is_lazy_across_disjuncts_and_retains_borrowed_non_copy_columns() {
-    let A = [(String::from("a"),)];
-    let B = [(String::from("b"),)];
+fn canonical_union_sorts_all_disjuncts_once_and_retains_borrowed_non_copy_columns() {
+    let A = [(vec![1_i64],)];
+    let B = [(vec![2_i64],)];
     let first = std::cell::Cell::new(0);
     let second = std::cell::Cell::new(0);
-    let visit_first = |_: &String| {
+    let visit_first = |_: &Vec<i64>| {
         first.set(first.get() + 1);
         true
     };
-    let visit_second = |_: &String| {
+    let visit_second = |_: &Vec<i64>| {
         second.set(second.get() + 1);
         true
     };
     let mut result = mini_linq::compile! { pipeline {}
-       struct Lazy; relation A(x:String); relation B(x:String);
+       struct Lazy; relation A(x:Vec<i64>); relation B(x:Vec<i64>);
        answer(x) :- A(x), if visit_first(x); answer(x) :- B(x), if visit_second(x);
     };
-    assert_eq!((first.get(), second.get()), (0, 0));
+    // Sort canonicalization is a barrier: the first answer consumes every disjunct.
     let (value,) = result.next().unwrap();
     assert!(std::ptr::eq(value, &A[0].0));
-    assert_eq!((first.get(), second.get()), (1, 0));
-    assert_eq!(result.count(), 1);
-    assert_eq!(second.get(), 1);
+    assert_eq!((first.get(), second.get()), (1, 1));
+    let (value,) = result.next().unwrap();
+    assert!(std::ptr::eq(value, &B[0].0));
+    assert!(result.next().is_none());
+    assert_eq!((first.get(), second.get()), (1, 1));
 }
 
 #[test]
@@ -224,9 +226,9 @@ fn union_leaf_expressions_run_once_for_all_disjuncts() {
     let calls = std::cell::Cell::new(0);
     let result: BTreeSet<_> = mini_linq::compile! { pipeline {}
        struct Leaves;
-       relation A(x:i32) = ({calls.set(calls.get()+1); [(1,),(2,),(2,)]});
+       relation A(x:i32) = ({calls.set(calls.get()+1); [(1,),(2,)]});
        relation answer(x:i32);
-       answer(*x) :- A(x); answer(*x) :- A(x), if *x > 1;
+       answer(*x) :- A(x); answer(*x) :- A(x), where x > 1;
     }
     .collect();
     assert_eq!(result, [(1,), (2,)].into());
@@ -234,14 +236,14 @@ fn union_leaf_expressions_run_once_for_all_disjuncts() {
 }
 
 #[test]
-fn union_matches_authored_sets_with_duplicates_and_empty_disjuncts() {
+fn union_matches_authored_sets_with_duplicate_witnesses_and_empty_disjuncts() {
     for (A, B, expected) in [
         (
-            vec![(1,), (1,), (2,)],
-            vec![(2,), (3,)],
+            vec![(1, 0), (1, 1), (2, 0)],
+            vec![(2, 0), (3, 0)],
             vec![vec![1], vec![2], vec![3]],
         ),
-        (vec![], vec![(4,), (4,)], vec![vec![4]]),
+        (vec![], vec![(4, 0), (4, 1)], vec![vec![4]]),
         (vec![], vec![], vec![]),
     ] {
         let expected: cq_testkit::Rows = expected.into_iter().collect();
@@ -249,14 +251,14 @@ fn union_matches_authored_sets_with_duplicates_and_empty_disjuncts() {
             || {
                 A.iter()
                     .chain(&B)
-                    .map(|&(x,)| vec![x])
+                    .map(|&(x, _)| vec![x])
                     .collect::<cq_testkit::Rows>()
             },
             || {
                 mini_linq::compile! {
                     pipeline {}
-                    struct U; relation A(x:i32); relation B(x:i32);
-                        answer(x) :- A(x); answer(x) :- B(x);
+                    struct U; relation A(x:i32,witness:i32); relation B(x:i32,witness:i32);
+                        answer(x) :- A(x,_); answer(x) :- B(x,_);
                 }
                 .map(|(x,)| vec![*x])
                 .collect::<cq_testkit::Rows>()
@@ -279,8 +281,8 @@ fn finite_branch_domains_keep_suffix_constraints() {
             mini_linq::compile! {
                 pipeline {}
                 struct Q; relation R(x:i32); relation S(x:i32);
-                answer(x) :- R(x), if *x >= 0,
-                    {if *x == 1} $choice {S(x)}, if *x <= 2;
+                answer(x) :- R(x), where x >= 0,
+                    {where x == 1} $choice {S(x)}, where x <= 2;
             }
             .map(|(x,)| *x)
             .collect::<BTreeSet<_>>()
@@ -288,4 +290,80 @@ fn finite_branch_domains_keep_suffix_constraints() {
     }
     assert_eq!(answers!(|), BTreeSet::from([1, 2]));
     assert_eq!(answers!(else), BTreeSet::from([1, 2]));
+}
+
+#[test]
+fn closed_capture_where_restricts_answers_and_evaluates_host_values_once() {
+    let R = [(1_i32,), (2,), (3,)];
+    let literal: BTreeSet<_> = mini_linq::mini_linq! {
+        struct CaptureLiteral;
+        relation R(x: i32);
+        answer(x) :- R(x), let c: i32 = 7, where c == 7;
+    }
+    .map(|(x,)| *x)
+    .collect();
+    assert_eq!(literal, BTreeSet::from([1, 2, 3]));
+
+    for captured in [7, 8] {
+        let calls = std::cell::Cell::new([0; 3]);
+        let closed_value = |index: usize| {
+            let mut counts = calls.get();
+            counts[index] += 1;
+            calls.set(counts);
+            [captured, 7, 9][index]
+        };
+        let answers: BTreeSet<_> = mini_linq::mini_linq! {
+            struct CaptureOpaque;
+            relation R(x: i32); relation answer(x: i32, value: i32);
+            answer(x, closed_value(2)) :- R(x), let c: i32 = closed_value(0),
+                if closed_value(1) == 7, where c == 7;
+        }
+        .map(|(x, value)| (*x, value))
+        .collect();
+        assert_eq!(
+            answers,
+            if captured == 7 {
+                BTreeSet::from([(1, 9), (2, 9), (3, 9)])
+            } else {
+                BTreeSet::new()
+            }
+        );
+        assert_eq!(calls.get(), [1, 1, 1]);
+    }
+}
+
+#[test]
+fn copy_and_owned_captures_keep_answers_lazy() {
+    let R = [(1_i32,), (2,), (3,), (4,)];
+    let captures = std::cell::Cell::new(0);
+    let visits = std::cell::Cell::new(0);
+    let capture_text = || {
+        captures.set(captures.get() + 1);
+        String::from("owned")
+    };
+    let visit = |_: &i32, text: &String| {
+        assert_eq!(text, "owned");
+        visits.set(visits.get() + 1);
+        true
+    };
+    let mut answers = mini_linq::compile! {
+        pipeline {}
+        struct LazyCaptures;
+        relation R(x: i32);
+        answer(x) :- R(x), let limit: i32 = 2, let text: String = capture_text(),
+            if visit(x, text) && *x > *limit;
+    }
+    .map(|(x,)| *x);
+    assert_eq!(captures.get(), 1);
+    assert_eq!(
+        visits.get(),
+        0,
+        "capture ownership must not collect the answer"
+    );
+    assert_eq!(answers.next(), Some(3));
+    // Canonical adapters may look ahead once polled; setup above must not poll.
+    assert_eq!(answers.next(), Some(4));
+    assert_eq!(answers.next(), None);
+    assert_eq!(captures.get(), 1);
+    assert_eq!(visits.get(), 4);
 }

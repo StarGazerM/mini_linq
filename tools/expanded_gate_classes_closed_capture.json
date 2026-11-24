@@ -1,0 +1,695 @@
+{
+ "version": 1,
+ "definitions": {
+  "p4-radix-items-rows": {
+   "kind": "refactor",
+   "description": "P4 class R: the recorded RadixRun payload layout items rows is printed as the explicit default layout argument RadixRun<_, _, ::std::vec::Vec<_>> (identical Rust type to RadixRun<_, _>)"
+  },
+  "p4-packed-canon": {
+   "kind": "intended",
+   "description": "P4 class P: authored canon(packed) advice records dedup::Packed for canonical rows records (EXT-PackedCanon, PL-PackedCanon); same answers and order, different build work, measured by paired timing"
+  },
+  "closed-capture-binding": {
+   "kind": "intended",
+   "description": "Closed capture (A-Capture, A-CaptureRef, IF-Capture): a query-closed let/if/head operand is hoisted at CQ normalization into a host-once capture bound as `let __cq_capture_N: T = e; let p = &__cq_capture_N;` and read as Clone::clone(p); the constant column leaves row tuples, so the empty-key (key ()) HashIndex/SortedRun build, its seek(&())/lookup(&()) driver and the index-driven task tiling disappear and the remaining scan drives the plan; same answers, different build work, measured by paired timing"
+  },
+  "closed-capture-renumber": {
+   "kind": "refactor",
+   "description": "Closed capture renumbering only: the hoisted capture shifts generated parameter/relation/task-driver ordinals (__cq_parameter_N, __cq_rN_*, __cq_task_driver_N, __cq_generated_N); token streams equal modulo these ordinals"
+  }
+ },
+ "rules": [
+  {
+   "target": "retail_d19",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_d27",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h01",
+   "class": "p4-packed-canon",
+   "hunk_sha256": "b3b5f943102afc5ba9b9391cfe9cd703175583fae10767e7b1def81d99f88a18",
+   "reason": "h01's authored canon(packed) advice (EXT-PackedCanon) retypes the canonical rows record <::cq_storage::dedup::Sort>::sort to <::cq_storage::dedup::Packed>::sort; same rows stream and comparator tokens, packed-OrderKey sorted-run build (PL-PackedCanon), timed",
+   "source": "features/rewrites/passes/src/structures.rs:137;runtime/cq-storage/src/dedup.rs:124;features/workloads/src/queries/retail/tpch/retail_h01.rs:61"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "ed6fc869688f9e804b1255d716b3d632724521be1de431757dc94ca28d01a855",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h03",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h07",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h10",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h11",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h16",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h20",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "p4-radix-items-rows",
+   "hunk_sha256": "ed6fc869688f9e804b1255d716b3d632724521be1de431757dc94ca28d01a855",
+   "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+   "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+  },
+  {
+   "target": "correlated_exists",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "924e7a6104d6d5da4593ca3bcda2a681d20e303717f6bd80261347febd927daa",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "72a8060a6f2498e07abc5642ab784d8fa23e8def11968e0924a903fa8ce9af69",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "2ba979990e778e533e5f7a954c2e58fed8dba29bd63d2c1b8a2329afb0fb1404",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "ec95933d95edf114f2260778e12fe02009b16fd2004de198255e427811922a5f",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "63993f0815c28ec2fd6ed4729e607c0ab5b2d5e3359f6ec5c2203d25c1e8fe8f",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "398db0b4b609155071880957eb0b7ebd0b8ada89049bd84eddda27f0a11acb63",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "df759c494f4ccf6b3d92ddc04424cb9ea759abc0e6606360549bd2217af7fdad",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "3713c9e4faa74f8a8134580d4ae95c1ce92dce55e5e4d1ddc9cdab224cccd5bb",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "423ffe64732bfc05debcc99cac849ff4223c2e1ae1082d5bb4e3ae728cfd74ef",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "feca980927068cca3cef9d8093fb7b8fca066f18baf493ea1638e0b3a6ca04b4",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "1bc9e175fc682ec3485661e36454721bb15fab43890260d2151b31779491217b",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "5fb8e0ee0414981150353a7250d6b65edb92ffd18abfd3c9e4b86abdfa11cc91",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "3934ae822709d3f4e9282ff1961703635f082cb46f1316c1ebccdc7e218c5ea0",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "e4c919b4f0f4ce176442c62a5f2575d7084ebee5e8d13296ecf7ab263f510af5",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "02b2dadeaafd3f60ff2fc159cc0ba772325d22af80d4bb857b9aff036c520eb6",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "b1d87e4d4a98ad3db329cf011fc1483bbb10d8b78769e764f566fa4209ad8d3d",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "edf8cf48a8cf5cb8ed33172f06199c4c5a700861a2374d1641d013bc29b76958",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "be244ffba6f4de61b4f6b88ddae9581edd3171c19a059a4a3f5496a79ce3d788",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "5c516aacea240823cbf13e3e06b80bc517b5879e8941a53098ce8f2558bdb478",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "9f35c2664a2d5a66d65fdf171b1a9a002cf6b6cff20231b81727800cde3be4e7",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "d0733288d91c2b899a5d0811bf08549248a6a94c4984ae0cdd3eedd3cef2c6b0",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "6b6260c244a295915ef0b6edaf3c63f7117d4c90390316b5977b7a16e1e50d20",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "02f542caec678a8a0f976f249859e57f6937ceab8a28a8f4c4e47dba6a5dd18a",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "1fe338ac2b1145063900fcb2c47897487cf97e230ab72fe3048f80fae471dd5f",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "0d9816880c7919a8b49beebd266fa4240e90cb3e99f48de0d9ad6f96ef55559b",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "637b8f8f9c6568f23356502cc557586c46413474f55ade440385049a73c201b9",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "1adb0da2434bef45de54e16d7ec16755942c655404edb06eeb2d96919db78686",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "d8736397bd46cedbb03fe01e993eb9a4d445c595c03c8701c9113a148a6ebc16",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "8cee15bdeecc4bcc8dcfd43ae399d00a1ba4c20c83f3bdfbf660e86fae7bcb44",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "0af2348216142fbd91c2a537fb21be2aed148bceb6b591212434d8d4f66a348e",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "ef8f31e5de64636d4c8280b71d9fee8306af30de14650a110f1a096f97e5499d",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "cfa813bd5cc292e131558c4e3f08ea38750dc082ac792fe7cdaa5ab07a2df50a",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "9b4208a3d97c14f5d499d6fbfe6ea53805c5df3803f3d7e0edb295a7d6f53527",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "retail_h12",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "f6ca8f1d611d34b30b62ffc198efbf5de7b1a12ffa6a1d4d9cf98ade99449ff3",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "03057450b4488d8a2baaab54e3fcf68a2debd8d5910127570f87dff28515efe2",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "4fc4f5acff1e44b8b8deef82ef74a2a05b19989e41e91024a5f5d76e20f70727",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "0ddffcc31dd74aaf4f014b0a6aef2c8fc9ae51791ef708c2806e1642b6482c29",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "7df3c6b71707521c41a9fb5a23d77972d69248f021bffa9100de10d85ce3d22a",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "864a95909a7a4895af86dc6aac16bafc68affe0157d5ace72295a3efebfbfae8",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "54cd67a24f36270181a1252d8aeaa2c91c259958b4b3d8a9e284cbff23c3574f",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "26b534e5a5bed75efd54420e587433fc7eabb4103198e50fd680090743fada83",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "eab20475a4da2b62eea878bdd78c65d6d9af4140281d6c58f236854784a36dc4",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "577e06e871ba431fdce6ab0301182fe11e74799ac44643abcd9547e6631c460e",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "20e512d8d742ea8fb51b6f44a82b5bad47e9030970e94e976f63f9101842d7ab",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "f994a4d96b62cf417f3ae3f9e7b5e2e55cff8e1b84423f5e3bec5db80b162675",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "f6fe866abb1d766a9614a061eeff8295374ddfe2310eb2408dc39a39e3c695ea",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "8934ab15be6790a83773323081ac8adef3a0c35af7b6918f72905a3ae11e4620",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "bb2880ab896773ce9bef705dde3d7d8bbe07ef7f95b8caaf4a79799846fcd380",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "fd1e1cdd9f1d1aea3f654b8d8204454842c1126d7f95b4fc7fa4c52880ed6ec8",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "6d0d57e102efc573efeadcd87343d7b7ac4b05f0a8908ceeba2a5f4ea26d7cfd",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "34d1396a15e067de3c28690596298bd433eeb7db9740400c68ff1d0ee7cd49d1",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "8036e1d1923c38e3809f6a0338fb795d9fd963bc1f3a6918e415b66ee44cd868",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "c9ab0700cb9fb4182b9126f6ef7720f4be8827e2bf79cb4156741975bab95ff7",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "2d7852a32c4b18451d694168538b7c08dad7a9f937b4347dc014a3848430e913",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "d62225a2dcd13ef555847afbb635a9210ac44868820ef7af6150e01287a9f2b4",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "271d55b6a9cd78f146414753b4df845d6e45154eb6bfcc9e15ea4dd0ec6d7da0",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "57b4ac1043dc72d523ea2f4627323cc2e9e301dc21d53abf4f88a1d0103dd4dc",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "ca4a73a7691fa035079f951d999417b9386736907364661c2d85ba8db6a6e22b",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "2e57425daff63d39577ffc8a813a7748a43c88a0efd42e4889c15ece94b3979b",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "55c4c8685b70ba23cadbc3e7dd4ead17515812ff492b6bb07ec394e26829c846",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "3c25be89f06c59a6799f9abdb90c061b51a017d00774f42f4ea336a31bc4f980",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "dcfb983171dd53f8d196f68703757af44c43a8301941c48f5773be3a3dc5c4c1",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "28e8a57b7d39b83d64772a089d9c3f2f20982bb9c73f5dd08f64b0a92fba2b54",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "fd05d0dc9ac777f4d4ff854e23a22818a78f96d7d1b5381747c8b8d57940c9da",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "b657f4a4ccba96c9a51855f8ffb0026f1aef0c1dda026cb2181c33da7686d97a",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "90dc978e959043c3b6f0f6ab00e231fb573de8e0ef2a95a2bbbcd73bc8a78062",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "e5d4ebbebc8dee436ce19fbe1e25b4e751a62a224c42915152e3c77a9ae3bab4",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "f9c4b54a1722f8a4004a1cc43275fba43de1e5f0b27c200f51f25ed7a4ee69e9",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-renumber",
+   "hunk_sha256": "54d55f1a3c713124e49adaf09ace56f02b44ac7d724ff710814dca951adfdc75",
+   "reason": "reviewed: identical tokens modulo generated ordinals shifted by the inserted capture binding",
+   "source": "passes/cq-print/src/lib.rs:338-360;languages/cq-lang-cq/src/normal.rs:306-374"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "6557bc6758e241e774fb9af4f375cdbedd0d6fc8e33c2246c1f23918b93bed0b",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "3ba126663e81ae57254b9cdb0c0f36ef420a4a49aff2efd88a1559c21239bca6",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "f32e6cc6c01253cb40315207b531069a8e08cd64e35811d10f6edd3dfc07941d",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "21e8a04ed7c26ca26ffc40d0cf640a3e80bffd86631cd9e4b77d3cb160423e46",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "4fc4f5acff1e44b8b8deef82ef74a2a05b19989e41e91024a5f5d76e20f70727",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "86136cc3d84118d825a0a3d709abedcfb301bb97d12897dfbfbe24dd2b2c1084",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "e07c9c51faf8b35a1f40d2b152239e24fa1113e71103007144d20bba1702fe06",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "closed-capture-binding",
+   "hunk_sha256": "4c81d1b0191f726224a65ad88ecda1bec5f5c7c3b7e5191df6576a4b328a5a42",
+   "reason": "reviewed: closed constant/aggregate operand bound once as a capture; its column, empty-key build and seek/lookup(&()) driver removed, references read Clone::clone(capture), dependent ordinals/tiling/materialization reshaped accordingly",
+   "source": "languages/cq-lang-cq/src/normal.rs:121-151,306-374;passes/cq-print/src/lib.rs:338-360"
+  }
+ ]
+}

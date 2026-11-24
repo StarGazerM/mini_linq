@@ -1,7 +1,7 @@
 //! Public pipeline boundaries, argument forwarding and language rewrites.
 #[test]
 fn defaults_and_surface_expansion_before_the_cq_contract_agree() {
-    let rows = [(1,), (1,), (2,)];
+    let rows = [(1,), (2,)];
     let default: Vec<_> =
         mini_linq::mini_linq! { struct Q; relation rows(x:i32); answer(x) :- rows(x); }.collect();
     let surfaced: Vec<_> = mini_linq::compile! {
@@ -10,6 +10,49 @@ fn defaults_and_surface_expansion_before_the_cq_contract_agree() {
     }
     .collect();
     assert_eq!(default, surfaced);
+}
+
+#[test]
+fn hand_lookup_expand_and_fine_orders_preserve_default_answers() {
+    let seed = [(1,), (2,), (3,)];
+    let r = [(1, 10, 100), (1, 11, 101), (2, 20, 200)];
+    let s = [(1, 10, 1000), (1, 12, 1200), (2, 20, 2000)];
+    let default: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }
+    .map(|(a, x, y, z)| (*a, *x, *y, *z))
+    .collect();
+    let lookup: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = mini_linq::passes::plan(no_reduce, order(seed, r@1(a), s@2(a), r@1, s@2)); }
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }.map(|(a,x,y,z)| (*a,*x,*y,*z)).collect();
+    let fine: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = mini_linq::passes::plan(no_reduce, order(seed, r@1(a,x), s@2(a,x), r@1, s@2)); }
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }.map(|(a,x,y,z)| (*a,*x,*y,*z)).collect();
+    assert_eq!(
+        default,
+        std::collections::BTreeSet::from([(1, 10, 100, 1000), (2, 20, 200, 2000)])
+    );
+    assert_eq!(lookup, default);
+    assert_eq!(fine, default);
+    // An advised schedule may root at a non-written occurrence; the written
+    // outer `seed` is then a single bound read and `s` a lookup before its expansion.
+    let rooted: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = mini_linq::passes::plan(no_reduce, order(r@1, seed@0, s@2(a, x), s@2)); }
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }
+    .map(|(a, x, y, z)| (*a, *x, *y, *z))
+    .collect();
+    assert_eq!(rooted, default);
 }
 
 #[test]
@@ -23,12 +66,12 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
     assert_eq!(retained.iter().count(), 1);
     let empty: cq_storage::Exists = std::iter::empty().collect();
     assert_eq!(empty.iter().count(), 0);
-    let rows = [(1,), (2,), (2,)];
+    let rows = [(1,), (2,)];
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation rows(x:i32);
-            r = pipe rename rows@0 {x -> x}; p = exists project r keep {};
-            out = pipe canon semi eager [] p,p; return out as answer();
+            r = pipe rename rows {x -> x}; p = exists project r keep {};
+            out = let canon semi eager [] p,p; return out as answer();
         }
     }
     .collect();
@@ -38,35 +81,36 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
 #[test]
 fn physical_and_structures_correspondence_reject_changes_in_meaning() {
     let source: cq_lang_physical::Program = syn::parse_quote!(physical {
-        relation R(x:i32); r = pipe canon rename R@0 {x -> x}; return r as answer(x);
+        relation R(x:i32); r = let canon rename R {x -> x}; return r as answer(x);
     });
     let mut changed = source.clone();
     changed.program.head.relation = syn::parse_quote!(wrong);
     assert!(cq_lang_physical::check_rewrite(&source, &changed).is_err());
     let structured = cq_structure_selection::compile(&source).unwrap();
-    let mut changed = structured.clone();
-    changed.physical = changed.physical.clone();
-    changed.physical.program.head.relation = syn::parse_quote!(wrong);
-    assert!(cq_lang_structures::check_rewrite(&structured, &changed).is_err());
+    let mut changed_physical = source.clone();
+    changed_physical.program.head.relation = syn::parse_quote!(wrong);
+    assert!(cq_lang_structures::check_rewrite(
+        &source, &structured, &changed_physical, &structured
+    ).is_err());
     let mut changed = structured.clone();
     changed
         .structures
         .entries
         .retain(|e| !matches!(e.structure, cq_lang_structures::Structure::Dedup { .. }));
-    assert!(cq_lang_structures::check_rewrite(&structured, &changed).is_err());
+    assert!(cq_lang_structures::check_rewrite(&source, &structured, &source, &changed).is_err());
 }
 
 #[test]
 fn ra_rewrites_use_the_existing_tableau_check() {
     let source: cq_lang_ra::Program = syn::parse_quote!(relational {
         relation R(x:i32); relation S(y:i32);
-        r = rename R@0 {x -> x}; s = rename S@1 {y -> y}; j = natural_join r with s;
+        r = rename R {x -> x}; s = rename S {y -> y}; j = natural_join r with s;
         output j as answer(x,y);
     });
     let mut target = source.clone();
     target.plan.definitions[2].operator = syn::parse_quote!(natural_join s with r);
     cq_lang_ra::check_rewrite(&source, &target).unwrap();
-    target.plan.definitions[1].operator = syn::parse_quote!(rename R@0 {x -> y});
+    target.plan.definitions[1].operator = syn::parse_quote!(rename R {x -> y});
     assert!(cq_lang_ra::check_rewrite(&source, &target).is_err());
 }
 
@@ -90,8 +134,8 @@ fn lazy_semijoin_state_stops_at_a_match_and_keeps_prior_keys() {
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation left(x:i32); relation right(x:i32);
-            l = pipe rename left@0 {x -> x}; r = pipe rename right@1 {x -> x};
-            out = pipe canon semi lazy [x] l,r; return out as answer(x);
+            l = pipe rename left {x -> x}; r = pipe rename right {x -> x};
+            out = let canon semi lazy [x] l,r; return out as answer(x);
         }
     }
     .collect();
@@ -100,17 +144,17 @@ fn lazy_semijoin_state_stops_at_a_match_and_keeps_prior_keys() {
 
 #[test]
 fn point_fallback_types_use_logical_keys_while_native_reads_keep_declaration_order() {
-    let rows = [(1, 2), (3, 4), (1, 2)];
+    let rows = [(1, 2), (3, 4)];
     let answer: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(first:i32, second:i32);
-        answer(z,a) :- rows(z,a), if *z == 1 && *a == 2;
+        answer(z,a) :- rows(z,a), where z == 1 && a == 2;
     }
     .collect();
     assert_eq!(answer, [(&1, &2)]);
-    let grouped = std::collections::BTreeMap::from([((1, 2), vec![(), ()]), ((3, 4), vec![()])]);
+    let grouped = std::collections::BTreeMap::from([((1, 2), vec![()]), ((3, 4), vec![()])]);
     let answer: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation grouped(first:i32, second:i32);
-        answer(z,a) :- grouped(z,a), if *z == 1 && *a == 2;
+        answer(z,a) :- grouped(z,a), where z == 1 && a == 2;
     }
     .collect();
     assert_eq!(answer, [(&1, &2)]);
@@ -118,13 +162,13 @@ fn point_fallback_types_use_logical_keys_while_native_reads_keep_declaration_ord
 
 #[test]
 fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
-    let rows = [(1,), (1,), (2,)];
+    let rows = [(1,), (2,)];
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation rows(x:i32);
-            r = pipe rename rows@0 {x -> x};
+            r = pipe rename rows {x -> x};
             a_point = pipe point select r if (x = 1);
-            z_probe = pipe canon probe first [x] a_point,r;
+            z_probe = let canon probe first [x] a_point,r;
             return z_probe as answer(x);
         }
     }
@@ -132,8 +176,42 @@ fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
     assert_eq!(answer, [(&1,)]);
 }
 
+#[test]
+fn ordered_host_fallback_capabilities_are_rustc_obligations() {
+    let source: cq_lang_physical::Program = syn::parse_quote!(physical {
+        relation L(x:i32); relation R(x:i32);
+        l = pipe rename L {x -> x}; r = pipe rename R {x -> x};
+        out = let canon merge[x] l,r; return out as answer(x);
+    });
+    let structured = cq_structure_selection::compile(&source).unwrap();
+    let mut alternate_provider = structured.clone();
+    let entry = alternate_provider.structures.entries.iter_mut().find(|e| matches!(&e.structure, cq_lang_structures::Structure::Host { reader, .. } if reader.result().is_some_and(|name| name == "out"))).unwrap();
+    if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
+        keyed.provider = cq_lang_structures::provider::base::instance(
+            "std_hash_set",
+            syn::parse_quote!(::std::collections::HashSet<_>),
+        );
+    }
+    alternate_provider
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration(
+            "std_hash_set",
+        )])
+        .unwrap();
+    // The record preserves the ordered read and key. Rust, not syn::Type
+    // inspection, checks whether the chosen provider implements that access.
+    cq_lang_structures::check_rewrite(&source, &structured, &source, &alternate_provider).unwrap();
+}
+
 macro_rules! capture_plan {
-    (pipeline {}; $($plan:tt)*) => {
+    (pipeline {} $(planning_tables { $($tables:tt)* })?; realization {
+        physical { $($physical:tt)* }
+        structures { $($structures:tt)* }
+        sequence { $($sequence:tt)* }
+    }) => {
+        stringify!($($physical)* $($structures)* $($sequence)*)
+    };
+    (pipeline {} $(planning_tables { $($tables:tt)* })?; $($plan:tt)*) => {
         stringify!($($plan)*)
     };
 }
@@ -169,17 +247,18 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
         },
     )
     .unwrap();
-    let prior = cq_elaborate::compile(&ordered).unwrap();
+    let (prior, _) = cq_relational_lowering::compile(&normal, &ordered).unwrap();
     let reduced = cq_reduce::compile(
+        &normal,
         &ordered,
         &cq_reduce::Options {
             semijoins: cq_reduce::Reductions::Hypergraph,
         },
     )
     .unwrap();
-    let expected = cq_elaborate::compile(&reduced).unwrap();
-    cq_elaborate::check(&reduced, &expected).unwrap();
-    let expected = cq_elaborate::simplify_reductions(&expected).unwrap();
+    let (expected, steps) = cq_relational_lowering::compile(&normal, &reduced).unwrap();
+    cq_relational_lowering::check(&normal, &reduced, &expected, &steps).unwrap();
+    let expected = cq_ra_rewrites::simplify_reductions(&expected).unwrap();
     let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
     let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
     assert_eq!(
@@ -199,10 +278,11 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
 
 #[test]
 fn default_reduction_and_opt_out_agree_on_host_and_fallback_inputs() {
-    let left = [(1, 10), (1, 10), (2, 20), (3, 30)];
-    let rows = [(10, 100), (10, 100), (30, 300), (40, 400)];
+    let left = [(1, 10), (1, 11), (2, 20), (3, 30)];
+    let rows = [(10, 100), (11, 100), (30, 300), (40, 400)];
     let host = std::collections::HashMap::from([
-        ((10,), vec![(100,), (100,)]),
+        ((10,), vec![(100,)]),
+        ((11,), vec![(100,)]),
         ((30,), vec![(300,)]),
         ((40,), vec![(400,)]),
     ]);
@@ -317,13 +397,13 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
             let options = cq_reduce::Options {
                 semijoins: cq_reduce::Reductions::Masks,
             };
-            let reduced = cq_reduce::compile(&ordered, &options).unwrap();
-            cq_reduce::check(&ordered, &reduced, &options).unwrap();
+            let reduced = cq_reduce::compile(&normal, &ordered, &options).unwrap();
+            cq_reduce::check(&normal, &ordered, &reduced, &options).unwrap();
             assert!(has_reduction(&reduced.valuation.steps));
-            let expected = cq_elaborate::compile(&reduced).unwrap();
-            cq_elaborate::check(&reduced, &expected).unwrap();
+            let (expected, steps) = cq_relational_lowering::compile(&normal, &reduced).unwrap();
+            cq_relational_lowering::check(&normal, &reduced, &expected, &steps).unwrap();
             assert_eq!(default, expected);
-            assert_eq!(opted_out, cq_elaborate::compile(&ordered).unwrap());
+            assert_eq!(opted_out, cq_relational_lowering::compile(&normal, &ordered).unwrap().0);
             cq_lang_ra::check_rewrite(&opted_out, &default).unwrap();
         }};
     }
@@ -344,40 +424,47 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
 }
 
 #[test]
-fn opaque_string_filters_and_derived_country_domains_execute_exactly() {
+fn load_time_string_code_sets_and_country_domains_execute_exactly() {
+    let names = ["green brass", "blue", "green dangling"];
+    let mut dictionaries = cq_load::Dictionaries::default();
+    dictionaries.insert("name", names);
+    let code = |text: &str| cq_storage::domain::exact(dictionaries.domain("name"), text);
     let parts = [
-        (1, "green brass".to_owned()),
-        (2, "blue".to_owned()),
-        (3, "green dangling".to_owned()),
+        (1, code("green brass")),
+        (2, code("blue")),
+        (3, code("green dangling")),
     ];
-    let lines = [(1,), (1,), (2,)];
+    let lines = [(1,), (2,)];
+    // Pattern predicates run once per distinct dictionary entry at load time.
+    let green = cq_load::dictionary_where(&dictionaries, "name", |name| name.contains("green"));
     let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
-        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), if name.contains("green");
+        struct Q; relation parts(key:i32,name:cq_load::StringCode); relation lines(part:i32);
+        relation green(name:cq_load::StringCode);
+        answer(key) :- lines(key), parts(key,name), green(name);
     }
     .map(|(key,)| *key)
     .collect();
     assert_eq!(actual, [1].into());
-    fn green(name: &str) -> bool {
-        name.contains("green")
+    fn starts_green(name: &str) -> bool {
+        name.starts_with("green")
     }
-    let custom: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
-        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), if green(name);
-    }
-    .map(|(key,)| *key)
-    .collect();
-    assert_eq!(custom, actual);
+    let custom = cq_load::dictionary_where(&dictionaries, "name", starts_green);
+    assert_eq!(custom, green);
+    let mut countries_dictionary = cq_load::Dictionaries::default();
+    countries_dictionary.insert("name", ["FRANCE", "GERMANY", "CANADA"]);
+    let country = |text: &str| cq_storage::domain::exact(countries_dictionary.domain("name"), text);
     let countries = [
-        (1, "FRANCE".to_owned()),
-        (2, "GERMANY".to_owned()),
-        (3, "CANADA".to_owned()),
+        (1, country("FRANCE")),
+        (2, country("GERMANY")),
+        (3, country("CANADA")),
     ];
     let links = [(1, 2), (2, 1), (1, 1), (3, 2), (99, 1)];
     let pairs: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
-        struct Q; relation countries(key:i32,name:String); relation links(a:i32,b:i32);
+        struct Q;
+        relation countries(key:i32,name:cq_load::StringCode in (countries_dictionary.domain("name")));
+        relation links(a:i32,b:i32);
         answer(a,b) :- links(a,b), countries(a,left), countries(b,right),
-            if (left == "FRANCE" && right == "GERMANY") || (left == "GERMANY" && right == "FRANCE");
+            where (left == "FRANCE" && right == "GERMANY") || (left == "GERMANY" && right == "FRANCE");
     }
     .map(|(a, b)| (*a, *b))
     .collect();
@@ -385,12 +472,12 @@ fn opaque_string_filters_and_derived_country_domains_execute_exactly() {
 }
 
 #[test]
-fn unrecognized_partial_string_guard_does_not_run_on_dangling_parts() {
-    let parts = [(1, "g".to_owned()), (2, String::new())];
+fn opaque_total_guard_handles_dangling_parts() {
+    let parts = [(1, vec![7_i64]), (2, Vec::new())];
     let lines = [(1,)];
     let actual: Vec<_> = mini_linq::mini_linq! {
-        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), if name.as_bytes()[0] == b'g';
+        struct Q; relation parts(key:i32,name:Vec<i64>); relation lines(part:i32);
+        answer(key) :- lines(key), parts(key,name), if name.first() == Some(&7);
     }
     .map(|(key,)| *key)
     .collect();
@@ -403,14 +490,14 @@ fn opaque_guard_preserves_macro_forwarded_type_and_name_hygiene() {
         ($ty:ty; $rows:ident; $name:ident) => {
             mini_linq::mini_linq! {
                 struct Q; relation $rows(name:$ty);
-                answer($name) :- $rows($name), if $name.contains("green");
+                answer($name) :- $rows($name), if $name.contains(&7);
             }
         };
     }
-    let rows = [("green".to_owned(),), ("blue".to_owned(),)];
-    let answer: Vec<_> = filtered!(String; rows; name).collect();
+    let rows = [(vec![7_i64, 8],), (vec![9_i64],)];
+    let answer: Vec<_> = filtered!(Vec<i64>; rows; name).collect();
     assert_eq!(answer.len(), 1);
-    assert_eq!(answer[0].0, "green");
+    assert_eq!(*answer[0].0, [7, 8]);
 }
 
 #[test]
@@ -418,7 +505,7 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
     let rows = [(2, 3), (-2, 1)];
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
-        answer(total) :- rows(x,y), let total:i32 = *x + *y, if *total > 0;
+        answer(total) :- rows(x,y), let total:i32 = *x + *y, where total > 0;
     }
     .map(|(total,)| total)
     .collect();
@@ -431,7 +518,7 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
     }
     .map(|(x,)| *x)
     .collect();
-    assert_eq!(actual, [2, -2]);
+    assert_eq!(actual, [-2, 2]);
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
         answer(total) :- rows(total,_), if total.is_positive();
@@ -443,7 +530,7 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
 
 #[test]
 fn cq_negation_excludes_matching_keys_with_constants_and_wildcards() {
-    let rows = [(1,), (2,), (3,), (4,), (4,)];
+    let rows = [(1,), (2,), (3,), (4,)];
     let blocked = [(1, 7, 10), (1, 7, 11), (2, 8, 10), (3, 7, 12)];
     let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q;
@@ -473,7 +560,7 @@ fn cq_negation_respects_repeated_variables() {
 
 #[test]
 fn cq_negation_normalizes_raw_relations_and_repeated_variables() {
-    let rows = [(1,), (2,), (3,), (4,), (4,)];
+    let rows = [(1,), (2,), (3,), (4,)];
     let blocked = [(1, 2, 7, 9), (2, 2, 7, 8), (3, 3, 8, 9)];
     let expected: std::collections::BTreeSet<_> = rows
         .iter()
@@ -503,7 +590,7 @@ fn cq_negation_normalizes_raw_relations_and_repeated_variables() {
 
 #[test]
 fn cq_negation_of_an_empty_relation_retains_every_key() {
-    let rows = [(1,), (2,), (2,)];
+    let rows = [(1,), (2,)];
     let blocked: [(i32,); 0] = [];
     let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q; relation rows(key:i32); relation blocked(key:i32);
@@ -568,7 +655,23 @@ fn cq_constant_only_negation_tests_matching_rows_not_global_emptiness() {
 }
 
 #[test]
-fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation() {
+fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation() {
+    fn parse_plan(source: &str) -> (
+        cq_lang_physical::Program,
+        cq_lang_structures::Program,
+        cq_lang_sequence::Program,
+    ) {
+        syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream<'_>| {
+                let physical = input.parse()?;
+                let structures = cq_lang_structures::Program::parse(input, &physical)?;
+                let sequence = input.parse()?;
+                Ok((physical, structures, sequence))
+            },
+            source,
+        )
+        .unwrap()
+    }
     macro_rules! planned {
         ($($planner:ident)::+ $(($($args:tt)*))?; $($output:tt)*) => {
             mini_linq::compile! {
@@ -578,21 +681,21 @@ fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation()
                 }
                 physical {
                     relation rows(x:i32);
-                    r = pipe canon rename rows@0 {x -> x};
+                    r = let canon rename rows {x -> x};
                     return r as answer(x);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_, _> [];
-                    r canon = ::std::collections::HashSet<_>;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_, _> [];
+                    r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
                 }
                 sequence { result = store rows r; $($output)* }
             }
         };
     }
-    let default: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan;)).unwrap();
-    let custom: cq_lang_sequence::Program =
-        syn::parse_str(planned!(core_pass_fixtures::plan_reserve(expected);)).unwrap();
+    let (default_physical, default_structures, default) =
+        parse_plan(planned!(mini_linq::passes::plan;));
+    let (custom_physical, custom_structures, custom) =
+        parse_plan(planned!(core_pass_fixtures::plan_reserve(expected);));
     assert_eq!(
         default.sequence.output,
         Some(cq_lang_sequence::OutputProtocol::Count)
@@ -601,38 +704,41 @@ fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation()
         custom.sequence.output,
         Some(cq_lang_sequence::OutputProtocol::Reserve)
     );
-    cq_lang_sequence::check_rewrite(&default, &custom).unwrap();
-    cq_lang_sequence::check_grading(&custom, &cq_sequence_pull::machine()).unwrap();
-    let authored: cq_lang_sequence::Program =
-        syn::parse_str(planned!(core_pass_fixtures::plan_reserve(expected); output count;))
-            .unwrap();
+    cq_lang_sequence::check_rewrite(
+        &default_physical, &default_structures, &default,
+        &custom_physical, &custom_structures, &custom,
+    ).unwrap();
+    cq_lang_sequence::check_grading(
+        &custom_physical, &custom_structures, &custom, &cq_sequence_pull::machine(),
+    ).unwrap();
+    let (_, _, authored) =
+        parse_plan(planned!(core_pass_fixtures::plan_reserve(expected); output count;));
     assert_eq!(
         authored.sequence.output,
         Some(cq_lang_sequence::OutputProtocol::Count)
     );
-    let delegated: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan(mini_linq::passes::plan_sequential);))
-            .unwrap();
+    let (_, _, delegated) =
+        parse_plan(planned!(mini_linq::passes::plan(mini_linq::passes::plan_sequential);));
     assert_eq!(delegated, default);
-    let preserved: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan_sequential(preserve_order);)).unwrap();
+    let (_, _, decomposed) = parse_plan(planned!(mini_linq::passes::plan_sequential;));
+    assert_eq!(decomposed, default);
+    let (_, _, preserved) = parse_plan(planned!(mini_linq::passes::plan(preserve_order);));
     assert_eq!(preserved, default);
-    let automatic: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan(lookup_first);)).unwrap();
-    cq_lang_sequence::check_rewrite(&default, &automatic).unwrap();
-    cq_lang_sequence::check_grading(&automatic, &cq_sequence_pull::machine()).unwrap();
+    let (_, _, explicitly_decomposed) =
+        parse_plan(planned!(mini_linq::passes::plan_sequential(preserve_order);));
+    assert_eq!(explicitly_decomposed, default);
 
-    let rows = [(1,), (1,), (2,)];
+    let rows = [(1,), (2,)];
     let custom: Vec<_> = mini_linq::compile! {
         pipeline { plan = core_pass_fixtures::plan_reserve(expected); }
         physical {
             relation rows(x:i32);
-            r = pipe canon rename rows@0 {x -> x};
+            r = let canon rename rows {x -> x};
             return r as answer(x);
         }
-        structures {
-            r host scan = ::core::iter::Map<_, _> [];
-            r canon = ::std::collections::HashSet<_>;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }
         sequence { result = store canon rows r; }
     }
@@ -642,4 +748,104 @@ fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation()
     }
     .collect();
     assert_eq!(custom, default);
+}
+
+#[test]
+fn facade_observes_every_default_boundary_without_executing_the_query() {
+    macro_rules! observe {
+        ($boundary:ident) => {
+            mini_linq::compile! {
+                observe { boundary = $boundary; stage = ::core::stringify; }
+                pipeline {}
+                struct Observed;
+                relation R(x: i32); relation S(x: i32);
+                answer(x) :- R(x), S(x);
+            }
+        };
+    }
+    let source: cq_lang_cq::Program = syn::parse_str(observe!(cq)).unwrap();
+    let (normal, expected_vo) = cq_planning::prefix_valuation(&source, &Default::default()).unwrap();
+    let vo = syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream<'_>| cq_lang_vo::Program::parse(input, &normal),
+        observe!(vo),
+    ).unwrap();
+    assert_eq!(
+        vo,
+        expected_vo
+    );
+    let ra: cq_lang_ra::Program = syn::parse_str(observe!(relational_plan)).unwrap();
+    assert_eq!(
+        ra,
+        cq_planning::compile_prefix(&source, &Default::default()).unwrap()
+    );
+    syn::parse_str::<cq_lang_ix::Program>(observe!(index_requirements)).unwrap();
+    let physical = syn::parse_str::<cq_lang_physical::Program>(observe!(physical)).unwrap();
+    for observed in [observe!(structures), observe!(represent), observe!(stage)] {
+        syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream<'_>| {
+                cq_lang_structures::Program::parse(input, &physical)
+            },
+            observed,
+        )
+        .unwrap();
+    }
+    let staged = syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream<'_>| cq_lang_structures::Program::parse(input, &physical),
+        observe!(stage),
+    ).unwrap();
+    syn::parse_str::<cq_lang_sequence::Program>(observe!(sequence)).unwrap();
+    let decomposed: cq_lang_sequence::Program = syn::parse_str(observe!(decompose)).unwrap();
+    let graded: cq_lang_sequence::Program = syn::parse_str(observe!(grade)).unwrap();
+    assert_eq!(decomposed, graded);
+    cq_lang_sequence::check_grading(&physical, &staged, &graded, &cq_sequence_pull::machine()).unwrap();
+    let rust = observe!(final_rust);
+    syn::parse_str::<syn::Expr>(rust).unwrap();
+    assert!(rust.contains("profile_select"));
+    assert!(!rust.contains("translate_pull"));
+}
+
+#[test]
+fn observation_keeps_authored_planner_arguments() {
+    let observed = mini_linq::compile! {
+        observe { boundary = relational_plan; stage = ::core::stringify; }
+        pipeline { plan = ::mini_linq::passes::plan(order(S, R), no_reduce); }
+        struct Observed;
+        relation R(x: i32); relation S(x: i32);
+        answer(x) :- R(x), S(x);
+    };
+    let source: cq_lang_cq::Program = syn::parse_quote! {
+        struct Observed;
+        relation R(x: i32); relation S(x: i32);
+        answer(x) :- R(x), S(x);
+    };
+    let options = syn::parse_quote!(order(S, R), no_reduce);
+    let expected = cq_planning::compile_prefix(&source, &options).unwrap();
+    assert_eq!(
+        syn::parse_str::<cq_lang_ra::Program>(observed).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn observed_cq_preserves_embedded_rust_literals() {
+    let observed = mini_linq::compile! {
+        observe { boundary = cq; stage = ::core::stringify; }
+        pipeline {}
+        struct Expressions;
+        relation R(value: i32);
+        relation answer(value: String);
+        answer(format!(" :: ( & * ! > {x}")) :-
+            R(x), let label = " :: ( & * ! >".to_owned(), if *x > 0 && !label.is_empty();
+    };
+    let expected: cq_lang_cq::Program = syn::parse_quote! {
+        struct Expressions;
+        relation R(value: i32);
+        relation answer(value: String);
+        answer(format!(" :: ( & * ! > {x}")) :-
+            R(x), let label = " :: ( & * ! >".to_owned(), if *x > 0 && !label.is_empty();
+    };
+    assert_eq!(
+        syn::parse_str::<cq_lang_cq::Program>(observed).unwrap(),
+        expected
+    );
 }

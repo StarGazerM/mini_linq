@@ -1,0 +1,2133 @@
+# Storage: compressed blocks, summaries, scans and merges (contract 8)
+
+Status: design begun 2026-10-28, with implemented slices and historical evidence
+distinguished below. Audit baseline: `7e187597` (2026-11-02). It governs
+`io/cq-load`, `runtime/cq-storage`,
+`experiments/gpu/{compress,device-columns,datalog-runtime,sequence}` and the
+compiler passes that plan over them. Contract text: `doc/PLANNING-REDESIGN.md`
+contract 8. Numerical observations retain their dated result sources; otherwise
+their source is this document at the audit baseline, not a new measurement.
+Sources (read for the original design; cite them, do not paraphrase from memory):
+
+| Id | Source | Used for |
+|---|---|---|
+| D | Lang et al., *Data Blocks*, SIGMOD 2016, §§3.1–3.4, 4.1 | block = codec + SMA + PSMA + payload; prune → predicate on codes → unpack matches; hot/cold freezing |
+| M | Moerkotte, *Small Materialized Aggregates*, VLDB 1998, §§2–4 | summaries per physical bucket; qualifying/disqualifying/ambivalent grading |
+| B | Kuschewski et al., *BtrBlocks*, SIGMOD 2023, §§2–3; artifact `SchemePicker.hpp` | per-block codec choice by sampling; cascades; statistics are orthogonal to compression |
+| F | Afroozeh & Boncz, *FastLanes*, PVLDB 16, §§1–2.4 | 1024-value vectors; decode to the smallest processable type; fused unpack+decode |
+| Z | Zukowski et al., ICDE 2006, §3.1 | PFOR/PDICT; decode per vector into a reused cache-resident buffer |
+| G | Shanbhag et al., SIGMOD 2022; artifact `binpack_kernel.cuh`, `q11r.cu:70-137` | GPU tile decode fused into the query kernel |
+| K | DuckDB `/data/codex/duckdb-src`: `column_data_checkpointer.cpp:192-352`, `row_group.cpp:775-955`, `compression/{bitpacking,rle,dict_fsst}.cpp`, `physical_hash_join.cpp:1837-1966` | analyze→choose→compress; CheckZonemap before scan; filters on runs/dictionary entries; join min/max/IN/Bloom into probe zone maps |
+
+Existing formal anchors this design extends: `backend.tex` R (STR-Repr, data
+refinement with abstraction α), `backend_ir.tex` BE-Alpha, BE-Code,
+BE-RustRepresentation, GPU-Representation, `incremental.tex` STR-RunRead,
+STR-RunSnapshot, STR-RunCompact, DL-DeviceRatio.
+
+## 1. Does this change semantics?
+
+**No new observable, and nothing above Structures changes.** Every level through
+Structures denotes `T X = ⊥ + Set_fin(X)` (`backend_ir.tex` §"Why one level").
+Compression, summaries, pruning, encoded predicates, late materialization and
+merges are all *representation*: they change ρ and how α is computed, never
+`supp ∘ α`. Each mechanism is correct only under a law. Those laws, and the
+question of which predicates may be evaluated on codes, are where semantics
+actually sits:
+
+| Mechanism | Law (premise) | Where it sits | Who discharges it |
+|---|---|---|---|
+| Block payload | `decode ∘ encode = id` on the column's values | Structures R: a new ρ = `blocks` with α = concatenation of decoded blocks (STR-Repr extension) | codec implementation; tested per codec (round-trip property) |
+| Summary prune | summary of a block **encloses** every value in it (min ≤ v ≤ max under the column's Eq/Ord; strings: truncated prefixes rounded conservatively, as DuckDB `string_stats.hpp:26-65`) | Sequence: pruning is `compact` over blocks; BE-Alpha extension | built in the same pass that writes the payload (§2); never from source-file statistics |
+| Predicate on codes | for `where x op c`: `op(dec a, c) ⇔ op'(a, enc' c)`. Equality needs `enc` injective. Order needs `enc` monotone. | contract 7 `where` denotation "selection by the representation's Eq/Ord" made concrete: the codec declares which ops it preserves | codec declares `preserves = {eq}` or `{eq, ord}`; compiler emits code-domain evaluation only when the op is in the set, else decodes first |
+| Constant translation | `enc'(c)` for a constant absent from a dictionary: equality → empty match; order → rank via lower bound (ordered dictionaries only) | same as above | host, once per invocation (closed operand, contract 7) |
+| Narrow carrier | decoding to the smallest type that holds the column's codes is lossless | Sequence/target representation (BE-Code + layout) | representation width fact; never type spelling |
+| Late materialization | positions are witnesses, not logical columns (`ir_structures.tex:215-219`) | existing STR-Repr positions | already law |
+| Merge/compaction | output blocks represent the same multiset (STR-RunCompact); dedup only where set semantics is recorded (canon) | Storage/Round maintenance (incremental.tex) | merge kernel; summaries recomputed per output block |
+| Join filter on summaries | exact keyset `any_in(lo,hi)` is exact; min/max or Bloom only *admit* (false positives), the exact probe stays | existing STR-JoinFilter | unchanged |
+| Owned fixpoint/helper rows | faithful Clone preserves a projected column value | Datalog `DL-AnswerOwnership`; recursion extension `EXT-AnswerOwnership` records source ownership and uniform owned-head realization before CQ planning | printer consumes recorded realization; rustc checks Clone; no primitive-type list or user-Rust copy recognition |
+
+The **only** genuinely semantic decision is the codec's preserved-op set.
+`where x < c` on a column whose codec preserves only equality (a first-intern
+symbol dictionary; `device-columns/src/encoding.rs:4-24` says IDs preserve
+equality, not order) must decode before comparing. Comparing codes there
+would silently change answers. This is recorded per column representation and
+checked; it is not inferred from a type.
+
+GPU TPC-H authors dictionary identity separately from Rust types in its stage
+DSL: `domain D = dictionary(table.column)` and `column: T in D`. The frontend
+passes that domain to CQ normalization; shared `CodeDomain` /
+`OrderedCodeDomain` runtime dispatch encodes all closed operands uniformly,
+once on the host. The manifest adapter's codes are checked sorted dictionary
+positions, so exact/lower/upper retain their equality and order laws, including
+absent operands. An explicit dictionary producer tests each text value once
+and publishes code rows. Opaque host preprocessing keeps its declared carrier;
+only domain-marked publication columns convert to the device code carrier.
+Terminal text publication consumes the recorded domain and projection slots.
+Rust `.literal`, `.publish`, `dictionary_where` or `date` spellings establish
+none of these representation facts (DR-StageSource).
+
+### TPC-H runtime key domains
+
+TPC-H's loader freezes a shared runtime domain table before projecting inputs.
+Each record owns its minimum, exclusive code bound and significant bit width.
+Offset subtracts the shared minimum; sparse domains use order-preserving Rank
+when span is at least twice distinct membership (`RANK_SPARSITY_THRESHOLD = 2`).
+Membership and rank directories are built on device. Relational storage keeps
+u32 codes, not logical i64 keys. Device Rust reads use the domain descriptor's
+inverse; final host publication uses a lazy inverse mirror. The independent
+Sequential oracle uses the owning host inverse, never device pointers.
+
+Newly computed publications collect exact extrema during encode/gather, then
+reduce all fields in one device launch and one blocking bounds download.
+The descriptor upload is asynchronous. Internal index payload permutations and
+subsets retain source bounds; filtering may make those bounds conservative,
+never tighter without proof. Positions/directories retain proven row/domain
+bounds. Numeric uploads reuse bounds measured before encoding. These paths do
+not allocate publication summaries or reduce/read bounds again. Arithmetic
+does not inherit source bounds. Adoption through `from_plain_buffer` or
+`from_packed_parts` likewise retains supplied bounds. Origin is tracked
+separately: GPU domain key fields must fit 32 bits; computed fields without a
+domain origin and measures/accumulators are exempt. Segmented sorting uses u32
+scratch for measured narrow ranges and u64 only for wide computed ranges.
+
+Known exceptions remain: h04_not_exists and h13 retain host-produced inputs;
+some head copies still pack codes at 32 bits rather than significant width.
+Their authored host preprocessing remains before execution. Host-input upload,
+validation and normalization are load-side and reported as
+`host_input_upload_ms`, separate from base `domain_ms`; e4e08c99 instead charged
+the upload/encoding to execute. Their query index builds remain timed.
+The `experiments/gpu/tpch/compression-*.tsv` files record these gaps, generated
+code and Rust placement, and census-vs-branch index bytes. Their timings are
+single-run sanity observations, not paired performance claims.
+
+Radix indexes remain stricter than the group/canonical computed-field exemption:
+they reject key fields wider than 32 bits, including computed fields.
+
+## 2. Runtime data structures
+
+One **logical layout and byte layout** shared by every reader (CPU, CUDA,
+Metal); **memory placement and ownership are per target** (§11). Arrays:
+```
+Table   = { rows: u64, block_rows: B, columns: [Column] }      // columnar, never row tuples
+Column  = { codec_set: CodecSet, blocks: [Block], summary: Summary /*whole column*/ }
+Block   = { rows: u32, codec: CodecId, payload: Bytes,
+            summary: Summary,                 // SMA: min, max (+count); exact for ints/dates/decimals,
+                                              // conservative prefix for strings
+            psma: Option<Psma>,               // D §3.2, built only if requested by advice
+            dict: Option<DictRef> }           // per-block or shared, see §5
+Vector  = 1024 values inside a block (F); tile = the decode unit a GPU block owns (G)
+```
+
+- `B` (block rows) is a multiple of the vector size so tiles never straddle
+  blocks. Pruning granularity = block; decode granularity = vector/tile
+  (D uses ≤2¹⁶-row blocks with 8192-row scan vectors; these are distinct).
+- Codec trait (runtime, generic): `decode_vector(&Block, v, &mut [Code])`,
+  `decode_tile` (GPU, cooperative), `encode_block(&[Value]) -> Block` that
+  also produces the summary, `preserves() -> {Eq, Ord}`,
+  `translate(op, c) -> CodeConstraint | Empty | All`, `size_estimate`.
+  Codecs: plain, constant, FOR (bit-packed, per-vector base/width), delta-FOR,
+  RLE, dictionary (ordered or equality-only), with BtrBlocks-style cascading
+  later.
+- `Code` is the narrow carrier type (u8/u16/u32/u64) chosen by the codec,
+  not the logical type.
+- **Build** (`encode_block`) reads a source slice/batch once and writes
+  payload and summary together (K builds stats during compression,
+  `bitpacking.cpp:539-550`). Loader stores columnar blocks; rows are never
+  decoded into owned tuples (`cq-load/src/zone.rs` today does exactly that
+  and is replaced).
+- **Copy vs read** (contract 8): scans and index builds borrow blocks. The
+  `Build` protocol gains a re-readable source form (`&Table`, column + block
+  range); the one-shot iterator form stays only for recorded copy reasons:
+  source not retained; mutable between rounds; computed key; reorganization
+  (sort/group); and the target's memory reason (§11: crossing PCIe on CUDA;
+  a source not allocated as a Metal buffer on Mac).
+
+## 3. Scan pipeline (fixed order)
+
+1. **Prune**: for each block, test the conjunction of `where` predicates
+   (and join-filter intervals) against block summaries; three outcomes as in
+   M §3: disqualified (skip), qualified (all rows match: no per-row test),
+   ambivalent (test rows).
+2. **Encoded predicate** (ambivalent blocks): per codec, either evaluate the
+   translated predicate on codes (FOR: residual compare against `c − base`;
+   dictionary: test each entry once, then codes; RLE: test each run once, as
+   K `rle.cpp:561-625`), or decode the vector/tile and test (fused).
+3. **Positions** of matching rows (a selection vector per vector/tile).
+4. **Late materialization**: decode only the columns still needed, only at
+   the selected positions.
+
+Opaque Rust `if` (contract 7) runs after step 4 on decoded values. On GPU it
+runs on device only for identity-represented columns (BE-RustRepresentation).
+
+CPU positional scans retain this order when a static predicate and a join
+filter share a read. Stable identity facts are queried once at construction;
+the iterator selects an identity mode outside its row loop. Each selected
+loop omits identity key extraction and tests the static predicate before
+extracting a surviving row's join-filter key.
+
+## 4. Compiler support (per level)
+
+| Level | Addition | Recorded fact | Consumer |
+|---|---|---|---|
+| Structures | host column representation `blocks { codec_set, block_rows, summary, psma? }` per host relation column | ρ = blocks, α = decode-concat (STR-Repr extension: STR-Blocks) | selection; Sequence lowering |
+| Structures selection | for each `where` on a blocked host column: `prune(summary)`, `encoded(op)` if `op ∈ preserves`, else `decode-then-test` | per-predicate access decision | printers |
+| Sequence | blocked sources: `rows R` over a blocked host lowers to `flatten (map decode_v (compact prune_θ (blocks R)))`; tiles align to vectors | BE-Alpha extension (BE-Blocks): α(blocks R) = α(R); α(compact prune_θ b) ⊇ blocks with matches (soundness by enclosure) | grading, GPU emitter, pull printer |
+| Sequence representation | width of each column's code carrier; codec preserved ops | `representation { identity …; encoded …; width …; preserves … }` | layout/resource accounting, BE-RustRepresentation, encoded predicates |
+| GPU emitter | tile-cooperative decode (existing `decode_stripe`) fused with the predicate; summary skip per vector; narrow lanes from recorded widths | consumes the above; decides nothing (T-Gpu) | — |
+| Datalog Storage/Round | runs as sequences of blocks; maintenance merges blocks (§5) | layout protocol + codec set per run | round printers |
+
+No type inspection anywhere: codec sets, widths and preserved-op sets are
+representation facts produced by the loader/binder catalog and recorded in
+IR (contract 7).
+
+The native GPU boundary records these facts in the provider IR:
+declarations carry `abi range|runs|columns`, `contiguous_range` and
+`bounds resident_columns`; Host instances carry
+`input { keys n; columns [[3] Logical => Storage codec [0] Codec, ...] }`.
+Each `InputColumn` carries `logical_type_id: Option<cq_syntax::LogicalTypeId>`
+and `codec_id: Option<CodecId>` beside opaque logical and codec types, with
+`cq_lang_structures::provider::CodecId(pub u32)`.
+At the Structures declaration boundary, missing ids are interned once by
+opaque token spelling, locally to that declaration context. Repeated automatic
+declarations of the same spelling share an id; explicitly different ids remain
+distinct even when their spellings match. Source `codec Codec` is accepted and
+interned there; recorded forms retain the id. `codec_id: None` denotes identity encoding.
+Sequence and GPU codec lookup use recorded logical ids; source/provider
+logical-id mismatches reject. Obligations, catalog admission and GPU
+compatibility compare recorded codec ids, rejecting conflicts for one logical
+id. Logical and codec types are only printing payloads after interning;
+runtime injectivity and ordering laws remain premises.
+Custom catalog codec capabilities must explicitly name the local id; builtin
+syntactic `Dense` tokens cannot authorize arbitrary declaration-local ids.
+Native run/column scans require input schemas; catalog templates may omit
+them. Binding copies the recorded schema to Built instances rather than
+recovering layout or codecs from provider generic arguments.
+
+## 5. Merging compressed indexes
+
+Two data regimes need different maintenance; both keep α exact.
+
+**Static tables (TPC-H catalog).** Built once; no merge. Codec per block is
+chosen at load by measured size (K analyze, B sampling).
+
+**Growing relations (Datalog full/delta, leveled runs; incremental.tex
+STR-Run*, DL-DeviceRatio).**
+
+- *Tail + frozen blocks* (D §3 hot/cold; K transient vs persistent
+  segments): a round's new rows accumulate in an uncompressed tail with a
+  running summary. When the tail reaches `B` rows it freezes into a
+  compressed block (codec chosen then). Readers of round t see frozen blocks
+  plus the tail snapshot (STR-RunSnapshot unchanged).
+- *Run merge* for **scan-column** runs (index runs stay plain and merge by
+  merge-path, §8) (DL-DeviceRatio threshold unchanged): a k-way merge streams
+  the input runs **tile by tile**: decode a tile of each input into
+  shared memory/cache, merge (GPU: merge-path partitions, as `runs.rs:351`
+  already does on plain words), dedup equal rows only where the run is a set
+  (canon recorded), and feed an **output encoder** that buffers one block,
+  chooses its codec by size, writes payload + summary, and emits it. Inputs
+  are never fully decoded; output summaries are recomputed per block, never
+  merged from input summaries (input blocks don't align with output blocks).
+- *Sorted runs give summaries for free*: for the sort key, each block's
+  summary is its first and last key (LSM fence keys). A lookup binary-searches
+  fences, then decodes one block. Non-key columns keep min/max summaries.
+- *Dictionaries under growth*: not a codec-local choice. Code assignment is a
+  write to shared state that every parallel worker, partition and run
+  depends on; see §10.
+- *Delta-encoded columns*: merges re-encode from decoded tiles; delta state
+  never crosses block boundaries (restart per block/lane, as F §2.3).
+
+Merge correctness is STR-RunCompact (same multiset; set only under canon)
+plus per-block encode laws (§1). Merges never change admission, multiplicity
+or snapshot publication.
+
+## 6. Historical baseline motivating contract 8 (2026-10-28)
+
+This table is the original gap inventory, not today's API inventory. P5 S2
+(`db6d9e5b`, 2026-11-01) added direct Arrow/Parquet/CSV `ScanTable` loaders
+through `ColumnarRelation`/`ColumnarLoader` and `ScanColumnBuilder`; the eager
+`ZoneRows::from_batches` route was removed. This runtime cutover does not
+establish default compiler selection. See `DECODE-AUDIT.md` for disposition.
+
+| Original baseline | Contract 8 target |
+|---|---|
+| `cq-load::ZoneRows` owns decoded row tuples with per-block min/max (`zone.rs:9-15`) | columnar blocks; summaries over the stored payload |
+| GPU catalog fixed FOR for every column (`experiments/gpu/compress/src/lib.rs`, `Catalog::compress`) without evidence | E1 (§12.6) measured FOR as the right default here too; `compress_with` keeps plain/FastLanes DELTA as explicit options; per-block choice remains open |
+| GPU vector headers compute min/max then drop max (`device-columns/src/kernels.rs:33-79`) | keep per-vector summary; use it to skip |
+| per-row device-column `decode`/`decode_u32` into an `i64` carrier (`experiments/gpu/sequence/core/src/rows.rs`, input reads) | tile-cooperative decode fused with predicates; narrow carriers |
+| `AdaptiveKeySet` copies keys (`Vec<K>` staging, `Arc<K>` fallback) | read-in-place builds over blocks; inline keys when a copy is required |
+| zones only under `hypergraph_zone` advice (`STATUS.md:350-352`) | summaries are part of every blocked column; pruning is the default scan step |
+| run merges on plain words | index runs: merge-path over plain arrays + directory rebuild (§8); scan columns: tile-streamed re-encoding (§5) |
+
+
+## 7. Original implementation slices (proposals, not completion claims)
+
+1. Runtime block format + codec trait + summary build (CPU), round-trip and
+   enclosure property tests; loader writes columnar blocks.
+2. Structures/Sequence representation facts (STR-Blocks, BE-Blocks,
+   preserved ops, widths) + selection of prune/encoded/decode per `where`.
+3. CPU scan pipeline (prune → encoded predicate → positions → late
+   materialization) in the pull and task printers.
+4. GPU: device blocks with per-vector summaries, tile decode fused with
+   predicates, narrow lanes, summary skip.
+5. Join filters through summaries on both targets.
+6. Datalog: tail+frozen blocks, tile-streamed merges, dictionary policy.
+7. Index runs (§8): adopt RadixRun as the index-role provider on all
+   targets. The remote provider is now merged; compiler selection remains
+   scoped to recorded eligibility. Standalone AdaptiveKeySet remains for
+   non-Clone interval/hash callers (see `PLANNING-REDESIGN.md` P4), rather
+   than claiming all staging/Arc use has been retired.
+
+## 8. Index runs vs scan columns (RadixRun evidence, 2026-10-28)
+
+Source: merged `origin/codex/all-answers`, extended by P3d provider maintenance:
+`runtime/cq-storage/src/{radix_run,radix_spline}.rs`,
+`experiments/mac/mccl/src/radix.rs`, `doc/MAC-IMPLEMENTATION.md` §§ around
+lines 1530–1700 (M3 Max measurements). RadixSpline: Kipf, van Renen, Stoian
+et al. (aiDM 2020), native port of revision `ab96aa59` (radix12/error32).
+
+`RadixRun<K,V,C=Vec<V>>` retains immutable sorted **grouped** runs:
+`keys: [K]` (one per distinct key), narrow `u32` group offsets when the
+terminal item position fits (otherwise `usize`), explicit payload columns C, and a
+**RadixSpline directory** (radix-12 table + spline points, max error 32).
+A dense presence bitmap is initialized only by membership reads and only
+when span ≤ 2²⁰ bits and ≤ about one byte per key. `OrderKey` is the one
+total injective order-preserving key law, including absent query keys.
+Radix runs require its `u64` ordinal; dense membership may use `u64` or
+`u128`. `KeyCodec` is a sealed policy adapter to that law, not another
+encoding contract; `NoDense` disables numeric directories.
+
+`ItemColumns<Row=V>` is the payload-layout capability. `Vec<V>` keeps the
+existing opaque item column; `(Vec<A>, Vec<B>, …)` stores actual independent
+columns, with tuple layouts supplied through arity twelve. Custom layouts
+implement the same append/position/range-copy law. The selected C is explicit
+in the provider type; compiler index selection records it, never inspects V.
+The Structures fact is `items rows | items columns` on a one-level payload
+build (STR-ItemLayout). The `radix_run` token declares the layout argument
+and both spellings (`items 2 [rows ::std::vec::Vec<_>, columns
+::cq_storage::TupleColumns<_>]`); the recorded instance spelling stops before
+it and the checked analysis prints `C = ::std::vec::Vec<_>` or
+`C = ::cq_storage::TupleColumns<_>` from the fact alone (the tuple of vectors
+rustc derives from V, so no arity is spelled). `radix_runs` records `columns` when the payload
+has 2–12 fields and some probe or merge on the index key carries only part
+of it (the carried columns of `cq_lang_structures::demand`), otherwise
+`rows` (SEL-ItemLayout). Every TPC-H radix payload reader carries the full
+payload, so all TPC-H sites record `rows`.
+`from_column_rows(source,ratio)` builds that selected layout.
+`column_groups(key)` returns each matching columns object and position range
+without reconstructing rows, so consumers can read only a needed field.
+`lookup` materializes requested rows one at a time; `items()` materializes a
+contiguous row view only when that compatibility API is requested. Merge-path
+copies each selected column's group slices, not reconstructed payload tuples.
+
+Measured (M3 Max): lookup + expansion, 262,144 distinct keys, 65,536 probes,
+~50% hits, ms: native RadixRun 2.0–3.4 vs a *packed-occurrence* run with a
+coarse `key >> 20` bucket directory 3.9–18.5 (up to ~7× slower). Dense
+membership 0.056 vs 3.59 (packed) vs 0.52 (hash). GPU build 1.7–11 ms vs CPU
+18–987 ms; GPU merge of a 10% delta 0.9–10 ms (1M–16M rows).
+
+**How this fits contract 8, and what it corrects:**
+
+| Contract 8 principle | RadixRun | Verdict |
+|---|---|---|
+| payload + summaries built together, never from a decoded copy | directory, min/max, bitmap built with the run; readers borrow slices (`RadixRunView` is allocation-free) | follows |
+| summaries enclose / locate values | the directory is a *positional* summary: a PSMA generalization (D §3.2) with a bounded-error law (every present key lies within ±32 of the predicted rank; an exact search inside the window) | follows; adds a new law, bounded error, which construction must guarantee and tests must check |
+| order-preserving encodings as a recorded law, no type inspection | `OrderKey<Ordinal = u64>`: injective, monotone; wider domains use other providers, never truncation | follows (trait-provided, contract 7) |
+| merge recomputes summaries per output | partitioned merge of sorted arrays, then rebuild grouping and directory; old cursors stay valid (STR-RunSnapshot) | follows |
+| **codec per block chosen by measured size** | grouping (RLE of the sorted key column) is the only compression; payload stays plain, byte-addressable | **contradicts §2 for index runs** |
+
+The measurements say what Data Blocks already says ("only byte-addressable
+compression formats … to allow for efficient point accesses", D §3 p.3): a
+packed, scan-oriented representation loses badly on lookup + expansion and
+on merge. So contract 8 distinguishes **two storage roles**, recorded per
+structure:
+
+1. **Scan column** (base relations scanned with predicates): blocked,
+   bit-packed FOR/delta/dictionary/RLE chosen per block by size, min/max per
+   block, prune → code-domain predicate → late materialization (§§2–3).
+2. **Index run** (lookup/probe/expand targets, Datalog runs): sorted and
+   grouped (key RLE), payload byte-addressable (plain, or byte-width
+   truncation per D §3.3 when a measurement shows it pays), positional
+   directory (RadixSpline, or the GPU exact radix-prefix directory;
+   `MAC-IMPLEMENTATION.md` says to choose these by matched build + read
+   measurements), lazy bounded dense membership. Merge = merge-path over
+   plain arrays + directory rebuild. Never bit-packed.
+
+The role is a representation fact chosen by selection from the plan (scan
+vs lookup/expand demand), not by the loader. The same relation may hold both
+(base scan column + index run built from it, reading it in place).
+The runtime index run's own exact membership uses its directory and lazy
+bounded bitmap, without `AdaptiveKeySet` staging or `Arc` copies. This is
+not a guarantee about compiler-selected supplementary indexes: positional
+selection still records a separate adaptive scalar keyset for eligible
+non-lazy semijoins even when a payload index serves the same key
+(`passes/cq-structure-selection/src/positional.rs`). Existing standalone
+adaptive interval/hash providers also remain available for non-Clone and
+unordered-key callers; replacing those selections is not a runtime-only decision.
+
+### 8.1 Ordinary index publication
+
+There is no separate admission/publication protocol or maintenance trait.
+A relation's canonical index is an ordinary member of its index set, chosen
+by index selection (SRDatalog `select_indices`/`canonical_index`); its Rust
+type never records that it is canonical. CQ builds the canonical index once
+from the whole stream through a provider with the `Distinct` capability
+(PL-Distinct; default `dedup::Sort`, see §13, rule 5). Ordinary providers keep
+their own construction and read traits (`Rows`, `IndexRead`, `PointLookup`,
+`Candidates`, `ExactMembership`); `ExactMembership<K>` on grouped providers
+means key existence, never a present complete row.
+
+`HashMap<K,HashSet<V,T>,S>` is an explicit high-fan-out provider: complete-row
+membership is the bucket's exact payload hash lookup, candidate enumeration
+is already distinct, and candidate count reads the bucket length. Inner T and
+outer S hashers are independent. Index selection records this layout rather
+than hiding a specialized algorithm inside a generic provider.
+
+`RadixRun::with_ratio(source,k)` records a provider-local ratio (`k ≥ 2`,
+default 4). The inherent `RadixRun::merge(delta)` (rule IX-RunMerge) is the
+provider's maintenance merge and a multiset union: afterwards reads observe
+the old occurrences plus every delta occurrence, `reads(V ⊕ D) = reads(V) ⊎ D`;
+no disjointness is required. It groups only the incoming delta, appends its
+run, and merges adjacent newest runs until every older run has at least k
+times the next run's item count. Merges use stable merge-path partitions of
+the key directories and copy whole payload groups, rebuilding directories.
+They never reconstruct a `(key,item)` staging array or sort old rows.
+`contains`, `count`, `range`, and `keys` read key directories/offsets without
+items. Copy lookup cursors visit every run directly, without merging.
+The first run's group is resolved eagerly by `lookup`, so a single-run
+cursor supports copied `len()`/`nth()` expansion without another directory
+search. Later runs are visited lazily. Range probes use each run's
+spline-bounded exact search, including absent-key insertion positions.
+Unique-key scans use a streaming k-way merge with O(number of runs) state,
+never an all-key sort; `len`/`key_count` cache the merged count until the next merge.
+Legacy `items()` requests a contiguous merged view lazily; `merge`
+invalidates that cached view. Row scans use the direct cursors in key order.
+Borrowing prevents mutation while any cursor or slice remains live.
+Unit tests in `radix_run.rs` exercise lazy reads, geometric transitions, and
+merge-path boundaries against a stable occurrence oracle.
+
+### 8.2 Device RadixRun (GPU)
+
+`gpu_datalog_runtime::radix_run::DeviceRadixRun<W,O,C>`
+(`experiments/gpu/datalog-runtime/src/radix_run.rs`) is the CUDA counterpart of
+`RadixRun`, with the same grouped storage laws (GPU-RadixRun,
+GPU-RadixPublish, GPU-RadixItemColumns), plus its typed view `RadixLayout`
+(GPU-RadixLayout, GPU-RadixCursor, GPU-RadixLaneRead). GPU CQ built indices
+select `RadixLayout` only through the authored `radix_layout` provider token
+(P4-GPU slice B, below); canonical references select the constrained full-row
+set token (slice C). Datalog layouts use ordinary full-key radix sets (slice D,
+§13.2), with logical lookup keys represented as prefixes of complete row keys.
+Provider choices are recorded upstream, never by type name.
+
+- **Full-row sets (P4-GPU slice C, GPU-RadixSet).** The constrained
+  `RadixLayout<EncodedRow, (), PackedRow, u64, ()>` token builds ordinary
+  complete-key sets, with implicit unit occurrence offsets and a resident
+  live count. It shares stable row ordering with the occurrence engine;
+  equality compares every lane, including middle/high lanes beyond 128 bits.
+  The generic occurrence family does not claim Distinct. `SetBuild` owns
+  ratio, directory resolution, merge tile and compiled block width; the
+  checker validates those obligations without replaying selection defaults.
+  The consumed FOR codec directly records scalar trait or immutable resident
+  domains, which determine the exact lane count at setup without a redundant
+  width classification or hidden provider choice. Fields and lanes retain CQ's low-first equality
+  encoding; it is not the typed layout's lexicographic encoding. Count-gated
+  consumers do not download a host count to construct the publication.
+  Certified sorted unique owned prefixes are adopted without a sort/copy;
+  owners survive later publication and query-cache release. An empty heading
+  stores one zero lane and yields zero or one distinct key.
+  Sorting, permutation, compaction and count scratch grows per thread/pool
+  and is reused on that pool's stream; smaller calls sort only their live
+  prefix. Publications own separate keys and metadata. Query-scope teardown
+  releases scratch with stream-ordered frees, without downloading a count or
+  waiting on the host; direct runtime callers can use `release_set_scratch`.
+
+- **Key law.** `W: Word` (`u64`, `u128`, `[u64; L]`) is the DL-DevicePacking
+  word: most-significant-first lanes are the one `OrderKey` embedding. Keys are
+  stored and compared whole; the directory never truncates them.
+- **Storage per run.** Distinct increasing keys, `keys + 1` offsets in the
+  carrier `O: OffsetWord` (`u32`/`u64`), the item columns `C`, and an exact
+  radix-prefix directory (the GPU directory of §8 role 2, not the CPU spline):
+  `2^r + 1` slot lower bounds of the top `r` bits of `key − min` at the run
+  span's resolution. A lower-bound search inside the probed bucket gives exact
+  present and absent positions; `r = 0` uses plain binary search.
+- **Type facts and parameters, never runtime choices.** `O` is chosen
+  upstream from item-count bounds; builds and merges that exceed it fail
+  (`offset_fits`), with no widening. `C` is `Buffer<T>` (one opaque column),
+  a tuple of layouts (independent columns, arity ≤ 12), or `()` (key-only).
+  `RadixRunParams { ratio, radix_bits, merge_tile_rows, block_threads }` is
+  supplied by the caller. The recorded block width is checked against the
+  kernels' compiled 256-thread contract before construction and retained by
+  snapshots for reads; grids follow GPU-LAUNCH-OCCUPANCY. Scratch is sized by
+  the input/merge row counts.
+- **Build.** The shared stable lane radix permutation
+  (`runs::stable_order`, RCCL pairs radix sort per lane), a group-start flag
+  kernel, RCCL `device_select_flagged` for offsets (over a counting range)
+  and distinct keys (through the permutation), a per-column gather, and the
+  directory kernel. One group-count readback per build.
+- **Publish/merge.** The CPU ratio law: merge the newest runs while
+  `older.items / ratio < newer.items`, so run counts equal `RadixRun`'s.
+  A merge-path kernel (shared co-rank primitives, one
+  strategy for every key width, caller tile size) tags each merged key slot
+  with its source, preceding item count and new-key flag; RCCL selections
+  produce offsets and distinct keys; a load-balanced source map gathers each
+  item column (older groups first). One count readback per merge. A failed
+  merge leaves the published runs unchanged.
+- **Reads.** `snapshot()` returns the current publication's
+  `Arc<RadixSnapshot>`: descriptors, the run-major item column table and a
+  one-entry resident occurrence count are uploaded once per publication on the
+  run's pool stream with no host synchronization, cached until a nonempty
+  publication changes the runs (empty deltas keep it), and retained across
+  later merges and release of the run. Every snapshot has a process-unique
+  identity. `RadixKeysView` holds keys/offsets/directories only;
+  `RadixItemsView` holds item column addresses. Device functions
+  (`radix_run::device`): `search`, `group`, `contains`, `count`, `range`
+  (CPU `RadixRun::range` positions, `(items, items)` when absent; counts, not
+  addresses), `interval` (inclusive key interval per run), `item`, `cursor`,
+  `same_snapshot` and `cursor_item`. Batch host launches: `probe_keys`,
+  `probe_matches` (per-run match cursors) and `probe_intervals`. No dense
+  membership bitmap; that would be a separately selected provider.
+- **Typed view (P4-GPU slice A, GPU-RadixLayout).**
+  `RadixLayout<K, V, W, O, C>` owns one snapshot plus the key packing's field
+  descriptors. `publish(run, packing)` checks the packing against `K`'s
+  scalar schema and `W` (`derive_packing()` builds it), and that each of `V`'s
+  fields is stored in a `C` lane that holds its domain (`LaneKind::holds`:
+  same signedness and at least its width, or unsigned in a strictly wider
+  signed lane; never a narrowing). `republish(run)` returns this layout itself
+  when the run's cached snapshot is unchanged and otherwise shares the field
+  descriptors. `view()` is the key
+  field ABI (`RadixLayoutView`: keys view, field descriptors, packed bits and
+  the resident count pointer) and carries no item pointers;
+  `item_column::<T>(i)` is narrow access to one value field whose lane must be
+  `T`. `count_ptr()` gives count-gated consumers the resident count without a
+  host download, including full-row `radix_set` publications (GPU-RadixSet);
+  `logical_count()` is an explicit
+  synchronizing diagnostic. `owner()` retains runs, descriptors and fields
+  for every stream user; `prefix_interval` gives the packed inclusive interval
+  of a key prefix.
+- **Match cursors (GPU-RadixCursor).** `RadixMatch { snapshot, run, begin,
+  end }`: snapshot identity, run index and the run-local group (the run's
+  `(items, items)` when absent). Expansion never dereferences logical merged
+  positions. `RadixMatches` retains its snapshot as a witness that survives
+  later publications and release of the run and layout; `gather(pool,
+  column, bases, total)` writes each cursor's group of one demanded column
+  from a caller base and rejects columns of another snapshot.
+- **Execution pools (GPU-RadixLaneRead).** Build, merge and snapshot uploads
+  run on the run's own (main) pool stream. Every read names an execution pool
+  that must share the snapshot's memory (`Pool::shares_memory`: the main pool
+  or one of its `Pool::lane`s); probe and base buffers must share it too, and
+  build inputs need only share memory. Shared memory is not a happens-before
+  proof: a lane reads only after fork readiness on the publication stream,
+  results reach main-stream consumers after join readiness, and owners
+  outlive every stream user. The runtime never relaunches a read on the
+  snapshot's own stream.
+- **CQ built indices and smallest (P4-GPU slice B).** The GPU catalog
+  declares `radix_layout = ::gpu_datalog_runtime::RadixLayout<_,_,_,_,_>
+  { reads [exact, range, membership, candidates], build typed, abi radix }`,
+  registered after the existing tokens so unadvised catalog choices are
+  unchanged. Every instance carries authored advice `radix { word W; offset
+  O; ratio N; radix_bits N; merge_tile N }` (GPU-RadixAdvice); nothing
+  chooses these. GPU binding records `ProviderAbi::Radix` with the key and
+  value-lane carriers taken from recorded column types (dictionary codes as
+  `u32`), the advice and the read form of each lookup it serves: whole key
+  (Group), leading prefix (Prefix) or PH-Smallest side (Candidates)
+  (GPU-RadixProvider). The build is `RadixLayout::from_sources` over the
+  resident columns (GPU-RadixSourceBuild: key packing and lane-filling
+  kernels, optional recorded selection, the ordinary grouped build). Reads
+  encode the bound prefix once into an inclusive whole-word interval
+  (`device::encode_prefix`, GPU-RadixEncodedProbe) and expand each run's
+  local item interval; payload values are read from item lanes, not decoded.
+  `device::distinct` counts the distinct keys of an interval over the union
+  of all runs (each key once, in its oldest run; never a per-run sum) and
+  `device::distinct_at` enumerates the same keys (GPU-RadixCandidates).
+  GPU-Smallest records, per PH-Smallest probe, the candidate column, every
+  side in order, exact union counts and first-in-order ties; a side that is
+  not a two-level radix layout with a Candidates read rejects the program
+  (never a First probe). Per bound row the parent counts every side once and
+  picks the first minimum; the choice reaches the candidate children in the
+  recorded position tag (`ChoiceCarrier::PositionTag`: direct-slot bit,
+  choice bits, then the key slot when the chosen side has one run or the
+  distinct ordinal otherwise; builds over `2^(31 - choice_bits)` occurrences
+  are rejected at runtime). Each candidate is kept iff every other side
+  contains it. Only the authored `triangle-smallest` configuration uses it;
+  radix smallest is no default anywhere (1.54× slower than the Range
+  `probe first` triangle on DBLP).
+- **Not yet.** Retain/Expand supports are not declared: the GPU target
+  rejects witnesses and staging, so retained smallest witnesses (L&E) wait
+  for that target feature. The generic occurrence provider does not claim
+  Distinct; the constrained full-key set construction does. Arity
+  above 12 item columns has no `DeviceItemColumns` implementation; builds
+  above `u32::MAX` rows and offset-carrier overflow at a merge are rejected
+  errors (no widening, no chunked build). FOR-coded sources are decoded once
+  during the build (two registered P4 DECODE V sites).
+- **Datalog relation sets (P4-GPU slice D).** EDB, full, delta and frozen
+  negative layouts use `RadixLayout<(all physical row columns), (), W, u64, ()>`
+  backed by `DeviceRadixRun<W, u64, ()>`. The ordinary `radix_relation` token
+  records `NativeAbi::RadixRelation`; a logical key/payload split does not
+  create item columns. Key-prefix reads search encoded intervals and decode
+  only demanded fields from complete keys. `RangeProvider` remains the
+  separate dense-domain provider. The former public `DeviceRuns` and
+  packed-word `DeviceLayout` protocols are retired, not compatibility aliases.
+
+`experiments/gpu/datalog-runtime/tests/radix_run.rs` checks these laws on
+the device with fixed seeds: `u64` keys against `cq_storage::RadixRun`
+(equal run counts after every publication across ratios 2/4/8, batch sizes
+7/127/2048/all, directory bits 0–16 and tile sizes 1–1000), full-domain
+extremes and absent keys, `u128`/`[u64; 3]` keys against a stable occurrence
+oracle, sorted/reversed/single-key inputs, empty providers and batches,
+`u32` vs `u64` carriers and the `u32::MAX` boundary, key reads identical with
+and without item columns, snapshot retention, and parameter/input rejection;
+every read also checks that cursors carry their snapshot identity and run.
+`tests/radix_layout.rs` checks the view's laws (design §4): factorization
+(expanding every distinct key's cursors through both narrow columns gives the
+input multiset) and stable occurrence order across several runs and keys
+spanning runs, at directory bits 0 and 8; snapshot construction without a
+metadata readback and the resident count; republication identity and shared
+field descriptors; retained layouts and match sets exact after later
+publications and release of the run and newer layouts; the zero publication;
+lane reads after a fork event equal main-stream reads, lane-produced build
+input after a join event, and rejection of pools with other memory; empty
+key tuples and all-equal keys; `u128` `(i64, u64)` keys at both extrema with
+present and absent prefix intervals; six unmerged runs; demand of one of
+three value columns, wrong lane types, out-of-range columns and foreign
+snapshot columns; and schema/lane-domain rejection.
+
+`tests/radix_candidates.rs` runs test kernels that mirror the emitted reads:
+duplicate-heavy multi-run lookups through `encode_prefix`/`interval_items`
+equal `cq_storage::RadixRun` stable groups; `from_sources` over Plain columns,
+with and without a reversed selection, equals the CPU build; `distinct`/
+`distinct_at` over four unmerged runs with repeated keys count and enumerate
+each candidate once; random 2- and 3-way smallest over full-domain signed
+`i64` prefixes and candidates (absent prefixes included) matches a
+candidate-set oracle in counts, first-minimum choice and answers; and fixed
+cases cover ties, all-empty probes and an empty side.
+
+## 9. Grouped runs in the compiler's semantics
+
+**A RadixRun is compressed, by factorization rather than by a codec.**
+Grouping stores the relation `R(k, v)` as `⋃_k {k} × V_k`: each distinct key
+once, its payloads contiguous. α is the expansion
+`α(keys, offsets, items) = {(keys[g], items[j]) | offsets[g] ≤ j < offsets[g+1]}`
+(a factorized representation in the d-representation sense; L&E §3.3 notes
+hash tables already factorize the build side on the join key). The directory
+is an access summary on top of it. `RunRows.offsets` now uses four bytes per
+group whenever the terminal position fits `u32`, widening only when needed.
+Keys and payload columns occupy independent arrays. A tuple-of-vector C
+stores multi-field V column-wise without compiler-inspected fields; the
+default `Vec<V>` retains existing opaque payload APIs.
+
+**It is already in the IR's vocabulary.** Sequence's `lookup P [k]` yields a
+match range and `flatten` expands it (BE-Bind). BE-Offsets' offset array
+`o = scan(+,0)(|t_0|,…)` is exactly `RunRows.offsets`. So a grouped run is the
+*stored* form of "group by key, keep the flattened offsets": a published
+range provider whose offsets are precomputed rather than scanned (compare
+the GPU deferred-range dispatch, which computes them with a scan at query
+time). Semantics stay at Structures (ρ = grouped run, α = expansion;
+STR-Repr extension) and Sequence (BE-Bind, BE-Offsets). Nothing above
+changes.
+
+**Laws:** (1) factorization α above (keys strictly increasing under the
+key's order law; offsets nondecreasing, last = |items|); (2) directory
+bounded error: `|predict(k) − rank(k)| ≤ ε` for every present key, with an
+exact search in the window; (3) membership bitmap exact over `[min, max]`;
+(4) merge preserves the multiset (STR-RunCompact), dedup only under canon.
+Building a run requires reorganization (sort/group), which is a legitimate
+reason to write a new layout (a fifth copy reason, alongside §2's four).
+
+**What DuckDB and the papers add, applied to grouped runs:**
+
+| Lesson (source) | Applied to a grouped run | Compiler fact |
+|---|---|---|
+| Evaluate a predicate once per run/dictionary entry, not per row (K `rle.cpp:561-625`, `dict_fsst.cpp:177-235`) | `where k op c` on the key becomes a contiguous **group range** via two directory lookups; no per-row test. A predicate on `k` tested per distinct key, not per payload | access decision `key-range` on the run (like today's Range read) |
+| Expand late / emit dictionary-constant vectors instead of expanding (K dictionary vectors; L&E) | consumers that need only `k`, membership or a count use `(group, offsets)` without touching `items` (semijoin, exists, count = offset difference); expansion only where payload columns are read | Sequence keeps the range unexpanded (`lookup` without `flatten`, or `fold count` over offsets) |
+| Byte-addressable narrowing, not bit-packing, for point access (D §3, §3.3) | offsets as u32 when rows < 2³², keys/items truncated to 1/2/4 bytes relative to the run minimum when measured to pay; never sub-byte | per-component width facts in representation (contract 7: widths from representation, not types) |
+| Late materialization by column (K `row_group.cpp:1035-1088`; D §3.4) | store `items` columnar (one array per payload column) so expansion reads only needed columns | payload column layout recorded per run |
+| Zone maps on non-key columns (K `CheckZonemap`; M §3) | per-block min/max over each payload column, so `where v op c` after a lookup skips blocks inside large groups (duplicate-heavy keys) | summary entries on payload columns, used only when groups are large |
+| Join filters from the build side (K `physical_hash_join.cpp:1837-1966`) | a run as build side gives exact `[min,max]` (first/last key) and exact membership for free; push both into probe-side scan pruning | STR-JoinFilter with exact keys from the run, on every target |
+| Codec choice by measured size (K checkpointer, B sampling) | applies to *scan columns*, not to run components that must stay byte-addressable; offsets/keys may use delta-FOR only in scan-only copies | role fact (§8) decides |
+| Exact statistics for planning (K stats; PL-Evidence) | a run knows key count, row count and max group size exactly at build; publish them as evidence for runtime `choose` (BE-Choose) and grading | published lengths/evidence facts |
+
+P7.2 supplies the CPU runtime implementation, subject to integrated gates.
+`RT-BuildStats` governs O(1) `Option<u64>` accessors: `stat_rows` counts stored
+occurrences, `stat_keys` counts distinct complete stored keys, and
+`stat_max_group`, when requested, counts the largest occurrence bucket (zero for
+a completed empty build). Runs also publish `stat_runs`. Lazy HashIndex reads return `None` before
+finalization and never force it. Multi-run RadixRun rows/run count stay cheap;
+global keys/maxima are `None` unless an existing materialization has established
+them. Segment sums/maxima do not certify overlapping global groups.
+`STR-Construction` records `Ordinary` or `Statistics { rows, max_group }` on
+each Structures provider instance. Omitted `construct` syntax canonically spells
+ordinary construction; explicit demand is written
+`@provider construct statistics [rows, max_group] as Type`. Provider declarations
+state accumulation support as `statistics_build [rows, max_group]`, independently
+of cheap statistic accessor declarations. `stats::record_constructions` selects
+the protocol from matching immutable publications and that declared support.
+The checker verifies each demand bit and its publication witness directly; it
+does not rerun selection. Printers consume the checked protocol, never infer
+`BuildWithStatistics` support from a MaxGroup accessor.
+Ordinary construction emits plain `Build::build` and requests no accumulated
+statistics. Demanded construction emits
+`BuildWithStatistics::build_with_statistics::<ROWS, MAX_GROUP>(source)`;
+`BuildWithSidecar` receives the same recorded mask. Existing lazy boundaries
+remain intact. Demanded initializer dispatch occurs outside the ordinary
+`OnceCell` closure, preserving the baseline hot-loop capture/register shape.
+Unrequested accumulated scalars return `None`; cheap row/key lengths stay
+available. Explicit direct `from_pairs` constructors retain their documented
+statistics-enabled behavior; the ordinary `Build` trait does not.
+
+`RT-RunFilter` exposes `RunFilterSource` / `RunFilterView` over existing sorted
+key arrays: exact point lookup and lower-bound interval tests, OR across runs,
+without key collection or payload enumeration. Explicit borrowed advice requires
+a scalar complete stored layout; a nonleading composite projection is not an
+ordered scalar run. The source token declares `run_filter`; the selected view
+token declares `borrowed_filter`. Explicit attached advice instead declares
+`attached_filter` and uses a `BuildSidecar` incremental builder through
+`BuildWithSidecar::build_with_sidecar::<ROWS, MAX_GROUP>(source, builder)`, publishing `(index,
+filter)` together. The two realization facts are mutually exclusive. Several
+attached builders compose as tuples; Tasks shares the completed publication.
+Routed sidecar finalization merges builders through an owning `Vec::IntoIter`
+map/collect. The unit-sidecar case reuses the original shard allocation rather
+than allocating a second vector of index handles; a pointer/capacity regression
+test checks that reuse independently of query timing.
+The built-in attached token spells `AttachedDenseMembership`, retaining direct
+bitmap construction without changing the default `DenseMembership` probe shape.
+With neither authored realization fact, default construction and activation
+retain main's projected `Build`, `policy abandon P of B keys key_count`
+(`Keys::key_count`), and conditional filter build; a filter without a positional
+base records `policy always`. No built-in heuristic substitutes optional
+statistics or a unit-sidecar build.
+Authored `policy abandon P of B keys ACCESSOR` instead records an
+optional-statistic policy. The checker (STR-FilterPolicy) validates the selected
+provider's exact Keys accessor; `None` selects identity and the statistic read
+never forces construction.
+An authored projected statistic guard finalizes its exact source with a unit
+sidecar at the recorded boundary. Borrowed and attached realizations remain
+explicit advice. Both count ABIs compare widened u128 products without overflow.
+No filter may replace its exact covering join. The activation-enabled candidate
+lost on H05/H21/d72 despite the H09 repair; its 20 paired ratios are retained in
+PLANNING-REDESIGN P7. The P7.3 veto-only cost rule found no departure from the
+recorded incumbent policy (census in that entry).
+Authored routed statistic publication records optional exact key counts through
+`with_disjoint_key_count`; default routed builds do not perform that reduction.
+The borrowed adapter implements `ReadPredicate` only, not
+`ConservativeMembership` (whose blanket implementation would overlap for
+downstream-local key types). `RunFilterPredicate` wraps the optional borrowed
+view and preserves identity when inactive.
+
+P7.1 implements the publication/evidence contract, not runtime population or
+automatic policy: `STR-BuildStats` records provider-declared scalar ABI,
+field/unit/precision, construction and aggregation provenance, immutable
+build/layout identity and authored code-domain epochs. `BE-StatsRead` admits
+typed host scalar comparisons only after the matching completed flat Store,
+with explicit fallback for missing optional values. Accessors are read-only,
+O(1) `Option<u64>` and must not force lazy construction. Code bounds are not
+count operands; overlapping-segment exact keys/maxima require an explicit
+merge/additional computation law. Device and round publication remain separate
+implementation slices. Sequence planning evidence never proves uniqueness;
+compiler input set semantics proves only full-heading uniqueness at Rename.
+
+None of these adds an observable. Each is either a representation law above,
+an access decision recorded in Structures/Sequence, or published evidence.
+
+## 10. Dictionaries and parallel behavior (open decision)
+
+Code assignment is a **write to shared state** read by every worker,
+partition and run. So a dictionary policy is a parallel-execution decision
+first and a compression decision second.
+
+**Today (evidence).**
+
+| Dictionary | Assignment | Order | Writers |
+|---|---|---|---|
+| DOOP `IStr` (`features/datalog/doop/shared/src/interner.rs:35-51`) | first sight, process-global `Mutex` | `IStr` derives `Ord` **on the code** | every `sym()` call locks; loading is sequential today (no Rayon in `doop/shared`), so codes are deterministic only because nothing interns in parallel |
+| GPU DOOP (`experiments/gpu/doop/src/lib.rs:3-5`) | same process-global dictionary | kernels see codes only | host only |
+| device-columns `Dictionary` (`encoding.rs:4-24`) | first sight, `&mut self` | equality only (documented) | single writer |
+| cq-load `StringDictionary` (`intern.rs:1-4`) | lexicographic rank of the full distinct set | order-preserving, deterministic, independent of row order | built once (static) |
+
+**What depends on code values.** Each row is a parallel mechanism the policy
+must keep valid:
+
+1. Code-domain joins and membership need **one dictionary per domain**, shared
+   by both sides. Per-column or per-block dictionaries force translation.
+2. Sorted runs, merge-path and RadixRun sort by code. Merges across rounds
+   need **stable codes**: re-coding means re-sorting every run.
+3. Partition routing (key-partition shards, sharded membership, GPU hash
+   partitions, MCCL partitions) routes by code. Stable codes keep partitions
+   stable across rounds.
+4. Dense bitmap storage benefits from a small ordinal span, not necessarily
+   dense codes in `[0, n)`. `OrderKey` requires only a total, injective,
+   order-preserving encoding (`runtime/cq-storage/src/key.rs`). RadixRun
+   admits its optional bitmap only when the span and bytes per distinct key
+   fit its bounds; otherwise membership uses the directory
+   (`runtime/cq-storage/src/radix_run.rs`, `DenseMembership::candidate` and
+   `Segment::contains`). Gapped codes can reduce density, but do not
+   invalidate `OrderKey` or RadixRun.
+5. `where` order predicates need order-preserving codes, or they decode
+   (§1). `IStr`'s `Ord` is code order, so its order is assignment order: a
+   representation order, which is legal under contract 7 but is not string
+   order.
+6. Determinism: first-sight codes under parallel interning depend on
+   scheduling. Set answers do not change (only Eq/hash are used), but
+   layouts, partition balance, merge shapes, checksums of ordered output and
+   timings vary between runs.
+7. Summaries on code columns: min/max over codes is valid for code-equality
+   probes and join filters under any stable assignment.
+
+**Policies and their parallel behavior.**
+
+| Policy | Parallel build | Stable | Dense | Ordered | Deterministic | Joins on codes |
+|---|---|---|---|---|---|---|
+| A. first sight under a global lock (today) | serializes on the lock | yes | yes | no | only if single-threaded | yes |
+| B. **assign at publication points**: workers intern into local provisional tables; at load end / round end the new strings are sorted and appended; that round's delta is remapped in one pass fused with its dedup/sort | no lock in hot loops; one barrier per round (already exists) | yes | yes | ordered within each epoch, not globally | yes | yes |
+| C. global order-preserving (cq-load today) | parallel sort + dedup | only for static domains (a new value between two codes forces global re-coding) | yes | yes | yes | yes |
+| D. per-block local dictionaries (Data Blocks §3.3) | fully independent per block | per block | per block | yes | yes | needs translation per block |
+| E. order-preserving with gaps (Binnig et al., SIGMOD 2009) | needs coordination | until gaps run out | **no** | yes | yes | yes |
+
+**Direction (to be measured before adopting):** code assignment is a
+*publication*, so it belongs where every other cross-worker write already
+is: round publication (Datalog Round/LayoutProtocol) and load completion.
+- Static domains (TPC-H): C, as cq-load already does.
+- Growing domains (Datalog): B.
+- Scan-only string columns with order predicates and no joins: D is
+  allowed.
+- E rejected (breaks density).
+- Closed constants (`sym("main")`, contract-7 closed Rust) are interned at
+  invocation preparation, a publication point. Translating a constant for a
+  `where` never inserts: an absent constant means an empty match (§1).
+
+**Measurements that decide it:**
+- lock contention of A under a parallel loader;
+- the cost of B's remap per round (DOOP: rounds that create new symbols, and
+  how many);
+- GPU symbol creation (device hash with atomics gives provisional codes,
+  canonicalized at the round barrier);
+- run-to-run determinism of layouts and checksums under A vs B.
+
+## 11. Targets: shared layout, per-target memory
+
+Shared by all targets: the representation and its laws (§1, §9), and the
+**byte layout** of every array, so any processor can read what another
+built. Evidence: on Mac, CPU lookup reads completed Metal allocations
+directly with no second host copy, and the same native CPU RadixRun reader
+runs on CPU-built and GPU-built arrays (`MAC-IMPLEMENTATION.md`, remote,
+around lines 361 and 1678).
+
+Per target: memory placement and ownership, recorded as target facts next to
+launch facts (Sequence layout/resources), never chosen by printers.
+
+| | CUDA (discrete) | Metal (unified) |
+|---|---|---|
+| Allocation | host `Vec` / `cudaMalloc`, separate copies | Metal buffers (shared storage) read by both. No-copy wrapping needs a page-aligned region within one VM allocation; an arbitrary `Vec` is not valid (MAC doc ~819-822) |
+| Copy reason at the boundary | crossing PCIe | none for shared buffers. A copy happens only if the data was not born in a Metal buffer, so loaders should allocate into Metal buffers |
+| GPU-only intermediates | device memory | private storage is lawful for scratch and merge partitions; not measured as reliably faster (MAC doc access-role table ~826-833) |
+| Synchronization | stream/event; download after completion | completion before publication is still required; unified memory does not permit concurrent mutation (~807-809) |
+| What compression buys | PCIe transfer + VRAM capacity + bandwidth | bandwidth only, shared by CPU and GPU (matters for hybrid CPU+GPU execution); capacity is shared with the host |
+| Codec constraint | device decoder suffices for device-only data | a structure read by both CPU and GPU needs decoders on both |
+| CPU/GPU placement cost | transfer dominates | no transfer; hybrid placement is cheap; cost model from `experiments/mac` (mac-cost-model) |
+
+So codec choice and placement are per-target cost decisions over shared laws.
+Two binaries can disagree on whether to compress a column; they cannot
+disagree on what a code means.
+
+## 12. Evidence status: what experiments support, what they refute
+
+The design above is a hypothesis until measured on each target. Codec and
+placement choices are **performance decisions with target-specific cost
+models**. They require controlled experiments; size alone (DuckDB's disk-
+oriented `analyze` rule) is not an adequate objective in memory.
+
+### 12.1 Data-property measurements (TPC-H SF1, dbgen order, 2026-10-28)
+
+Source: `features/workloads/target/bench/data/tpch-1/dbgen.duckdb`. Columns
+are exported to `target/storage-bench/tpch-sf1/` for the benchmarks.
+
+**Zone-map pruning on literal predicates.** Disqualified/qualified block
+fractions; every listed predicate gives 0.000/0.000 at B = 1024, 16384 and
+122880 (DuckDB row group). Examples:
+
+| Predicate | Selectivity | B=1024 | Same column sorted, B=1024 |
+|---|---:|---|---|
+| Q6 `l_shipdate` in 1994 | 0.152 | 0.000/0.000 | 0.848/0.151 |
+| Q14 `l_shipdate` 1995-09 | 0.013 | 0.000/0.000 | 0.987/0.013 |
+| Q4 `o_orderdate` 1993Q3 | 0.038 | 0.000/0.000 | 0.961/0.038 |
+| Q6 `l_discount` .05–.07 | 0.273 | 0.000/0.000 | 0.727/0.273 |
+
+**Join-filter block skipping** (`l_orderkey` against qualifying orders):
+`corr(o_orderkey, o_orderdate) = −0.0005`. A min/max filter spans 100% of the
+key range. An exact keyset skips 0.02% (Q4), 0.00% (Q5) and 3.7% (one-month
+filter, B=1024) of lineitem blocks.
+
+⇒ **Refuted for TPC-H in load order: summaries and join filters skip almost
+nothing.** Skipping needs clustering (a sort or partition order chosen as
+physical design), which then makes pruning ≈ selectivity. Summaries stay
+cheap to build. Their benefit is workload- and order-dependent, so they are
+selected, not default.
+
+**Compressibility** (mean bits per value, 1024-value blocks):
+
+| Column | Plain bits | FOR | delta-FOR | global dict | best/plain |
+|---|---:|---:|---:|---:|---:|
+| l_orderkey | 64 | 10.5 | 5.0 | 21 | 0.078 |
+| l_partkey | 64 | 18.0 | 19.0 | 18 | 0.281 |
+| l_suppkey | 64 | 14.0 | 15.0 | 14 | 0.219 |
+| l_shipdate | 32 | 12.0 | 13.0 | 12 | 0.375 |
+| l_quantity (cents) | 64 | 13.0 | 14.0 | 6 | 0.094 |
+| l_discount (cents) | 64 | 4.0 | 5.0 | 4 | 0.062 |
+| l_extendedprice | 64 | 24.0 | 25.0 | 20 | 0.312 |
+| o_orderkey | 64 | 12.0 | 5.0 | 21 | 0.078 |
+
+⇒ **Supported:** 3–16× fewer bytes are available; most of it is reachable
+byte-aligned (2- or 4-byte truncation). Sortedness is the strongest property:
+`l_orderkey` and `o_orderkey` are sorted, so lineitem already *is* a grouped
+run on `l_orderkey` in load order (§9), at zero build cost.
+
+### 12.2 Is scan bandwidth the bottleneck? (existing measurements)
+
+| Query | CPU SF1 total (`performance_cpu_sf1.tsv`, default) | GPU SF1 / SF10 total (`performance_gpu.json`, advised) | Plain-bytes floor |
+|---|---:|---:|---|
+| h06 | 25.0 ms | 7.4 / 13.4 ms (≈all in reduce/dedup phase) | CPU ≈168 MB at ~15–20 GB/s per core ≈ 8–11 ms; GPU SF10 ≈1.7 GB at 960 GB/s ≈ 1.8 ms |
+| h01 | 2676 ms | 66 / 592 ms (dedup/grouping) | far below; String grouping dominates |
+
+⇒ On both targets the measured time is **not** dominated by scan bytes for
+these queries. GPU is 7–20× above its bandwidth floor and its time sits in
+reduction/grouping. CPU h01 is dominated by `String` group keys, where
+dictionary codes help as *encoded execution* (group/compare on codes), not as
+bandwidth. Compression for bandwidth can pay only after those costs drop.
+Capacity (GPU SF100, Mac shared memory) and PCIe (non-resident) are separate
+reasons, measured separately. [INFERENCE from totals; per-phase profiles in
+§12.3 decide.]
+
+### 12.3 Required experiments (per target: CPU t1/t24, CUDA RTX 6000 Ada; Metal on M3 Max by the Mac checkout)
+
+Protocol: resident data; exact result check on every sample; ≥5 warmups,
+≥21 samples; variants interleaved (ABAB) to cancel drift; median with
+bootstrap 95% CI and ratio CIs; report clocks, other GPU tenants
+(`nvidia-smi`) and machine load; real TPC-H columns plus synthetic width
+sweeps.
+
+| Id | Question | Variants | Output (cost-model parameter) |
+|---|---|---|---|
+| M1 | Scan + predicate + late-materialized sum | plain i64/i32, byte-truncated, FOR bit-packed (widths 4–24), dictionary codes; selectivity 1/15/50% | ns/value and effective GB/s; the crossover where decode cost exceeds bytes saved |
+| M2 | Lookup + expand on a grouped run | payload plain vs byte-truncated vs bit-packed (same directory); offsets u32 vs u64 | probe latency/throughput; confirms or refutes "index runs never bit-packed" without the directory confound in the Mac MacRun comparison |
+| M3 | Merge two sorted runs (Datalog) | plain words vs decode-merge-re-encode | merge GB/s; per-round re-encode cost |
+| M4 | Transfer | plain vs compressed over PCIe + device decode | when compression pays for non-resident data |
+| M5 | Encoded execution | group/compare on dictionary codes vs `String` (CPU h01-like) | group-by throughput |
+| E1 | End-to-end | GPU TPC-H with plain columns vs current compressed default | whether today's GPU compression default pays (measured 2026-11-06 §12.5 and 2026-11-10 §12.6) |
+| E2 | End-to-end | per-phase profiles (CPU `perf`, GPU nsys/ncu) of h01/h06/h12/h14 | where time goes before optimizing storage |
+
+A codec/role rule enters the planner only with an M/E result that supports it
+on that target. Otherwise the default stays plain.
+
+### 12.4 Results (2026-10-28; `experiments/storage-bench/results/{cpu,gpu}-2026-10-28.{md,json}`)
+
+Machine: Threadripper PRO 5945WX (12c/24t); RTX 6000 Ada. Every sample was
+checked exact; ratios are time/plain with bootstrap 95% CIs. GPU: 268
+variants, 6,968 checks, no foreign tenants. CPU: 476 measurements.
+
+| Experiment | CPU t1 | CPU t24 | CUDA (resident) |
+|---|---|---|---|
+| M1 Q6 real columns (SF1 / ×10) | bytes 0.651 / 0.641; plain hand scan 23.8 ms | bytes 0.480 / 0.573 | FOR 0.868 / 0.720; dict 0.881 / 0.737; plain 0.10 / 0.85 ms |
+| M1 width sweep | bytes wins ≤16 bits, loses ≥20; **FOR loses at every width 4–32**; dictionary reconstruction loses everywhere | bytes and FOR win at every width | 60M values: bytes/FOR win at all widths; 6M: lose ≤16 bits (cache-resident regime) |
+| M2 lookup+expand (same directory) | plain ≈ best (bytes/u32 0.960 on partkey only) | plain | plain; bytes/FOR 1.11–1.48× slower |
+| M3 merge sorted runs | decode→merge→re-encode 4.24–4.27× slower | 2.30–2.73× slower | 1.58–1.89× slower |
+| M4 transfer (PCIe) | — | — | bytes + device decode 0.30–0.60× |
+| M5 group on codes vs `String` | **0.061** | **0.084** | — |
+
+**What the evidence decides (supersedes §2's "codec by measured size"):**
+1. **The evidence-free policy default is plain** on every target. A non-plain
+   choice needs a (target, role, access, parallelism) row above that supports
+   it. For GPU TPC-H base columns, E1 (§§12.5–12.6) is that row: device FOR
+   beats plain layouts and size-selected FastLanes DELTA on resident query
+   time for both the manifest loader and the H05 `Catalog::compress` path, so
+   FOR stays the default.
+2. **Index runs and merges stay plain** on CPU and GPU. This confirms §8
+   without the directory confound in the Mac comparison.
+3. **CPU scan columns: byte-aligned truncation, not bit-packing.** Bit-
+   packing pays only when the scan is bandwidth-bound (t24), so the codec
+   choice depends on the plan's parallelism, which is a recorded fact; it is
+   chosen jointly with Tasks placement.
+4. **GPU: compression is for transfer and capacity** (1.7–3.4× on PCIe).
+   Resident scans gain 13–28% at SF10 scale and can lose on cache-resident
+   inputs. End to end (E1, §§12.5–12.6), plain base columns are 1.12–1.18×
+   slower than FOR over the 26-query suite; FOR is a resident win as well.
+5. **Encoded execution beats compression.** Grouping/comparing on dictionary
+   codes is 12–16× on CPU. This is contract 7's `encoded` representation
+   (`where`/group/join on codes), not a storage codec, and it is the largest
+   measured storage-adjacent win.
+6. **Summaries are not default** (§12.1: TPC-H load order prunes nothing).
+   They are built only for a clustered order or recorded workload evidence.
+
+**Engine gaps dwarf codec effects** (same queries, same machine):
+
+| Query | Engine today | Hand microbenchmark | Gap |
+|---|---:|---:|---:|
+| h06 CPU SF1 | 25.0 ms (default) | 23.8 ms plain, 15.5 ms bytes | ≈1.05× (storage is the remaining lever) |
+| h06 GPU SF1 / SF10 | 7.4 / 13.4 ms | 0.10 / 0.85 ms plain kernel | **74× / 16×** (reduce/dedup phase) |
+| h01 CPU SF1 | 2676 ms | 18.8 ms `String` group count+sum (M5 is a narrower kernel than h01) | ~140× [INFERENCE: not storage; needs a profile] |
+
+So storage work pays on CPU scan-bound queries (h06-like: ~1.5×), while
+GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
+(§12.3 E2) before storage slices.
+
+**P5 S1 runtime boundary.** `cq_storage::scan::ScanColumn<T, Plain|Bytes>`
+stores immutable 1024-aligned blocks, a contiguous eight-byte-aligned payload,
+per-block headers (byte offset, ordinal base, row count, width and codec), and
+optional exact min/max ordinals. `Bytes` deterministically uses constant/u8/u16
+FOR residuals only when narrower than the native ordinal; larger spans stay
+plain. `Plain` always retains native-width ordinals. No packed family ships in
+S1. `OrdinalDecode` extends the existing order embedding, including Date,
+Decimal and StringCode in cq-load; dictionaries retain their domain law.
+Encoding collects ordinals and extrema together in one input pass per block,
+then emits the chosen width from reusable block scratch: summaries never scan
+a decoded copy. Vector decode writes into caller-owned storage. Point,
+open/closed window and membership filtering compares ordinal codes after host
+constant translation, prunes only when summaries were requested, and emits
+ascending occurrence positions or caller-owned selection bytes. Membership
+translation borrows the original ordinal keys plus the block frame: readers
+test `base + residual` without allocating or copying keys per block. The checked
+reader returns immediately for an empty live prefix after validating the domain
+and output length. Width and predicate variant dispatch are outside the row
+loop; byte/word range masks use
+branch-free native-width comparisons (release x86-64 assembly contains packed
+byte min/max and packed word comparison/pack loops). RT-ScanCodec,
+RT-ScanSummary and RT-Translate also check masks against decoded oracles.
+S1 does not select blocks in the compiler. S2 adds the runtime loader below;
+compiler selection, positional traits and late materialization are later slices.
+
+**P6 A shared-format boundary (opt-in).** The shared S1 format extends this
+runtime boundary rather than reinterpreting the existing GPU FastLanes
+headers: S1 offsets and widths are bytes, and S1 ordinal bases are not the
+older device codec's signed frames. Plain and Bytes retain their S1 payload
+meaning. The format records domain, layout, family, carrier and fresh immutable
+snapshot identity. `ScanColumnBuilder::with_domain` binds the provider domain
+before accepting values; later descriptors and uploads reject domain/version/
+law rebinding. Legacy CPU-only builders remain unbound and cannot expose device
+descriptors. Optional per-vector extrema are collected during encoding,
+including partial vectors in larger blocks, not by reconstructing a logical
+column afterward. Metadata validation checks the recorded descriptor and
+extents independently of the encoder; metadata validity is not a proof of
+arbitrary imported payload integrity.
+
+The device path enqueues initialized bytes and needed metadata through
+pool-owned pinned staging (`from_host_async`), retains owners, and records
+readiness after the last upload. A cross-lane view waits on that event;
+membership-key uploads and the consuming mask kernel are ordered on its
+execution lane. Neither upload nor filtering synchronizes the host, and
+short-lived predicate keys may be changed or dropped after submission.
+
+The shared mask kernel has a fixed, declared launch contract: 256 threads,
+1024-row S1 vector tiles, no dynamic shared memory, and
+`min(ceil(live_count / 1024), 568)` grid blocks. Zero live rows launch nothing.
+Capped grids cover subsequent vectors by grid stride, including a partial
+last vector. The 568-block cap is a kernel constant, not an occupancy query
+or an unrecorded runtime selector; this contract does not add compiler scan
+selection or a general tile scheduler.
+
+Runtime facts do not grant permission to reconstruct authored Rust values: Structures read
+records own consumer, lineage and purpose. `contract::check` always checks
+the encoded envelope when present; no pipeline carries unchecked packets.
+Preserving a carrier, an opaque Rust read and a final host answer are distinct
+purposes; transport alone is not final-answer authorization. New records are
+printable facts, not printer selection or Rust/type inspection.
+
+This is a slice-A substrate, not default compiler selection or the full
+cooperative-scan slice. FastLanes is not selectable through the shared format;
+its existing callers are unchanged. Predicate-mask validation extends the
+existing translation obligation, not a claim of complete tile scheduling.
+No P6 V-site retirement (the ledger remains 74), changed default target
+expansion, or performance improvement is claimed. Transfer/intermediate and
+grouped-index caller cutovers, automatic ranking and measurement remain later
+work; the historical measurements above are not results for this slice.
+
+Slice-A law/fixture anchors are `STR-DeviceBlocks`, `GPU-VectorSummary` and
+`GPU-LateRead` in `runtime/cq-storage/src/scan_format.rs`, and
+`GPU-BlockTransfer` in `experiments/gpu/device-columns/src/scan.rs`.
+`runtime/cq-storage/tests/scan_format.rs` covers shared-format round trips,
+enclosure/translation, independent metadata rejection and retained positional
+reads; `experiments/gpu/device-columns/tests/shared_scan.rs` covers uploaded
+bytes, host/device masks and retained publication. Root and locked sm_89
+storage/Sequence tests passed for this slice. Device predicate masks use
+`RT-Translate`; no full-slice tile-predicate or narrow-carrier rule is claimed.
+`STR-CarrierRead` is checked in
+`languages/cq-lang-structures/src/encoded.rs`; its fixtures are in
+`languages/cq-lang-structures/tests/encoded_contract.rs`. Original
+provider/domain/consumer obligations are checked against selected records,
+not by rerunning selection. Plain storage of dictionary codes is not semantic
+identity. Opaque device Rust requires an explicitly identity-represented
+provider; final-answer authorization requires an actual host answer consumer.
+Exact demanded field/buffer coverage and retained lineage are checked while
+concrete count/capacity/events/owners remain Sequence/GPU-owned facts.
+An absent encoded envelope is a vacuous check and leaves ordinary program
+printing and selection unchanged.
+ 
+**P6 C resident FOR-native tiles.** This realization consumes the existing
+1024-row GPU vectors directly; it does not select or construct S1 blocks.
+`SourceAccess::Tiles(TileScan)` records a resident source and positional
+Rename/Select/Point/Range/Guard/Bind/Project spine ending in a keyless grid
+fold. An independent realization checker validates the record without
+replaying selection. Admission is automatic, with no advice knob; all other
+shapes retain their ordinary expansion.
+Tile bound captures retain GPU-Capture's source-domain gate: an empty source
+passes an unused zero argument without evaluating the captured expression.
+
+One 256-thread block handles a vector, grid-striding over vectors. Each
+thread visits four physical transposed positions, shared across columns,
+and masks the partial vector's non-live positions. This permutation requires
+order-insensitive consumers. Every partial and combine addition remains
+checked, so an unflagged result is exact and never wraps. Overflow flagging
+is incomplete: physical order can change which cancellation-heavy sums flag,
+just as occupancy-dependent partitioning already can. No envelope or overflow
+rejection premise is introduced.
+
+`GPU-TilePredicate` and `GPU-NarrowCarrier` preserve Physical predicate
+order. Closed Select/Point/Range captures become per-vector code intervals:
+FOR clips bounds relative to the signed base without overflow or per-lane
+base addition; Plain compares directly. Delta and native-headerless inputs
+dispatch to their correct logical decode. Empty/full intervals, strict
+endpoints, zero/full widths and tail vectors retain exact predicate truth.
+Guard/Bind source demands carry checked `rust_reads` (DECODE R), and reconstruct
+only survivors whose values have not already been loaded. Residual relational
+predicates and direct aggregate source operands retain demand-only survivor
+loads at registered DECODE V sites; subsequent consumers reuse those values.
+The shared inverse helper is DECODE ?. Semantic identity eligibility is
+unchanged. There is no host repacking or second storage format, and the ordinary
+source-scan V site retains its non-admitted callers.
+
+Local acceptance (2026-11-10, RTX 6000 Ada): the 52-module census against
+`ef6ca71a` changes only h06's filtered sum, h11 stage 2's Stock total, and h15
+stage 1's Revenue maximum, at SF1/SF10. The other 46 generated modules are
+byte-identical; all 52 Physical/Structures/Sequence plans are unchanged.
+The affected block-reduction tails are unchanged. h15's Revenue input remains
+FOR under every base-codec choice: `GroupedRows::into_columns` gathers the
+native strided group output into `EncodedColumn::from_gather_source`, which
+publishes packed FOR headers. Thus the tile read takes its FOR path, not the
+native fallback; base-codec only selects original table inputs.
+
+All 26 queries passed complete warmup and first-measured answer comparisons at
+SF1. h06, h11 and h15 additionally passed SF1/SF10 with each of `for`, `plain64`,
+`delta` and `native`. Later benchmark invocations use the existing sampled
+policy, so this is full-first exactness, not an all-samples-full JSON flag.
+The 81 Sequence-core and 20 device-column tests passed, including empty-source
+capture gating, all widths, extreme intervals, partial transposed tails and
+exact payload-load counters.
+Paired timing (2026-11-10, fresh rotated processes, paired bootstrap 95% CI,
+[evidence](../experiments/gpu/compare/p6c-2026-11-10.results.json)): h06
+resident total 0.771× [0.743, 0.796] at SF1 (0.116 → 0.089 ms) and 0.809×
+[0.808, 0.811] at SF10 (1.015 → 0.821 ms, CPU-exclusive; GPU-only 0.811×).
+Across the 26-query SF1 suite (main `ef6ca71a` vs tiles + slice L, 5 rounds,
+no foreign GPU work) the geomean is 0.991× [0.989, 0.993]: h06 0.766×; h11
+0.999× and h15 1.006× (their tiled stages are a small part of the query);
+every other query is within [0.997, 1.007].
+
+**P5 S2 columnar input boundary.** `ScanColumnBuilder<T, F>` retains at most
+one block of ordinals per ordinary column and collects extrema while accepting
+input. A full block flushes directly into the S1 payload; a partial block
+continues across Arrow/Parquet or CSV batch boundaries. `ScanTable` validates
+equal column lengths and block sizes. No tuple vector or post-load summary pass
+is needed. The source's Parquet statistics are not trusted as converted-value
+bounds.
+
+`columnar_relation_loaders!` and `interned_relation_loaders! { columnar; ... }`
+declare each field's family explicitly (`day: Date @ bytes`, `id: i64 @ plain`);
+they generate `ColumnarRelation` implementations and typed `ColumnarLoader`
+aliases. Block rows and optional summaries are explicit loader arguments.
+`ColumnarField` trait dispatch, not Rust type-name recognition, selects ordinary
+scalar loading or string-code interning. Interned columns retain temporary
+integer codes plus distinct dictionary entries until sorting finalizes the
+domain. The remap pass writes final codes into block payloads and computes
+their summaries; it never materializes row tuples or resolves codes to strings.
+Dictionary publication happens only after all source batches succeed.
+
+`zone_parquet` and `zone_tpch` now load scan columns and compare predicates in
+the encoded domain. `ZoneRows::from_batches` is removed; existing row hosts
+retain `ZoneRows::from_rows` until their later cutover. The three CSV
+hash/btree decode violations still await P4 encoded index keys; CSV scan loads
+have a direct columnar route. No query compiler or workload-default selection
+changes in S2.
+
+**Offline dataset statistics.** `cq-load` also provides the `cq-stats` binary:
+
+```text
+cargo run -p cq-load --bin cq-stats -- stats \
+  --request stats-input.json --dataset DATASET_DIR --out evidence.json
+cargo run -p cq-load --bin cq-stats -- check --evidence evidence.json
+```
+
+The versioned request (`mini-linq.stats-input.v1`) names the dataset/date/
+formulation, mandatory `hash_mode: "typed-row-stream-v1"`, distinct mode
+(`"exact"` or `{"hll":{"precision":14}}`), a vector of relation inputs, and
+metadata files. Each relation input supplies a `RelationSpec` (name, ordered
+named/domain columns, bag/set semantics, optional composite `key_sets`), a
+relative path, effective `SourceOptions`, and explicit `missing_as_empty`.
+Metadata entries name a relative path and `metadata`, `constants` or
+`dictionary` role. Unknown fields, duplicate names/files, unsupported modes
+and invalid schema/options are errors, not missing statistics.
+
+`stats_source::visit` uses the same CSV/Parquet readers, column mapping and
+bounded `Batch` conversion as ordinary row/columnar loading; dynamic schemas
+do not require leaked names or tuple-arity-limited ScanTables. `literal_tabs`
+means tab-delimited unquoted records, skipped empty lines, CRLF support and
+exact arity. Parquet requires the existing `parquet` feature.
+Supported scalar conversions are signed i64, exact i64-backed decimal scales
+0–18, Gregorian dates with `days_since_unix_epoch`, UTF-8 and dictionary-bound
+u64 symbol codes. Unordered opaque domains are rejected; unordered symbol
+codes retain equality counts without extrema. Nulls follow normal loader
+rejection.
+
+`RelationAccumulator` computes exact row/distinct/degree/extrema facts in one
+decoded traversal. Set mode deduplicates **complete tuples**, not individual
+columns. Composite degrees retain correlations. Frequency maps and optional
+dedup sets are released into a compact `RelationSummary` after each relation;
+only final summaries wait for the dataset identity. HLL consumes the full
+stream without sampling, records an observation with algorithm/precision/seed
+provenance, and never replaces exact max-degree with an estimate. It does not
+save frequency-map memory while exact degree is requested.
+
+Data content hashes cover the typed, length-framed decoded row stream,
+including original order and duplicates **before** set deduplication.
+Metadata/constants/dictionaries retain raw-byte SHA-256. The manifest also
+binds column order, domains, encoding and effective loader options. This is
+semantic input identity, not physical CSV/Parquet byte identity. Exact byte
+framing and the required hash-mode constraint are specified in
+`doc/planner-evidence.schema.json`; the evidence checker rejects missing or
+different modes even if the manifest digest was recomputed.
+
+The command validates the final provenance-bearing evidence before atomic
+publication and never executes a query, estimates recursive final sizes or
+rounds, supplies target h/m constants, or selects a plan. Input-only evidence
+leaves those facts unknown.
+
+With `planner-calibration` nothing observes the input as it loads
+(PLANNING-REDESIGN, PS-After): a completed run is bound to its evidence by
+the rows each requested input relation holds, and the degree facts of its
+relations are the only facts it adds.
+
+
+**P5 S3 authored CPU checkpoint.** `select(blocks(R { block_rows 1024;
+summary none; columns [a: plain u64, b: bytes u32]; }))` binds explicit
+declaration-order column facts to the existing Structures encoded contract.
+Plain/Bytes family, native carrier, allowed residual widths, preserved equality
+and order, logical/domain IDs, immutable source identity, exact predicate
+strategy and demanded consumers are recorded facts, not Rust type inspection.
+The loader's `ScanTable::bind_domains` binds the same explicitly declared
+domain identities without copying or reencoding payload. Runtime premise checks
+validate the actual source family, width, geometry and domain before scanning.
+
+Sequence's printable `representation { blocks { ... } }` records bounded
+vector scans, native positions, scratch, predicate phases, fused predicate
+runs and read-consumer IDs. Independent STR-Blocks/STR-BlockPredicate/
+STR-PreservedOp and BE-Blocks checks validate legality without replaying
+selection. Adjacent total predicates share one reused 1024-row mask; fusion
+does not cross an opaque Rust boundary. Pull and Tasks emit this same protocol.
+Tasks partitions aligned, clipped source ranges rather than collecting the
+whole source or running a whole-column filter per task.
+
+The runtime exposes typed column slots, lazy bounded position streams and
+separate ordinal versus authorized logical reads. Canonicalization gathers
+its demanded ordinal keys once, retaining representative carriers; it does not
+deduplicate by row position or repeatedly reconstruct keys during sorting.
+Opaque Rust reads create only their demanded owned locals after filtering.
+Final publication has its own read purpose. Physical decoding to a retained
+ordinal carrier is not a new semantic predicate/string-decoding exception.
+
+An aggregate extension's inner row stream is not final host publication.
+Its checked key/measure context derives which head values the outer fold
+actually reads; typed continuation transport binds that requirement into
+Structures without introducing `consumer = canonical`. Ignored witness
+columns publish their injective global value codes, with an independently
+checked PreserveCarrier action. Equal values remain equal codes, so duplicate
+value rows still collapse correctly; no row-position substitution or primary-key
+premise is involved. Captured and computed values retain their existing
+ownership. Outer folds demanding encoded base values remain a checked
+unsupported ownership boundary of this initial checkpoint.
+
+The independent P5 salvage hardens this boundary without adding joins.
+Every encoded predicate leaf must name a declared column's translation domain;
+closed-only predicates are rejected rather than interpreted by emission.
+Block and vector min/max are distinct recorded capabilities: runtime accesses
+only the selected level and refuses a missing buffer, even if the other level
+exists. Structures owns the provider's vector extent; Sequence scan references,
+task alignment and emitted scan/filter calls consume it without duplicate
+tile/scratch declarations. Existing blocked canonical boundaries require
+`ComparatorRows`, not a provider token spelling.
+Authored `summary minmax` selects block summaries; `summary vector_minmax`
+selects vector summaries. `summary none` accesses neither buffer.
+
+Only Q06 has authored `blocks-plain`, `blocks-bytes`, and corresponding `-par`
+routes at this checkpoint; default, `par`, and explicit `row-par` remain row hosts.
+Its quantity/discount/date predicates are all `where`; the retail H06 opaque
+numeric guards are not rewritten. Initial admission rejects join/index
+boundaries, grouping directly on encoded base fields, restricted source
+renames and undischarged host-set verification in the checker, with negative
+fixtures. Those integrations remain open; there is no decoded-row fallback.
+The P5 planning entry tracks this staged boundary and its measurement decision.
+
+The new 29-kernel SF1 census at B=1024 finds no summary-disqualified static
+predicate blocks in physical load order. H01 has six fully qualified lineitem
+blocks; D72/D85's positive available-quantity test qualifies all 782 partsupp
+blocks. Q06's three predicate-column payloads can shrink from 120,024,300 to
+30,006,075 bytes under the shipped Bytes width policy, excluding headers and
+summaries. These are data-property/size observations, not measured CPU traffic
+or an end-to-end speedup. Summaries remain off in the Q06 comparison.
+
+**Measured Q06 decision (SF1, five interleaved process pairs per comparison,
+five warmups and 21 exact samples per process, versus `4dd291be`):**
+
+| Route | Blocked Plain / row time [95% CI] | Blocked Bytes / row time [95% CI] | Row -> Bytes median ms |
+|---|---|---|---|
+| serial/default | 1.746 [1.728, 1.771] | **1.112 [1.097, 1.130]** | 23.063 -> 25.427 |
+| Tasks, 24 workers | 1.049 [0.928, 1.151] | **0.766 [0.719, 0.843]** | 10.320 -> 7.560 |
+
+Ratios are geometric means of paired process-median ratios, not ratios of
+the separately reported aggregate medians. Same-source linker-shuffle Bytes
+controls are 0.960 [0.936, 0.986] serial and 1.016 [0.901, 1.158] parallel.
+The small current-row/old-row serial difference (1.008) is not attributed to
+an algorithm: same-source row layout controls alone move it by about 2.5%.
+All 2,520 timed answers and 600 warm answers are exact, with zero process major
+faults. Serial row/Bytes process minor faults are 73,391/46,493 and peak RSS
+296,156/184,764 KiB. Parallel query minor-fault medians are 18/18 in the paired
+row/Bytes comparison; full ranges and load times are retained in the evidence.
+
+Bytes beats blocked Plain but **does not beat the existing serial row host**.
+Stop the authored rollout at Q06, retain the mechanism/tests and existing
+defaults, and do not extrapolate the parallel gain to other kernels.
+The legacy scan counters do not instrument the new bounded protocol; their
+zero row-test/block counts are not evidence of zero work or DRAM traffic.
+Raw samples, page faults, controls, exactness/counter gates, source/binary
+identities and command times: `experiments/storage-bench/results/p5-s3-q06.json`.
+
+**Salvage branch measurement (2026-11-11; not merge acceptance).** Baseline
+`1270d38b` fixes main's evidence-before-aggregate dispatch bug; candidate
+`0f3a9b5a` adds only the salvage. Five interleaved fresh-process pairs per
+same-route comparison, five exact warmups and one exact resident sample per
+process, CPU-exclusive lock per process, Tasks-24. Loading is excluded from
+query time. Ratios below are candidate/baseline, **not Bytes/row**.
+
+| Route | Resident ms baseline → candidate | Ratio [paired bootstrap 95% CI] | Load ms baseline → candidate |
+|---|---|---|---|
+| Row serial | 22.774 → 23.353 | 1.023 [1.020, 1.025] | 564.295 → 560.696 |
+| Plain serial | 38.202 → 38.591 | 1.006 [0.990, 1.020] | 669.517 → 659.787 |
+| Bytes serial | 24.568 → 29.113 | **1.175 [1.073, 1.287]** | 638.407 → 630.967 |
+| Row Tasks-24 | 10.086 → 9.863 | 1.000 [0.895, 1.078] | 562.906 → 566.294 |
+| Plain Tasks-24 | 11.073 → 11.255 | 0.973 [0.939, 1.006] | 668.975 → 661.610 |
+| Bytes Tasks-24 | 7.679 → 10.151 | 1.213 [0.999, 1.455] | 654.116 → 648.556 |
+
+All 60 timed answers and 300 warmups were exact. This first checkpoint blocked
+merge while the same-route serial Bytes slowdown was unresolved. The original
+samples and incomplete-at-that-time gate accounting remain unchanged in
+`experiments/storage-bench/results/p5-salvage-q06.json`; the investigation below
+supersedes that checkpoint's unresolved status.
+
+**Isolation and final hardening (2026-11-11).** Capability validation moved to
+the typed `ScanColumn` boundary, retaining missing-summary refusal even for
+empty/dead masks. Authored `None` specializes away there. The private kernel
+again checks empty/live lanes before summary dispatch. No dead generated checks
+or linker flags were restored. Measured revision `ad5aa38a` rebases to
+`43857cd5` on main `61b73315`; baseline `1270d38b` is the source-equivalent
+evidence fix now on main as `0464ff89`.
+
+`nm -S`, `rustfilt` and bounded-symbol `objdump -d --no-show-raw-insn` establish
+that all ten reachable row functions and fourteen of fifteen reachable
+Plain/Bytes functions have identical normalized instructions. The sole changed
+function, `cq_storage::scan::intersect_vector`, has the same Q06 `None` branches
+and hot loops, with one fewer entry register move; non-None exact summary paths
+intentionally differ. `ScanPositions::next`, the typed boundary and SIMD mask
+loops are unchanged: no runtime vector geometry, extra Plain check or lost
+vectorization survives compilation.
+
+Nine interleaved process pairs per final same-route comparison give:
+
+| Route | Candidate / baseline resident ratio [95% CI] |
+|---|---|
+| Row serial | 1.00244 [1.00010, 1.00498] |
+| Plain serial | 1.058 [1.042, 1.074] |
+| Bytes serial | 1.039 [0.982, 1.097] |
+| Row Tasks-24 | 0.952 [0.886, 1.034] |
+| Plain Tasks-24 | 0.963 [0.876, 1.061] |
+| Bytes Tasks-24 | 0.999 [0.862, 1.155] |
+
+The row interval strictly excludes one, despite identical code; its 0.24%
+difference is smaller than the baseline row linker control
+0.994 [0.974, 1.013]. Baseline Plain controls alone do **not** explain its
+5.8% gap: sort-section gives 1.008 [0.994, 1.021], shuffle seed 503 gives
+1.012 [0.988, 1.032]. Relinking the **unchanged candidate** resolves the open
+question: Plain is 1.024 [1.016, 1.032] with sort-section and
+**0.995 [0.969, 1.013]** with shuffle 503. Thus the original candidate placement,
+not added boundary work, explains the observed Plain regression. These controls
+are evidence, not production tuning. Serial Bytes is likewise placement-sensitive
+at roughly 5–9%; its baseline linker control is 1.032 [0.989, 1.079].
+
+Five fresh-process pairs per cross-layout comparison on the final candidate:
+
+| Comparison | Resident ratio [95% CI] | Row → candidate query ms | Row → candidate load ms |
+|---|---|---|---|
+| Plain / row serial | 1.762 [1.728, 1.789] | 22.681 → 40.104 | 562.788 → 669.212 |
+| Bytes / row serial | 1.170 [1.132, 1.212] | 22.815 → 27.024 | 560.497 → 652.859 |
+| Plain / row Tasks-24 | 1.058 [0.963, 1.162] | 10.058 → 11.727 | 564.856 → 672.026 |
+| Bytes / row Tasks-24 | 0.762 [0.701, 0.859] | 10.510 → 7.753 | 562.785 → 653.654 |
+
+Every follow-up process checks five warmups and one resident sample: 404 timed
+answers and 2,020 warmups are exact. Each process holds the CPU-exclusive lock
+only for that sample process; load and answer comparison are outside query time.
+Paired bootstrap resamples processes, not warmups. Plain is not a serial win;
+Bytes wins resident Tasks-24 but has greater loading cost. **Keep default/par
+row-backed; promotion remains Main's decision.** Complete source/binary
+identities, item-reversion controls, assembly extraction/diffs, load times and
+bounded correctness/quick/API/GPU host-compile gates:
+`experiments/storage-bench/results/p5-salvage-isolation.json`.
+
+S1 microbenchmark (`experiments/storage-bench/scan_bench.py`, raw
+`results/p5-s1-scan-vectorized.json`): 4,194,304 and 67,108,864 u64 values,
+8/16-bit spans, 16,384-row blocks, summaries off. Five interleaved pairs,
+each with five warmups and 21 checked samples, hold the timing lock throughout.
+Filter sums surviving occurrence positions; mask writes one 0/1 byte per row
+on both Vec and encoded routes, checking its positional checksum outside timing.
+Both receive runtime bounds (inclusive domain/6 through domain/3).
+
+| Rows / residual | Callback filter Bytes/Vec time [95% CI] | Mask Bytes/Vec time [95% CI] | Mask input GB/s Vec / Bytes |
+|---|---|---|---|
+| 4M / u8 | 0.976 [0.970, 0.982] | 0.0494 [0.0476, 0.0497] | 14.38 / 36.74 |
+| 4M / u16 | 0.926 [0.888, 0.936] | 0.1049 [0.0981, 0.1096] | 14.40 / 34.37 |
+| 64M / u8 | 0.951 [0.916, 0.959] | 0.1323 [0.1249, 0.1370] | 14.06 / 13.28 |
+| 64M / u16 | 0.886 [0.848, 0.899] | 0.1979 [0.1899, 0.2008] | 14.16 / 18.23 |
+
+Both shipped compressed widths beat Vec in both interfaces. The 64M mask
+outputs add 64 MiB of writes; input bandwidth excludes those writes and is
+payload/time, not measured DRAM traffic. The plain input is 512 MiB, encoded
+u8/u16 input 64/128 MiB. Callback scans remain compute-heavy (encoded input
+2.20/4.72 GB/s at 64M); bulk masks expose the narrow-lane bandwidth benefit.
+4M/u16 encode versus Vec clone is 0.778 [0.761, 0.793], 342.2 versus
+264.6 Mrows/s; vector decode+checksum versus Vec checksum is
+0.768 [0.735, 0.833], 5280.3 versus 4056.8 Mrows/s.
+
+One-minute load was 16.8–25.7; these are not quiet-machine policy-selection
+results. All major faults were zero. Paired-process minor faults (Vec/Bytes):
+4M u8 filter 46,746/46,748, mask 51,869/51,868; 4M u16 filter
+51,868/51,865, mask 56,986/56,984; 64M u8 filter 738,139/738,139, mask
+820,058/820,056; 64M u16 filter 820,058/820,054, mask 901,980/901,976.
+Encode faults were 1,116,954/72,446 and decode 51,865/51,871.
+Ratios are medians of paired process medians with bootstrap CIs.
+The initial implementation's 5.69x callback loss is retained in
+`results/p5-s1-scan.json`: hoisting predicate-variant dispatch out of the row
+loop fixes that realization; the final benchmark additionally prevents
+constant-folded bounds on the Vec side. No compiler default changes in S1.
+
+### 12.5 E1 and host-packed transfer (2026-11-06)
+
+Source: `experiments/storage-bench/results/gpu-base-codec-2026-11-06.json.gz`,
+driver `experiments/storage-bench/gpu_base_codec.py`, worktree branch
+`codex/compression` on `b7223ae9`. One `cq-gpu-tpch` binary (default advice,
+sha256 `ec7892dd…`) runs every variant through `--base-codec`; the generated
+`queries.rs` and `plans.json` are byte-identical to a pristine `b7223ae9`
+build, so plans, kernels and every checked fact are unchanged. Device readers
+dispatch on each column's recorded codec (`device.rs` `decode*`), so only the
+resident representation of manifest-loader base columns differs:
+
+| Variant | Base columns |
+|---|---|
+| `for` (current default) | raw i64 upload, device FOR headers and bit-packing |
+| `plain64` | raw i64 upload, device 64-bit headered transpose |
+| `native` | raw i64 upload kept native (null headers) |
+| `hostfor` | host `pack_for` (byte-identical to the device encoder, tested over widths 0–64), packed upload |
+| `hostfor-cached` | as `hostfor`, packed files persisted in tmpfs and read instead of raw columns |
+
+Protocol: RTX 6000 Ada, all 26 advised queries, SF1 and SF10, one warmup
+round plus 5 rotated rounds of fresh processes per variant; each process holds
+only the GPU lock; 60/60 processes validated (warmup and first measured sample
+full exact, later samples bench-check sampled), 0 major faults, no foreign GPU
+tenants. Ratios are geometric means over rounds of paired ratios to `for`
+with bootstrap 95% CIs (20,000 resamples); `suite` pairs the per-round
+geomean over queries. Load is untimed in query totals and reported separately
+(read + host pack + synchronous upload/device encode, summed over queries;
+every query reloads its columns).
+
+| Scale | Variant | Query total | Base load | Upload + encode | Process wall |
+|---|---|---|---|---|---|
+| SF1 | plain64 | 1.145 [1.135, 1.151] | 1.032 [0.939, 1.135] | 1.040 [1.027, 1.054] | 1.002 [0.972, 1.028] |
+| SF1 | native | 1.123 [1.099, 1.146] | 0.935 [0.867, 1.005] | 0.843 [0.805, 0.885] | 1.118 [1.028, 1.227] |
+| SF1 | hostfor | 1.004 [1.000, 1.009] | 1.037 [0.979, 1.098] | 0.122 [0.121, 0.122] | 1.018 [1.010, 1.027] |
+| SF1 | hostfor-cached | 0.996 [0.978, 1.008] | 0.096 [0.085, 0.105] | 0.110 [0.106, 0.113] | 0.862 [0.818, 0.889] |
+| SF10 | plain64 | 1.161 [1.148, 1.170] | 0.987 [0.917, 1.033] | 1.052 [0.978, 1.103] | 0.986 [0.902, 1.041] |
+| SF10 | native | 1.120 [1.112, 1.128] | 0.983 [0.934, 1.045] | 0.948 [0.907, 0.999] | 1.013 [0.951, 1.082] |
+| SF10 | hostfor | 1.000 [0.994, 1.004] | 1.006 [0.973, 1.030] | 0.102 [0.099, 0.105] | 1.010 [0.943, 1.064] |
+| SF10 | hostfor-cached | 1.007 [1.001, 1.011] | 0.067 [0.064, 0.069] | 0.114 [0.112, 0.117] | 0.523 [0.506, 0.539] |
+
+SF10 medians (sums over the 26 queries): `for` query totals 956.6 ms,
+resident base columns 9.27 GB vs 47.5 GB plain; load = read 41.0 s + upload
+and device encode 6.34 s. `hostfor`: read 40.6 s + host pack 7.01 s + upload
+0.67 s. `hostfor-cached`: read 2.02 s + upload 0.79 s; process wall 95.9 s →
+49.5 s.
+
+⇒ **E1 decided: FOR pays for resident GPU base columns.** Both plain layouts
+lose on the suite at both scales (h06 2.2×, h08 1.5×, h09 1.4× slower at SF10;
+no query is faster beyond noise except native h02 at SF10, 0.849). FOR stays
+the loader default; plain is not the GPU base-column default.
+
+⇒ **Packed upload cuts device load time ~9×, but host packing at load gives
+it back.** `hostfor` columns are the same bytes as `for` (query totals within
+1% on the suite; SF1 per-query outliers h09 1.26, h20 0.88 also appear in
+`hostfor-cached` and vanish at SF10 — an allocation-state effect of the
+device encoder's temporaries, [INFERENCE]). Per-process host packing
+(≈6.8 GB/s over all host threads) costs what the smaller upload saves.
+
+⇒ **Packed columns persisted once remove most of the cold path.** With
+`hostfor-cached`, base load falls to 0.067× and SF10 process wall to 0.52×.
+Confounds: cached files are read from tmpfs, raw columns from page-cached
+`/data/tpch-gpu` (0 major faults), and the raw path also widens stored
+i32/i64 into an i64 vector; the read saving is therefore not attributed to
+compression alone. The cache binds each file to its source column's path,
+length and mtime, rejects stale or malformed files before allocating their
+payload, and is opt-in (`--base-cache`); no default changes. The measured
+binary predates the review fixes to the cache (identity captured before the
+raw read, bounded reads, per-call temporaries) and to the driver's
+validated/exact fields; none is on a timed path. §12.6 re-measures on the
+current loader with the H05 catalog path, a tmpfs read control and FastLanes
+DELTA.
+
+### 12.6 E1 on the projection loader: H05 catalog, read control, FastLanes DELTA (2026-11-10)
+
+Source: `experiments/storage-bench/results/gpu-base-codec-2026-11-10.json.gz`
+(driver `gpu_base_codec.py`, branch `codex/compression` rebased on `fadeecc5`,
+binary sha256 `93bc3327…`). Main's loader now verifies or deduplicates every
+projected input set outside query timers; the base-column layout is applied
+to its uploads and, through `Catalog::compress_with`, to the H05
+`tpch_domains` catalog. Generated `queries.rs` differs from `fadeecc5` only
+in H05's two load calls (after normalizing build paths and a path-derived
+kernel-module hash); `plans.json` is equal except `generation_seconds`.
+Variants: `for` (default), `plain64`, `delta` (FastLanes DELTA — unified
+transposed 64-row lanes, device-encoded — where `detect_integer_codec` finds
+it smaller than FOR, FOR elsewhere), `hostfor-cached` (packed files v2, §12.5)
+and `for-tmpfs` (read control: the same verified manifest with byte-identical
+raw columns on tmpfs, checked before the campaign).
+
+Protocol as §12.5, all variants with the verified-key manifests
+(`TPCH_GPU_MANIFEST`, `/data/design-notes/dataset-manifests/sfN.json`):
+60/60 processes validated; 0 discarded samples (rule: any foreign GPU tenant
+or 1-minute load above 8 before or after a sample; observed maximum 2.1);
+0 major faults. A first attempt was abandoned when another user's vLLM job
+took 30–47 GB of the GPU at 100% utilization (a native SF10 run ran out of
+memory); none of its samples are used.
+
+| Scale | Variant | Query total | H05 total | Base load | Upload + encode | Process wall |
+|---|---|---|---|---|---|---|
+| SF1 | plain64 | 1.159 [1.158, 1.159] | 1.166 [1.162, 1.170] | 0.952 [0.889, 1.000] | 1.045 [1.032, 1.058] | 0.969 [0.934, 1.003] |
+| SF1 | delta | 1.362 [1.358, 1.366] | 1.323 [1.299, 1.362] | 1.048 [1.029, 1.065] | 1.688 [1.672, 1.707] | 1.004 [0.992, 1.016] |
+| SF1 | hostfor-cached | 1.000 [0.998, 1.002] | 0.989 [0.988, 0.990] | 0.636 [0.611, 0.668] | 0.113 [0.112, 0.115] | 0.951 [0.941, 0.962] |
+| SF1 | for-tmpfs | 1.002 [0.999, 1.006] | 1.003 [0.999, 1.007] | 0.959 [0.903, 1.001] | 1.024 [1.003, 1.045] | 0.977 [0.938, 1.015] |
+| SF10 | plain64 | 1.177 [1.177, 1.178] | 1.185 [1.179, 1.191] | 1.012 [1.000, 1.027] | 1.011 [1.006, 1.018] | 1.013 [1.004, 1.024] |
+| SF10 | delta | 1.351 [1.349, 1.353] | 1.380 [1.379, 1.382] | 1.078 [1.072, 1.082] | 1.889 [1.877, 1.900] | 1.051 [1.045, 1.057] |
+| SF10 | hostfor-cached | 0.998 [0.997, 0.999] | 0.999 [0.997, 1.001] | 0.686 [0.677, 0.693] | 0.100 [0.096, 0.102] | 0.913 [0.901, 0.925] |
+| SF10 | for-tmpfs | 1.000 [1.000, 1.001] | 0.999 [0.996, 1.001] | 1.001 [0.991, 1.010] | 0.994 [0.989, 1.000] | 0.999 [0.989, 1.008] |
+
+Base load now includes set verification and the H05 catalog build. SF10
+medians summed over the 25 manifest-loader queries, `for`: read 43.5 s,
+deduplication 35.0 s, upload and device encode 6.68 s; H05 catalog build
+10.6 s; query totals 943.6 ms (H05 8.35 ms); process wall 141 s.
+
+⇒ **FOR stays the default on both load paths.** Plain is 1.16–1.18× slower on
+the suite and on H05; FOR keeps H05 SF10 at 8.35 ms against the gate's
+10.35 ms ceiling (plain 9.93 ms).
+
+⇒ **FastLanes DELTA, selected by size, is refuted for these GPU workloads.**
+It shrinks resident bytes only ~10% (SF10 8.31 vs 9.27 GB; H05 213 vs 280 MB)
+but is 1.35–1.36× slower on the suite and 1.32–1.38× on H05 (11.53 ms, over
+the ceiling in every round). Scan-only queries are unchanged (H01, H06, H13,
+H22 ≈ 1.00): tile and stripe reads reconstruct deltas with a warp scan. The
+losses are on probe- and index-heavy queries (H04 2.34–2.47×, H08 2.41–2.47×,
+H09 2.23–2.26×). There, per-row random access (`decode`, `decode_u32` and
+`decode_source` on gathers and index builds) re-adds up to 63 residuals per
+row. Device encoding is 1.7–1.9× slower as well. DELTA would need a
+scan-only role (no random-access consumers) recorded per structure before
+any selection.
+
+⇒ **The tmpfs read control shows no read confound.** Raw columns read from
+tmpfs cost the same as from page-cached `/data` (base load 0.96–1.00, 0
+major faults): the raw read cost is decoding and widening, not storage. The
+§12.5 cache saving is therefore not a tmpfs artifact.
+
+⇒ **Packed files help less on the current loader.** Upload and encode drop to
+0.10–0.11× and base load to 0.64–0.69×, but process wall improves only to
+0.95/0.91 (§12.5: 0.52). Set verification (35 s at SF10, unchanged by any
+layout) now dominates the cold path. Projections that omit a verified key
+still read their raw columns for deduplication (38 of 273 raw reads remain).
+Key columns served from packed files are rehashed against their current
+bytes before they certify a set. Same-length rewrites with preserved mtimes
+are detected for key columns only; other packed columns trust (path, length,
+mtime) and remain an opt-in derived artifact. No default changes.
+
+### 12.7 GPU-first manifest cold load (P6 C, slice L)
+
+The manifest projection loader reads stored i32/i64 bytes directly into two
+reusable 8-MiB pinned buffers and overlaps file reads with asynchronous H2D.
+Each column is encoded immediately and its raw device buffer freed before the
+next column is read: raw columns never coexist. The default path no longer
+widens columns, computes extrema, verifies sets, or gathers rows on the host.
+Device reductions provide exact bounds and dictionary-code validation.
+The end-of-read completion boundary is retained for transfer-error propagation
+and phase accounting. Per-slot events already protect staging reuse; deleting
+that synchronization alone would not overlap the next column's read, since
+bounds/extent readback and encode completion still precede the next raw upload.
+
+Projected verification hashes logical values directly from the encoded columns,
+radix-sorts 32-bit hashes with CUB, checks complete tuples within equal-hash runs,
+and compacts first-occurrence device positions. Hash collisions never prove
+equality. Only duplicate projections are gathered/re-encoded from their encoded
+sources, without materializing raw columns. An already-distinct input returns no
+selection; a proven distinct subset still proves its supersets
+(DR-ProjectionReuse). Declared verified keys retain their stored-byte SHA path
+(IO-GpuVerifiedKey). The resident FOR layout and generated queries are unchanged.
+`hostfor` remains the explicit host-packing measurement option for full source
+columns; duplicate projections are gathered on the device in the same FOR
+layout. Its persistent cache retains source identity and key rehash semantics;
+even a non-key projection can now be verified directly from packed cache hits.
+The separate H05 `tpch_domains` catalog path is outside this cutover.
+
+Load reports separate file I/O (`read_ms`), exact device verification including
+completion (`verify_ms`), and staging/H2D/device encoding
+(`upload_encode_ms`, excluding overlapped file I/O). `source_bytes` counts
+native stored bytes actually read, rather than widened upload bytes.
+`peak_device_bytes` reports the pool's lifetime live-allocation high-water mark,
+not a resettable per-load peak;
+`peak_reserved_device_bytes` reports the largest observed pool reservation.
+These exclude CUDA context/module memory and CUB's external control buffers.
+Final view/count buffers are allocated before sort scratch, so tiny published
+descriptors cannot pin dead sort chunks. After selected re-encoding, newly
+loaded full source columns and their hashes are removed from the base cache
+when the projection contained duplicates; older base-cache entries remain.
+Only the selected projection is newly cached. Sources and positions are dropped
+before the pool returns wholly unused chunks. `device_bytes_after_load`
+and `reserved_device_bytes_after_load` expose the resulting live/reserved bytes.
+The duplicate-cache regression loads 1,048,576 alternating i64 extrema and
+retains exactly two rows: full-source cache entries/hashes are absent, while
+post-trim live and reserved bytes are both below the original 8-MiB payload.
+A separate reuse assertion preserves pre-existing full-column cache entries.
+`CQ_GPU_VRAM_EXCEEDED` covers both a configured pool limit and driver OOM;
+TPC-H creates unlimited pools, so its driver OOM is not a startup-memory budget.
+
+Single warm-page-cache h06 sanity samples, RTX 6000 Ada, with a foreign vLLM
+tenant present (not controlled performance evidence; Main owns paired timing):
+
+| Scale | Binary | Read ms | Verify ms | Upload/encode ms | Process s |
+|---|---|---:|---:|---:|---:|
+| SF1 | main | 320.00 | 15.44 | 61.78 | 1.412 |
+| SF1 | slice L | 29.79 | 20.67 | 85.57 | 1.197 |
+| SF10 | main | 3231.78 | 371.54 | 418.87 | 4.864 |
+| SF10 | slice L | 284.74 | 80.21 | 97.69 | 1.060 |
+
+Main's paired measurements compare main against `9eb82b5d`, using fresh
+processes in rotated order with the GPU tenant idle (about 1% utilization):
+
+| Scale | Rounds | Process wall ms, main → slice L | Wall ratio [95% CI] | Read ratio | Verify ratio | Upload/encode ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| SF1 | 10 | 907 → 599 | 0.661 [0.642, 0.678] | 0.083 | 0.67 | 0.53 |
+| SF10 | 8 | 5486 → 622 | 0.113 [0.093, 0.131] | 0.085 | 0.107 | 0.068 |
+
+These paired process/load results supersede the single-sample interpretation
+above; the duplicate-source cache-lifetime correction does not change h06's
+already-distinct load path. The initial resident-query conclusion is revised
+by the controlled follow-up below.
+
+Five-ms NVML sampling found the **same query-loop process residency** on both
+binaries: 591,396,864 B (SF1), 1,887,436,800 B (SF10). Slice L's transient peaks
+were 786,432,000 / 3,854,565,376 B; sort scratch increases the load peak but does
+not consume steady-state query headroom. After trim, its pool live/reserved
+bytes were 51,023,360 / 144,029,184 (SF1) and
+509,958,400 / 1,439,665,920 (SF10). Baseline pool counters were not instrumented.
+
+SF10 `perf record -F 199 --call-graph dwarf` captured 226 CPU samples: 54 of
+75 samples whose stack included `Loader::build` were file reads (72%).
+No loader stack sampled host `unique_rows`, widening or bounds folding; CUDA
+context initialization/teardown still dominates other parts of the process.
+All 26 advised SF1 queries passed full warmup/first-sample comparisons;
+h06 SF10 passed, as did HostFor cache miss/hit (six hits, zero raw reads).
+The benchmark retains its existing `full_then_sampled` report policy.
+After the duplicate-cache correction, device-columns tests passed 35/35 and
+TPC-H tests passed 53 with one existing idle-GPU-only test ignored; the advised
+SF1 suite again passed all 26 full warmup/first-sample comparisons.
+Formal registry checks passed for the unchanged decode-site inventory.
+
+Evidence: `experiments/gpu/compare/p6c-load-2026-11-10.json`. Exact collision
+checks remain potentially quadratic for adversarial hash runs. This cutover
+adds three audited V sites for device set admission and three I sites for
+selected re-encoding; it does not claim code-domain execution at those sites.
+
+#### Resident placement sensitivity (follow-up)
+
+Main's later eight-round SF10 comparisons, both GPU-only and CPU-exclusive
+without foreign GPU applications, found resident total **1.037 vs 1.015 ms**:
+load/main **1.022 [1.019, 1.024]**. Tiles+load/tiles was about 1.027
+(0.843 vs 0.821 ms); SF1 showed no effect, 0.999 [0.964, 1.033].
+Thus the earlier “no significant resident-query change” claim does not hold
+for SF10, despite the large cold-load improvement.
+
+One nsys capture per successful variant localized this difference inside the
+resident partial kernel. All use grid 852, block 256, 3072 dynamic shared bytes
+and 38 registers, with no same-process kernel/copy/memset overlap during the
+partial launches. Extracted cubins contain the same **680 SASS instructions and
+encoded control words**. Runtime CUDA parameter capture also confirms identical
+four-column ABI fields: length 59,986,052, null count pointer, FOR codec, and
+256-byte-aligned headers/payloads. This rules out different code, logical counts,
+or basic misalignment, but does not establish a specific TLB/cache mechanism.
+
+Distances below are signed shipdate-address minus extendedprice-address,
+separately for their headers and payloads. Medians exclude the warmup and use
+five partial-kernel launches; these profiles are not paired performance CIs.
+
+| Variant | Partial median ms | Header distance B | Payload distance B |
+|---|---:|---:|---:|
+| main | 0.983881 | 313,058,048 | 313,058,048 |
+| load (`9eb82b5d`) | 1.006057 | 1,105,164,288 | 1,105,164,288 |
+| isolated native-upload allocator | 0.997255 | 133,096,448 | 179,960,832 |
+| reusable maximum-size upload slot | unavailable: OOM before query | unavailable | unavailable |
+
+The isolated allocator changed only raw-upload allocation ownership, sharing
+the existing context/stream and leaving resident columns in the main pool;
+its complete resident CUDA module is byte-identical to load's. It reduced
+post-load pool reservation from 1,439,665,920 to 557,219,328 B, but did not
+bring the kernel within 0.5% of main's profile median.
+The more targeted reusable-slot experiment attempted to prevent the final
+native-i32 upload from changing allocation geometry. Both its view capture
+and nsys run failed with driver OOM while a foreign vLLM tenant was active;
+the trace contains zero resident partial launches. No time or view distance
+is inferred for that failed run.
+
+The GPU-only paired experiment produced no accepted rounds: its foreign-app
+guard aborted after the untimed warmup. Both allocator experiments were
+reverted, retaining `e2b00891` runtime behavior. The supported conclusion is
+**placement sensitivity**, not a demonstrated universally preferable layout:
+the same resident SASS has different times at different addresses, and main's
+placement is arbitrary too. The evidence JSON records the profiles,
+addresses, code hashes, failed runs and measurement limits.
+
+Main's paired 26-query SF1 baseline (main `ef6ca71a` vs slices T+L, five
+rounds, no foreign GPU work; [results](../experiments/gpu/compare/p6c-2026-11-10.results.json))
+shows no systematic resident cost: every query whose generated code is
+unchanged lies within [0.997, 1.007] (geomean 0.991 [0.989, 0.993] including
+h06's tiles), and suite process wall falls from 24.3 to 18.3 s. The h06 SF10
+effect stays recorded as placement sensitivity of one kernel, not as a slice-L
+compute cost.
+
+#### Future exploration: GPUDirect Storage (not started)
+
+cuFile/GPUDirect Storage could DMA column files from NVMe straight into
+device memory, replacing slice L's pinned host staging. It is not usable on
+the current workstation (checked 2026-11-11):
+- the TPC-H data lives on `/data`, ext4 on a SATA hard disk;
+- the only NVMe holds the LVM root filesystem;
+- neither the `nvidia-fs` module nor `libcufile` is installed.
+
+In compatibility mode cuFile bounces through host memory, which gains nothing
+over pinned staging. Expected value is limited to cold reads: the first SF10
+h06 load read cold from the hard disk in 17.7 s, against about 265 ms
+warm-cache. Warm repeats may get slower, because GDS bypasses the page cache.
+Load time is reported separately and never counted as query time.
+
+Preconditions:
+- data on a plain ext4/XFS NVMe partition, not LVM;
+- the GDS driver stack (nvidia-fs or P2PDMA) and libcufile;
+- confirmed GDS support for the RTX 6000 Ada.
+
+Then add a cuFile read backend to the loader and measure cold and warm
+loads against pinned staging. Reading packed `--base-cache` columns (about
+5.6x fewer bytes for h06) is the cheaper first lever either way.
+
+## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
+
+1. **Strings are interned at input on every target.** No query column has
+   type `String` inside the engine; relations carry codes. Systems differ
+   in how far they go: Datalog engines intern globally (Soufflé symbol
+   table, SRDatalog, our DOOP `IStr`); analytical stores dictionary-encode
+   at the storage layer (DuckDB `dictionary_compression.cpp`, `dict_fsst.cpp`)
+   and also keep inline/prefix string values in execution (DuckDB `string_t`,
+   `string_type.hpp:33-34`). We take the stronger form. Code assignment
+   follows §10 (a publication decision). CPU TPC-H loaders and GPU export
+   use sorted per-column dictionaries; execution carries column-local
+   codes, not owned strings. The M5 code-grouping result above is historical
+   experimental evidence, not a measurement of this migration.
+2. **String operations run once per dictionary entry at input**, producing
+   code sets joined relationally (authored declarations, never compiler
+   rewrites of opaque Rust). Prefix tests over a sorted dictionary are code
+   intervals.
+3. **Decoding is exceptional**: only (R) where the user's opaque Rust reads
+   a value (contract 7 `rust_reads`, identity representation) and (P) at
+   answer publication. All sites are flagged and registered
+   (`doc/DECODE-SITES.tsv`, `doc/DECODE-AUDIT.md`, checked by `check.py`).
+4. **Widths**: every GPU TPC-H input column fits 32 bits at SF1/SF10
+   (`doc/DECODE-COLUMNS.md`); keys never decode; 64/128-bit widths only for
+   accumulators sized by value bits + log₂ rows, and for authored Rust types.
+5. **Self-deduplication is sort-based, not a hash set.** A canon result is
+   stored in its canonical index, an ordinary index named by a canonical
+   reference (STR-Canon), never a strategy or a separate store:
+   `r canon = rows;` names the result's rows record, typed by the sorted-array
+   provider `::cq_storage::dedup::Sort` (PL-Distinct: its build yields the
+   stream's distinct complete rows); `r canon = host;` names the
+   load-verified host carrier of a direct complete host rename;
+   `r canon = [cols];` names an existence-only complete Built index that is
+   the result's only storage (its build need not be duplicate-free).
+   `ret head = ::cq_storage::dedup::Sort` types the answer's identity index,
+   including computed heads.
+   Aggregate holes introduce no multiplicity-relaxing optimizer facts:
+   CK-Return supplies the
+   canonical index or inferred key under every checked terminal. The aggregate
+   folds that set directly, without terminal-name recognition or a separate
+   seen HashSet.
+   Derived outer-consumer demand may retain unread witnesses as injective
+   value codes; it does not remove that set boundary.
+   On CPU, `dedup::Sort` collects the whole boundary stream, uses `sort_unstable_by` with
+   Rust `Ord` comparisons of the fields, then removes adjacent equal rows.
+   Tasks uses `par_sort_unstable_by`; its adjacent-unique pass is sequential.
+   Authored advice `canon(packed)` (rewrite `cq_rewrites::packed_canon`,
+   EXT-PackedCanon) instead records `::cq_storage::dedup::Packed`, the sorted
+   run keyed by the packed `OrderKey` of every column (PL-PackedCanon): the
+   build measures each column's ordinal span while collecting, packs the
+   span-relative ordinals most significant column first with the row
+   position into one `u64`, `u128` or two-word key, sorts the words, and
+   reads the rows in word order, skipping equal keys. Order and identity equal
+   the comparator's; spans over 128 bits fall back to it. The premise (every
+   column has an `OrderKey`, rows are `Copy`) is the author's, checked by
+   rustc; selection does not choose `Packed` on its own until a recorded
+   column-representation fact or evidence-driven grading (P3.3) exists.
+   On device, catalog selection retypes the rows record to the ordinary
+   full-row `RadixLayout` set form (`radix_set`, GPU-RadixSet),
+   but never turns a `host` reference into `rows`. This
+   does not restore the obsolete `retype(dedup => Type)` hash-set interface.
+   No Rust type spelling selects a comparison, codec, or uniqueness fact;
+   opaque authored types supply their ordering through Rust traits.
+   Membership indexes remain hash-based where consumers probe membership:
+   building such an index is not this self-dedup operation.
+   Dedup against full data remains a separate merge/search operation on
+   sorted plain runs (§8). GPU Datalog admission already uses that scheme
+   (`experiments/gpu/datalog-runtime/src/runs.rs`). CPU Datalog admission
+   (DL-InsertNew) is outside this CQ strategy cutover: it anti-joins each
+   candidate with the relation's canonical layout, an ordinary all-column
+   key set (`HashSet<K, Fx>` by default; a sharded or sorted-run layout in
+   the parallel extension), and inserts it into the round's NEW version of
+   that layout; there is no separate `seen` set. Historical h01 SF1 t1: hash DISTINCT
+   2542 ms (95% of the query; 36% of cycles in rehash hashing) vs DuckDB 819 ms.
+   M6b (`experiments/storage-bench/results/cpu-h01-decomposition-2026-10-29.md`,
+   exact vs DuckDB, t1 / t24):
+
+   | Self-dedup variant | t1 | t24 |
+   |---|---:|---:|
+   | hash set on `String` tuples (engine) | 2541 ms | 140 ms |
+   | hash set, reserved, codes | 660 ms | 29 ms (prefix-aligned partitions) |
+   | packed u128 (78 bits) LSD radix, 10×8-bit passes, + unique | 463 ms | 130 ms |
+   | packed u128 comparison sort + unique | 259 ms | 92 ms |
+   | **load-verified prefix order + adjacent compare, codes** | **17.5 ms** | **3.3 ms** |
+
+   The load-time order check costs 21–23 ms once. Our general radix sort is
+   far from bandwidth-bound (≈330 ms t1 for 94 MB of keys): an untuned
+   implementation, not evidence against sort-based dedup. Sort width and
+   digit choice are open measurement work; this migration uses comparison
+   sort, not a type-selected radix implementation.
+   `canon = host` (runtime `dedup::ordered`) applies only to a direct host scan of an
+   immutable load-verified prefix-order carrier. The carrier retains the
+   exact checked prefix comparator with its rows, exposes no mutable row
+   access, and discards the witness when rows are recovered for mutation.
+   Full-row equality must imply equal prefixes. It sorts and uniques
+   **within every equal-prefix run**; equal prefixes never imply unique rows.
+   The borrowed path collects references, not cloned owned rows. This is not
+   a promise of allocation-free streaming or unchecked order propagation:
+   projection, filtering, joins and computed heads do not inherit the witness.
+6. **Uniqueness is never assumed.** Only properties checked by construction
+   (e.g. sortedness verified in one load pass, recorded with the data) may
+   remove work.
+
+### 13.1 CPU/GPU string interning implementation
+
+`cq-load::StringCode` is a `Copy`, transparent `u32` newtype. Each CPU
+TPC-H `Data` that contains string columns owns `cq_load::Dictionaries`,
+keyed by declared column name. `StringDictionary` sorts and deduplicates
+the complete column's source values before assigning zero-based codes.
+Empty strings, case, and whitespace are preserved. Codes are comparable
+as strings only within the same column dictionary, not across columns.
+
+`StringCode` supplies `OrderKey` with an associated `u64` ordinal word;
+sealed directory policies delegate to that same stored ordinal. Dense membership stores
+and probes bounds in that declared word width; custom wide ordinal domains
+may explicitly use `u128`. `STR-FullKey` records existence-only reads when a positive probe
+binds every column of a set relation; selection then records `dense_membership`
+(bounded bitmap over the key's `OrderKey`) for one stored key column, built by
+one typed `Build` call. Input uniqueness is not
+assumed: constructing the membership set handles duplicate witnesses.
+
+The loader-side `interned_relation_loaders!` opt-in uses ordinary Rust
+field declarations. Both loader macros also propagate field traits describing
+injective native decoding; they do not inspect Rust type spelling or add query
+facts. The only query-side fact is the authored column domain below.
+`InternedField` trait dispatch preserves ordinary `Load` fields unchanged
+and maps `StringCode` fields from input-only `String` values.
+`InternedRelation` prepares the dictionaries and encodes the rows;
+`parquet_interned` is the load boundary. Representation facts come from
+authored declarations/provenance, not guessed Rust type spellings.
+
+CPU TPC-H preparation verifies a candidate primary key against the exported
+Parquet rows, or the complete exported heading when primary-key columns are
+absent. One grouped pass checks duplicate and null key values; a failed key
+does not trigger another candidate scan. It writes `TABLE.parquet.set.json`
+using schema `mini-linq.parquet-set.v1`, with a `files` array containing `file`,
+whole-file `sha256` (lowercase hex), `set: "verified"`, and `verified_keys`
+(arrays of column names). Uncertified files record `set: "uncertified"` and
+empty `verified_keys`. Raw rows are never removed during preparation.
+Existing prepared exports acquire certificates without being rewritten.
+
+For manifest-only adoption of immutable datasets, use
+`cargo xtask tpch-manifest --output /writable/manifest.json /dataset/orders.parquet /dataset/lineitem.parquet`.
+This reads only explicitly supplied inputs and writes only the requested JSON
+manifest, not adjacent files or input data. Input filenames must be distinct
+within a manifest. No dbgen, workload query execution or Parquet export is performed.
+
+Collected plain and interned Parquet loaders automatically read the adjacent
+certificate. `CQ_LOAD_MANIFEST=/absolute/path/manifest.json` overrides that
+path for every file (one manifest can contain multiple file entries).
+`Loader::parquet_with_manifest` and `parquet_interned_with_manifest` provide
+per-call overrides without changing process environment. A missing override
+does not fall back to an adjacent manifest. A loader skips full-row
+sorting/deduplication only when the same opened immutable Parquet file matches
+the recorded hash and the decoded projection retains every column of a
+verified key with injective native decoding. Full-row uniqueness alone does
+not certify a narrower projection. Missing, malformed, stale or mismatching
+certificates, unsupported/custom decoders, and host-built inputs keep ordinary
+canonicalization. Certificates are trusted preparation artifacts, not signed
+proofs or compiler/planner annotations; do not fabricate them for raw inputs.
+
+Strings are always interned: string equality and order in a query are code
+equality and order within one column domain, and no compiler pass has a
+string-specific branch, string literal form, string index or string scan.
+A declaration names a column's domain explicitly,
+`l_shipmode: StringCode in (data.dictionaries.domain("l_shipmode"))`.
+The CQ declaration table interns the opaque domain spelling once, sharing one
+`DomainId` across matching input and output declarations. Recorded IR prints
+`in [id] (D)`; parsing that IR preserves the id without inspecting `D` again.
+`Dictionaries::domain(column)` returns that column's `StringDictionary`
+(a static empty dictionary when the column is absent). The domain is any
+query-closed host value implementing `cq_storage::CodeDomain`
+(`exact`); ordered domains also implement `cq_storage::OrderedCodeDomain`
+(`lower`, `upper`). `StringDictionary` implements both: `exact` maps an
+absent value to `StringCode::MAX`, which is reserved and never assigned to
+source text (so it matches no row), and `lower`/`upper` are the
+`partition_point` ranks of the first entry `>= v` / `> v` in the sorted
+entries. Normalization rule A-Domain translates every closed operand
+compared with a domain column (in `where`, atom or negated-atom positions,
+membership items and range bounds) into a typed host-once capture
+`domain __cq_c_i: T in [id] (D) = f(t)`. Its Rust realization is
+`let __cq_c_i: T = ::cq_storage::domain::f(&(D), &(t));`:
+`exact` for `==`, `!=`, positions and literal membership (an `Or` of
+equalities); `lower` for `<` and `>=`; `x <= t` becomes `x < upper(t)` and
+`x > t` becomes `x >= upper(t)`; `a..b` becomes `>= lower(a) && < lower(b)`
+and `a..=b` becomes `>= lower(a) && < upper(b)`. Columns without a domain
+keep their operands unchanged. WF-Domain checks the typed capture variant,
+function and equal recorded domain ids, never structurally equal Rust
+expressions; an authored identical Rust call is opaque and never proves
+translation. Joins and comparisons across
+domains are rejected. Unordered domains (DOOP's first-sight `IStr`, GPU Datalog
+`Symbol` codecs) do not implement `OrderedCodeDomain`, so rustc rejects an
+ordered comparison on them. `Dictionaries::literal` no longer exists:
+query setup does not translate literals by hand.
+
+`where` has no pattern operator; contains/LIKE and other opaque string
+predicates use
+`cq_load::dictionary_where(&dictionaries, "column", predicate)` during loading,
+once per distinct dictionary entry, producing code-set relations stored
+in `Data`. Execution binds those sets and joins codes instead of scanning
+or cloning source strings. Prefix predicates currently use this same
+code-set preparation; sorted order permits intervals but does not itself
+establish that an interval optimization is implemented.
+
+H13 prepares dense comment-code membership at load, then filters and
+projects order/customer pairs before the count query. This preserves the
+SQL pair identity even when one pair has several qualifying comments;
+it does not assume an input key or add an intermediate CQ DISTINCT.
+Default keyed aggregate maps record
+`std::collections::HashMap<_, AccTuple, cq_storage::HashState>` in Structures,
+matching the engine hash state used by membership indexes. Canonicalization
+does not use a hasher. Authored provider types retain their own hashers.
+
+Final string answers alone use `Dictionaries::publish`; intermediates,
+grouping, and joins remain coded. The explicit load-time predicate reads
+and final publication sites carry registered R/P decode comments.
+Fixture source strings and expected textual answers remain legitimate
+input/publication boundaries rather than string-valued query relations.
+
+GPU export/import and CPU loading assign the same sorted, distinct
+per-column order for the same source values; dictionary metadata supplies
+the GPU literal/predicate preparation boundary. This describes the
+implementation contract, not an executed CPU/GPU equivalence check.
+No build, test, or performance result is claimed for this migration here.
+7. **If a string value is ever needed inside the engine** (a DECODE R site:
+   opaque Rust reads it), it is a reference into the interned dictionary
+   (`&'static str`, or `&'data str` borrowed from the dictionary arena that
+   outlives the query), never an owned `String`: decoding allocates nothing
+   and copies nothing. No current query manipulates strings (string
+   predicates run at input, rule 2), so no such site exists today; this rule
+   governs the first one.
+8. **Interning is input preparation, not query work.** It lives only in the
+   loader (`io/cq-load/src/intern.rs`, opt-in `interned_relation_loaders!`);
+   no compiler pass interns, and `run()` sees only codes. It is excluded from
+   query timing and from acceptance. Its cost bound is one linear pass over
+   the column's bytes (bytes ÷ bandwidth, plus hashing), plus a sort of the
+   *distinct* values only when order-preserving codes are required (§10). The
+   current implementation is naive (per-row `String`, sort of all values,
+   per-row lookup; h13 load 188 → 2248 ms) and is a later P3c item: hash pass
+   over Arrow string buffers, no per-row allocation, parallel.
+
+### 13.2 GPU provider ownership (P3d C1/C2)
+
+GPU binding/grading records the selected built-provider catalog ABI, key and
+payload layout, dense-directory policy, native lookup permutation, upload and
+download adapters, publication storage and key-codec recipe before translation.
+Checkers validate complete adapter coverage and exact provider payload demands.
+Packing bounds name immutable original resident columns or declared Scalar
+carrier metadata; a later uploaded publication cannot change an earlier codec
+recipe. A non-range provider is never silently realized as `RangeProvider`.
+Native materialization records a complete permutation and `Materialization.active_bits`:
+either the complete source codec-width sum or `<W as Word>::BITS`. The checker
+accepts both, and `permuted_provider(pool, order, params, threads, active_bits)`
+consumes the recorded expression verbatim, independently of the source window.
+The provider owns the sorting implementation, not the window choice.
+Native full-key relation reads record `Bindings.relation_inputs` and
+`NativeLookup.radix` (`RadixRelationRead`): complete-key schema, word and
+`u64` offset, explicit parameters and physical field mapping are independently
+checked. `SourceOrigin::RadixRelation` and `ProviderAbi::RadixRelation` carry
+that realization into translation. Bare `radix_relation` is not an automatic
+catalog candidate without authored native-producer schema/advice; this does
+not displace the constrained `radix_set` selection for CQ canonical builds.
+`RadixRelationRead.word_capture` records `RadixWordCapture::InputView { host }`.
+CUDA kernel parameters remain generic in `W`, inferred from the retained host
+`RadixLayoutView<W, u64>` through `prepare_*_for` witnesses; permutations reuse
+the same capture. This transports the checked word carrier without spelling
+function-local logical types in the CUDA module. The zero-word witness is
+host-only and consumes no device argument slot.
+
+Keyed groups record the `group_map` provider instance for `group::SegmentedGroup`
+in `Structure::Group.provider` during GPU refinement and print that provider's fold.
+Keyless folds have no keyed accumulator record. Terminal-group execution and input realization are
+recorded by GPU-TerminalGroup (P3e); keyless groups fold through recorded
+occupancy-grid partials (GPU-GroupGridFold).
+
+Datalog C2 is implemented on top of track B's ordinary canonical layouts.
+`DeviceStorage` records provider declarations keyed by Storage provider tokens,
+relation-order input/candidate storage, full and delta layout states, negative
+key sets, initializers and scratch lifetimes
+(`features/datalog/languages/dl-storage/src/lib.rs`, `DeviceStorage`,
+`DeviceRelation`, `DeviceState`, `DeviceScratch`). Device refinement supplies
+these facts in `experiments/gpu/datalog/src/storage.rs`; translation consumes
+them in `experiments/gpu/datalog/src/print.rs`.
+
+Admission and publication are separate: the canonical
+`DeviceRadixRun<W, u64, ()>::fresh` sorts/uniques candidates and subtracts
+committed complete keys without changing accepted state, returning a
+`SortedBatch`. `append_sorted` publishes that batch into every full layout,
+canonical included; each appended batch must be sorted, unique and disjoint
+from accepted keys. `DeviceRelation.admitted_orders` records a complete
+canonical-to-layout permutation and either `sorted_unique` (adopt) or
+`unique_permutation` (sort without compaction). Each full/delta `DeviceState`
+references that order; one sorted batch is shared by every consumer of the
+same recorded order. The checker validates provenance, bijection and field
+coverage without recomputing the producer's preferred order list.
+The relation-order batch becomes NEW/delta by the recorded moves; frozen
+negative projections independently deduplicate because projection need not
+be injective. The view uses `republish(&state)` for maintained publication
+and `from_sorted(pool, packing, params, batch, active_bits)` for initial fresh-view
+construction. Frozen negative projections pass their recorded state's
+`active_bits()` through adoption. Empty IDB delta views use
+`empty(pool, packing, params, active_bits)` with the canonical state's recorded
+window. Delta replacement uses `with_sorted(batch, params)`, retaining that
+snapshot's window and kernels while sharing field descriptors; an unchanged
+batch or unchanged empty publication reuses its snapshot without a sort, upload
+or count readback. No constructor selects a window from `packing.bits()`.
+`DeviceState.active_bits` is the sum of the recorded storage columns'
+`Scalar::COLUMN.bits()` values, including declared symbol codecs. It covers
+the entire significant low-bit window, never a sampled maximum or directory
+prefix. `sort: native_keys_or_lanes` uses direct native scalar keys or stable
+lane ordering with physical stride distinct from the active window.
+A recorded conservative `<W as Word>::BITS` window is also legal; checking
+does not require the producer's narrower preference.
+`new_set(pool, params, active_bits)` consumes this window; unsafe raw-key
+sort input must have zero padding outside it. `offset_layout: implicit_unit`
+and `item_sources: none` are full-row set facts: the run descriptor denotes
+arithmetic unit offsets rather than allocating an offset lane. Occurrence
+builds retain materialized group offsets and share an item-source map only
+when item columns exist. Output field reconstruction uses the recorded
+`output_permutation`, not a printer-derived item map.
+
+Explicit output materialization uses `publish_rows`: one result allocation,
+no per-row allocation and no host sort (the runs are merged in key order);
+`to_rows` remains a diagnostic.
+State and snapshots carry a construction-only `full_key_set` witness:
+`new_set` establishes it and set append/replacement preserves it.
+Occurrence publication into a set state is rejected. Full-key validation and permutation require
+that witness; `C=()` alone does not prove uniqueness.
+
+Each `DeviceState` records `offset: u64`, `construction: full_key_set`,
+`read: key_prefix`, exact-directory `radix_bits` (default zero, with legal
+configured values accepted), ratio, positive merge-tile size, block threads
+and permutation threads. Constructors consume explicit `RadixRunParams`;
+compiled launch-width constraints are checked, not adjusted. Zero radix bits
+means binary search without a directory, not truncated equality keys.
+`CK-DL-DeviceStorage` independently validates collection cardinalities,
+layout/canonical references, complete physical schemas and codecs, token/ABI,
+packing order, offset/construction/read facts, legal parameters, initializers
+and scratch policy. Erasing representation records must recover source
+Storage; the checker does not replay realization or demand its preferred
+defaults. Lane schedules and per-hole reservation remain unchanged:
+admission/publication stays on the main stream after the recorded lane join.
+These are implementation contracts, not new gate or timing results.
+
+GPU-ProgramLaunch records query-kernel preparation in
+`gpu::realization::Realization.launches`, separately from publication storage.
+Raw-candidate programs use program-owned launch envelopes: one block for a
+one-part partition, otherwise occupancy-derived residency. Each kernel has one
+`Option<ProgramLaunch>` slot for its fixed compiled specialization; the slots
+never allocate a symbol-keyed collection. On a cache miss only, typed
+preparation resolves the symbol and validates function/device attributes and
+occupancy. A hit performs no symbol-name lookup, comparison or allocation.
+The final checked kernel ABI records live scalar parameter positions, their
+explicit generic-witness dependencies and the matching preparation entry.
+Callable and native-view producers supply those dependencies, including words
+nested inside native-view types. Kernel definitions, preparations and launch
+arguments print that same ABI directly: no generated-kernel reparsing,
+type inspection or method-name rewrite recovers their association.
+Later invocations borrow the envelope and marshal scalars on the stack,
+without handle cloning or repeated CUDA preparation queries.
+The runtime rejects a foreign context or a grid outside the validated envelope.
+Each worker retains its context-qualified module and slots until query-scope
+release. Row-dependent grid caps, root tiles and sharing remain unchanged.
+Other programs explicitly record invocation-occupancy preparation. Count/failure
+readbacks, capacity replay, admission counts and fork/join synchronization are
+unchanged.
+
+### 13.3 Host reads and dispatch (no fallback tiers)
+
+Every runtime representation choice is a recorded Structures fact printed as
+one direct call; there are no autoref dispatch tiers and no silent fallbacks.
+
+- **Host capabilities are declared.** An input relation answers keyed reads
+  only through `relation R(..) [= (expr)] host [k..] [borrowed] reads [exact |
+  membership | candidates | range | ordered] [supports [retain | expand]];`
+  (IF-HostDecl). The key is a declaration prefix or one indexed column;
+  `borrowed` keys (`HashSet<(&T,)>`) declare membership only. An undeclared
+  host is a plain row source.
+- **One record per read.** Selection records `R native <reader> = <read>
+  [key]` when the declaration has a read the reader needs on exactly that key
+  (key listed in declaration order), otherwise a fallback provider
+  (SEL-NativeHost, STR-NativeHost). Sequence binding accepts the native record
+  as discharging the lookup (BE-NativeBind).
+- **Printing.** A native read is `dispatch::{seek, contains,
+  contains_borrowed, candidate_count, candidate_keys, retained, expanded,
+  point, range, window}` plus one `require::native_*` guard outside all
+  closures; a fallback is a `Lazy` cell built once by
+  `<T as Build<_>>::build`. A host type lacking the declared capability, or
+  keyed by another type, is a rustc error naming the trait (`IndexRead`,
+  `PointLookup`, `ExactMembership`, `Candidates`, `SeekRangeLookup`,
+  `OrderedRead`).
+  The former `build!` macro and `AutoDense` tier selection are removed.
+- **Codecs and membership.** Key sets and sorted runs spell their codec
+  (`I64Codec`) in the recorded provider type. One-column membership stores
+  record `dense_membership` (requires `OrderKey`), wider keys hash
+  `adaptive_membership`; a dense key without `OrderKey` is a rustc error, not a
+  hash fallback.
+- **Join filters.** Positional selection records projected filters; borrowed run
+  views and attached sidecars remain authored advice. Every filter records one
+  `policy` (SEL-FilterPolicy): `abandon 35 of <base> keys key_count` where a
+  positional base exists (`keys stat_keys` under authored borrowed/attached
+  advice), otherwise `always`. The recorded key source controls activation; an
+  optional accessor never recounts, and its missing count retains identity.

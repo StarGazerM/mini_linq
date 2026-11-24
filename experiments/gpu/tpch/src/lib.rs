@@ -1,6 +1,8 @@
 #![recursion_limit = "1024"]
 
 pub mod benchmark;
+pub mod cache;
+pub mod key_domains;
 pub mod loader;
 pub mod manifest;
 #[allow(warnings)]
@@ -34,6 +36,7 @@ pub fn run(
     authored: Option<&Path>,
     baseline: Option<&Path>,
 ) -> Result<bool> {
+    loader::check_options()?;
     let mut results = plans()?;
     if modes
         .iter()
@@ -90,9 +93,18 @@ pub fn run(
         if result["status"] == "accepted" {
             // A runtime failure is neither a planning rejection nor a passing
             // measurement. Preserve it, continue the inventory, then fail main.
+            loader::take_load_report();
+            gpu_device_columns::rank::take_host_inverse_report();
             let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 execute_query(&query, &manifest, &mode, false)
             }));
+            // Zero columns: this query's inputs did not use the manifest loader.
+            result["base_columns"] = loader::take_load_report();
+            let (bytes, milliseconds) = gpu_device_columns::rank::take_host_inverse_report();
+            result["domain_host_inverse"] = json!({
+                "host_mirror_bytes": bytes, "host_mirror_ms": milliseconds,
+                "scope": "lazy Rank structural mirror for host Rust reads or final publication; never load-time work; host-island reads remain in query timing, final formatting is outside it",
+            });
             let execution = match execution {
                 Ok(value) => value,
                 Err(payload) => {
@@ -118,6 +130,7 @@ pub fn run(
                     successful = false;
                     result["status"] = json!("ran");
                     result["exact"] = json!(false);
+                    result["validated"] = json!(false);
                     result["error"] = json!(error.to_string());
                 }
             }
@@ -129,7 +142,7 @@ pub fn run(
         }
         let previous = baseline_results
             .iter()
-            .filter(|row| row["query"] == query && row["sf"] == sf && row["exact"] == true)
+            .filter(|row| row["query"] == query && row["sf"] == sf && (row["validated"] == true || row["exact"] == true))
             .filter_map(|row| row["median_ms"]["total"].as_f64().map(|total| (row, total)))
             .min_by(|(_, a), (_, b)| a.total_cmp(b));
         if let Some((previous, previous_ms)) = previous {
@@ -140,6 +153,7 @@ pub fn run(
                 "median_ms": previous["median_ms"],
                 "samples": previous["samples"],
                 "exact": previous["exact"],
+                "validation": previous["validation"],
             });
             if let Some(total) = result["median_ms"]["total"].as_f64() {
                 result["baseline_comparison"] = json!({
@@ -148,7 +162,7 @@ pub fn run(
                 });
             }
         }
-        if query == "h05" && mode == "advised" && result["exact"] == true {
+        if query == "h05" && mode == "advised" && result["validated"] == true {
             if let Some(total) = result["median_ms"]["total"].as_f64() {
                 let reference = authored_results.as_ref().and_then(|rows| {
                     rows.iter()
@@ -186,11 +200,14 @@ pub fn run(
     fs::write(
         output,
         serde_json::to_vec_pretty(&json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "data_root": data_root(),
             "warmup_runs": benchmark::WARMUP_RUNS,
             "measured_runs": benchmark::MEASURED_RUNS,
-            "timing": "Median of per-run stage sums: CUDA phase events for device stages, elapsed execution for host-planned stages; initial input loading, final answer download and comparison excluded",
+            "timing": results.iter().map(|row| json!({
+                "query": row["query"], "mode": row["mode"], "sf": row["sf"],
+                "boundary": row["timing_boundary"],
+            })).collect::<Vec<_>>(),
             "source": "CPU retail_kernel and standalone compile! CQ ASTs imported with include_str; only manifest storage types, date/decimal encodings and dictionary literals adapted",
             "results": results,
             "table_markdown": table,
@@ -231,6 +248,40 @@ mod stages;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_stages_retain_nonnullable_device_publications() -> Result<()> {
+        for report in plans()?
+            .iter()
+            .filter(|report| report["mode"] == "automatic" && report["status"] == "accepted")
+        {
+            let Some(stages) = report["stages"].as_array() else {
+                continue;
+            };
+            for stage in stages {
+                let nullable = stage["publication_facts"]["nullable"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value.as_bool().unwrap());
+                // A one-stage terminal retains its explicit host publication;
+                // inter-stage automatic placement follows target and validity.
+                let expected =
+                    if stages.len() > 1 && stage["pipeline"]["target"] == "device" && !nullable {
+                        "device"
+                    } else {
+                        "host"
+                    };
+                assert_eq!(
+                    stage["publication"], expected,
+                    "{} stage {}: publication must follow target and validity facts",
+                    report["query"], stage["stage"]
+                );
+                assert_eq!(stage["pipeline"]["publication"], expected);
+            }
+        }
+        Ok(())
+    }
 
     fn assert_conformant(query: &str) -> Result<()> {
         let reports = plans()?;
@@ -296,11 +347,15 @@ mod tests {
         h12,
         h19,
         h03,
+        h04,
+        h04_not_exists,
         h05,
         h07,
         h07_block,
         h08,
         h09,
+        h16,
+        h22,
         h21_positive,
         d19,
         d27,
@@ -323,17 +378,29 @@ mod tests {
             }
         }
         for report in artifacts {
+            let mut physical: cq_lang_sequence::structures::physical::Program =
+                syn::parse_str(report["physical_input"].as_str().unwrap())?;
+            let mut structures = syn::parse::Parser::parse_str(
+                |input: syn::parse::ParseStream<'_>| cq_lang_sequence::structures::Program::parse(input, &physical),
+                report["structures_input"].as_str().unwrap(),
+            )?;
             let mut current: cq_lang_sequence::Program =
                 syn::parse_str(report["sequence_input"].as_str().unwrap())?;
             for invocation in report["pipeline"]["sequence"].as_array().unwrap() {
                 let advice: cq_sequence_plan::Advice =
                     syn::parse_str(invocation.as_str().unwrap())?;
-                current = advice.apply(&current)?;
+                (physical, structures, current) = advice.apply(&physical, &structures, &current)?;
             }
+            let expected_physical: cq_lang_sequence::structures::physical::Program =
+                syn::parse_str(report["physical_planned"].as_str().unwrap())?;
+            let expected_structures = syn::parse::Parser::parse_str(
+                |input: syn::parse::ParseStream<'_>| cq_lang_sequence::structures::Program::parse(input, &expected_physical),
+                report["structures_planned"].as_str().unwrap(),
+            )?;
             let expected: cq_lang_sequence::Program =
                 syn::parse_str(report["sequence_planned"].as_str().unwrap())?;
             assert_eq!(
-                current, expected,
+                (physical, structures, current), (expected_physical, expected_structures, expected),
                 "{} SF{} {}",
                 report["query"], report["sf"], report["mode"]
             );
@@ -350,7 +417,10 @@ mod tests {
             .filter(|row| row["query"] == "h05" && row["mode"] == "advised")
         {
             assert_eq!(report["status"], "accepted", "{}", report["error"]);
-            let advice = report["pipeline"]["sequence"]
+            let stages = report["stages"].as_array().unwrap();
+            assert_eq!(stages.len(), 1);
+            let stage = &stages[0];
+            let advice = stage["pipeline"]["sequence"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -385,7 +455,7 @@ mod tests {
                 1
             );
             assert!(
-                report["pipeline"]["physical"]
+                stage["pipeline"]["physical"]
                     .as_array()
                     .unwrap()
                     .iter()

@@ -1,0 +1,81 @@
+program h02 {
+    domain Mfgr = dictionary(part.p_mfgr);
+    domain Type = dictionary(part.p_type);
+    domain SupplierName = dictionary(supplier.s_name);
+    domain SupplierAddress = dictionary(supplier.s_address);
+    domain SupplierPhone = dictionary(supplier.s_phone);
+    domain SupplierComment = dictionary(supplier.s_comment);
+    domain NationName = dictionary(nation.n_name);
+    domain RegionName = dictionary(region.r_name);
+    input Part(p_partkey: i64, p_mfgr: StringCode in Mfgr, p_size: i32,
+        p_type: StringCode in Type) = table(part);
+    input Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_supplycost: Decimal) = table(partsupp);
+    input Supplier(s_suppkey: i64, s_nationkey: i32, s_acctbal: Decimal,
+        s_name: StringCode in SupplierName, s_address: StringCode in SupplierAddress,
+        s_phone: StringCode in SupplierPhone, s_comment: StringCode in SupplierComment)
+        = table(supplier);
+    input Nation(n_nationkey: i32, n_regionkey: i32, n_name: StringCode in NationName)
+        = table(nation);
+    input Region(r_regionkey: i32, r_name: StringCode in RegionName) = table(region);
+    input BrassTypes(code: StringCode in Type) = dictionary(Type) where { |value: &str| {
+        value.ends_with("BRASS")
+    } };
+    stage s0 {
+        inputs { Partsupp = Partsupp; Supplier = Supplier; Nation = Nation; Region = Region; }
+        captures [];
+        evidence {}
+        cq {
+            struct Minimum;
+            relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_supplycost: Decimal);
+            relation Supplier(s_suppkey: i64, s_nationkey: i32, s_acctbal: Decimal,
+                s_name: StringCode, s_address: StringCode, s_phone: StringCode, s_comment: StringCode);
+            relation Nation(n_nationkey: i32, n_regionkey: i32, n_name: StringCode);
+            relation Region(r_regionkey: i32, r_name: StringCode);
+            relation answer(part_key: i64, minimum_cost: Option<i64>);
+            answer(part_key, min(cost_units)) :-
+                Partsupp(part_key, supplier_key, cost),
+                Supplier(supplier_key, nation_key, _, _, _, _, _),
+                Nation(nation_key, region_key, _), Region(region_key, region_name),
+                where region_name == "EUROPE",
+                let cost_units: i64 = cost.scaled();
+        }
+    }
+    publish MinimumCost = s0 owned;
+    stage s1 {
+        inputs {
+            Part = Part; BrassTypes = BrassTypes; Partsupp = Partsupp; Supplier = Supplier;
+            Nation = Nation; Region = Region; MinimumCost = MinimumCost;
+        }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Part(p_partkey: i64, p_mfgr: StringCode, p_size: i32, p_type: StringCode);
+            relation BrassTypes(name: StringCode);
+            relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_supplycost: Decimal);
+            relation Supplier(s_suppkey: i64, s_nationkey: i32, s_acctbal: Decimal,
+                s_name: StringCode, s_address: StringCode, s_phone: StringCode, s_comment: StringCode);
+            relation Nation(n_nationkey: i32, n_regionkey: i32, n_name: StringCode);
+            relation Region(r_regionkey: i32, r_name: StringCode);
+            relation MinimumCost(part_key: i64, minimum_cost: Option<i64>);
+            relation answer(balance: i64, supplier_name: StringCode, nation_name: StringCode,
+                part_key: i64, manufacturer: StringCode, address: StringCode, phone: StringCode, comment: StringCode);
+            answer(*balance_units, supplier_name, nation_name, part_key, manufacturer,
+                address, phone, comment) :-
+                Part(part_key, manufacturer, size, kind),
+                where size == 15, BrassTypes(kind),
+                Partsupp(part_key, supplier_key, cost), MinimumCost(part_key, minimum_cost),
+                if *minimum_cost == Some(cost.scaled()),
+                Supplier(supplier_key, nation_key, balance, supplier_name, address, phone, comment),
+                Nation(nation_key, region_key, nation_name), Region(region_key, region_name),
+                where region_name == "EUROPE",
+                let balance_units: i64 = balance.scaled();
+        }
+    }
+    terminal {
+        from s1 project [column(0), column(1), column(2), column(3), column(4), column(5),
+            column(6), column(7)]
+            dictionaries [1 = SupplierName, 2 = NationName, 4 = Mfgr, 5 = SupplierAddress,
+                6 = SupplierPhone, 7 = SupplierComment];
+    }
+}

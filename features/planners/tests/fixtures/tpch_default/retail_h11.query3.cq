@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h11.rs, query literal 3.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation PartValue (part_key : i64 , value : i64) ; relation TotalValue (value : i64) ; relation answer (part_key : i64 , value : i64) ; answer (* part_key , * value) :- PartValue (part_key , value) , TotalValue (total) , if i128 :: from (* value) * 10_000 > i128 :: from (* total) ;

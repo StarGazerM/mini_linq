@@ -18,7 +18,7 @@ pub type QueryResult<'a> = Result<DeviceColumns<'a, Answer>, Box<dyn std::error:
 // Orders(order,customer,date), 8766 <= date < 9131, Lineitem(order,supplier),
 // Supplier(supplier,nation).
 // Advice mapping: sorted_runs/prefix_runs/retain_lookups -> recorded RangeProvider
-// stores; r1/r2 membership remains explicit; dedup DeviceSet<For> -> PackedCanon.
+// stores; r1/r2 membership remains explicit; dedup builds an ordinary full-row set.
 // B's Supplier prefix [supplier] then exact nation lookup remains two levels;
 // expand_lookups(256, depth 3) -> store_level at that flatten + tile(256,items 4).
 // capacity(Lineitem) -> recorded store capacity + output(bounded), not an inferred
@@ -48,7 +48,7 @@ macro_rules! execute {
         sequence { $($sequence:tt)* }) => {
         mini_linq::passes::sequence! {
             pipeline {
-                ::cq_gpu_sequence::plan,
+                ::cq_gpu_sequence::decompose,
                 ::cq_gpu_sequence::machine_grade,
                 ::cq_gpu_sequence::translate
             };
@@ -73,31 +73,32 @@ macro_rules! compiled_le {
                 relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&$data.orders);
                 relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&$data.lineitem);
                 relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&$data.supplier);
-                region_base = pipe rename Region@0 {r_regionkey -> region,r_name -> region_name};
+                region_base = pipe rename Region {r_regionkey -> region,r_name -> region_name};
                 region_selected = pipe select region_base if (region_name = 2);
                 r1 = let project region_selected keep {region};
-                nation_base = pipe rename Nation@1 {n_nationkey -> nation,n_regionkey -> region};
+                nation_base = pipe rename Nation {n_nationkey -> nation,n_regionkey -> region};
                 r2 = let semi eager [region] nation_base,r1;
-                customer = let rename Customer@2 {c_custkey -> customer,c_nationkey -> nation};
-                orders_base = pipe rename Orders@3 {o_orderkey -> order,o_custkey -> customer,o_orderdate -> date};
+                customer = let rename Customer {c_custkey -> customer,c_nationkey -> nation};
+                orders_base = pipe rename Orders {o_orderkey -> order,o_custkey -> customer,o_orderdate -> date};
                 orders_selected = pipe select orders_base if (date >= 8766,date < 9131);
                 orders = let project orders_selected keep {order,customer};
-                lineitem = let rename Lineitem@4 {l_orderkey -> order,l_suppkey -> supplier};
-                supplier = let rename Supplier@5 {s_suppkey -> supplier,s_nationkey -> nation};
+                lineitem = let rename Lineitem {l_orderkey -> order,l_suppkey -> supplier};
+                supplier = let rename Supplier {s_suppkey -> supplier,s_nationkey -> nation};
                 $($physical)*
-                answer = pipe canon project matched keep {order,supplier,nation};
+                answer = let canon project matched keep {order,supplier,nation};
                 return answer as answer(order,supplier,nation);
             }
-            structures {
-                region_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
-                nation_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                orders_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
-                lineitem host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
-                r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-                answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+                region_base host scan = @device_columns input { keys 0; columns [u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
+                nation_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                customer host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                orders_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
+                lineitem host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                supplier host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                r1 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+                r2 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+                answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                answer canon = rows;
                 $($structures)*
             }
             sequence {
@@ -122,10 +123,10 @@ macro_rules! le_a {
                 matched = pipe semi eager [nation,supplier] asia,supplier;
             }
             structures {
-                lineitem rows = ::cq_gpu_sequence_runtime::RangeProvider;
-                orders = ::cq_gpu_sequence_runtime::RangeProvider [order];
-                customer = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-                supplier = ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];
+                lineitem rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+                orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+                customer = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+                supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];
             }
             sequence {
                 L = store rows lineitem;
@@ -154,10 +155,10 @@ macro_rules! le_b {
                 matched = pipe semi eager [nation,supplier] col,supplier;
             }
             structures {
-                customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
-                orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-                lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];
-                supplier = ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
+                customer rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+                orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+                lineitem = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+                supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
             }
             sequence {
                 C = store rows customer;
@@ -178,8 +179,8 @@ macro_rules! le_b {
 /// The reference R-N-C-O-L-S traversal, retaining the ASIA customer prefix.
 /// sorted_indexes/prefix_runs become explicit RangeProvider key levels;
 /// retain_streams(r4) becomes the C store. Expansion is the three written tile
-/// boundaries, with 4 items at the Orders/Lineitem boundaries. PackedCanon
-/// replaces DeviceSet<For>; count publication replaces the unbounded old output.
+/// boundaries, with 4 items at the Orders/Lineitem boundaries. Full-row sets
+/// replace DeviceSet<For>; count publication replaces the unbounded old output.
 /// No dynamic choose is recorded: this plan had no size-guarded alternative.
 /// frontier(8)/directory(rank) are unsupported old implementation advice, not
 /// fabricated scheduling facts in this Sequence plan.
@@ -198,39 +199,40 @@ macro_rules! reference {
             relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&$data.orders);
             relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&$data.lineitem);
             relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&$data.supplier);
-            region_base = pipe rename Region@0 {r_regionkey -> region,r_name -> region_name};
+            region_base = pipe rename Region {r_regionkey -> region,r_name -> region_name};
             region_selected = pipe select region_base if (region_name = 2);
             region_asia = let project region_selected keep {region};
-            nation_index = let rename Nation@1 {n_nationkey -> nation,n_regionkey -> region};
-            customer_index = let rename Customer@2 {c_custkey -> customer,c_nationkey -> nation};
-            orders_base = pipe rename Orders@3 {o_orderkey -> order,o_custkey -> customer,o_orderdate -> order_date};
+            nation_index = let rename Nation {n_nationkey -> nation,n_regionkey -> region};
+            customer_index = let rename Customer {c_custkey -> customer,c_nationkey -> nation};
+            orders_base = pipe rename Orders {o_orderkey -> order,o_custkey -> customer,o_orderdate -> order_date};
             orders_selected = pipe select orders_base if (order_date >= 8766,order_date < 9131);
             orders_index = let project orders_selected keep {order,customer};
-            lineitem_index = let rename Lineitem@4 {l_orderkey -> order,l_suppkey -> supplier};
-            supplier_index = let rename Supplier@5 {s_suppkey -> supplier,s_nationkey -> nation};
+            lineitem_index = let rename Lineitem {l_orderkey -> order,l_suppkey -> supplier};
+            supplier_index = let rename Supplier {s_suppkey -> supplier,s_nationkey -> nation};
             rn = pipe probe first [region] region_asia,nation_index;
             rnc = let probe first [nation] rn,customer_index;
             rnco = pipe probe first [customer] rnc,orders_index;
             rncol = pipe probe first [order] rnco,lineitem_index;
             matched = pipe semi eager [nation,supplier] rncol,supplier_index;
-            answer = pipe canon project matched keep {order,supplier,nation};
+            answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures {
-            region_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
-            nation_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            customer_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            orders_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
-            lineitem_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            supplier_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            region_asia rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            nation_index = ::cq_gpu_sequence_runtime::RangeProvider [region];
-            customer_index = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            orders_index = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-            lineitem_index = ::cq_gpu_sequence_runtime::RangeProvider [order];
-            supplier_index = ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
-            rnc rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            region_base host scan = @device_columns input { keys 0; columns [u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
+            nation_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            customer_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            orders_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
+            lineitem_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            supplier_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            region_asia rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            nation_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+            customer_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+            orders_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+            lineitem_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+            supplier_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
+            rnc rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+            answer canon = rows;
         }
         sequence {
             RegionASIA = store map region_asia compact region_selected rows region_base;
@@ -290,13 +292,14 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer>) -> DeviceColumns<'a, Answ
         };
         physical {
             relation Input(order:u32,supplier:u32,nation:u32) = (input);
-            source = pipe rename Input@0 {order -> order,supplier -> supplier,nation -> nation};
-            answer = pipe canon project source keep {order,supplier,nation};
+            source = pipe rename Input {order -> order,supplier -> supplier,nation -> nation};
+            answer = let canon project source keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures {
-            source host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32)> [];
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            source host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32)> [];
+            answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+            answer canon = rows;
         }
         sequence {
             source = store rows source;

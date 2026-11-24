@@ -19,11 +19,45 @@ pass paths, each with argument tokens read only by that pass.
  \mathsf{checkGrading}(q,host)\quad e=\mathsf{translatePull}(q)\quad\pi=[]}
  {\mathsf{sequence};\mathsf{sequential};\mathsf{translatePull}(s)
   \longrightarrow\mathsf{quote}_{Rust}(e)}
+
+\Rule{ST-Endpoint}{e=\mathsf{declaredPrintInput}(configuration,defaults)\\
+ e=\mathsf{Structures}\Rightarrow\neg\mathsf{authoredSequence}(configuration)}
+ {\mathsf{resolve}(configuration,defaults)\text{ includes Sequence phases iff }e=\mathsf{Sequence}}
+
+\Rule{ST-Observe}{\pi_b=\mathsf{prefix}_b(\mathsf{resolve}(c,d))\quad
+ \mathsf{checkedRun}(\pi_b,s)=t}
+ {\mathsf{observe}(b,r,c,s)\longrightarrow r!\{\mathsf{quote}(t)\}}
+
+\Rule{ST-Realization}{K=(c,v)\ \lor\ K=(p,s[,q])\\
+ K=(c,v)\Rightarrow\mathsf{checkVO}(c,v)\\
+ K=(p,s[,q])\Rightarrow
+  (\mathsf{checkStructures}(p,s)\land(q\in K\Rightarrow\mathsf{checkSequence}(p,s,q)))}
+ {\mathsf{admitStack}(K)}
+
+\Rule{DR-Explain}{b\le h\quad
+ \mathsf{observe}(b,\code{core::stringify},\varnothing,s)=a_b}
+ {\mathsf{explain}(s,\mathsf{through}=h)[b]=a_b}
 \end{mathpar}
 \code{cq_stage::pass} checks source and target contracts; \code{cq_stage::rewrite}
 also runs the language's \code{check_rewrite}. Correspondence checks belong to the
-pass. Failures emit \code{compile_error!}; rustc then checks types, ownership and
-trait obligations of the generated code.
+pass. Failures emit one Rust expression block containing one
+\code{compile_error!}; combined checker/candidate messages retain their order
+and use the first diagnostic's span. The rejection does not invoke a printer
+or leak adjacent diagnostic macros into expression syntax. On success, rustc
+checks types, ownership and trait obligations of the generated code.
+The VO continuation carries $(c,v)$: CQ and its valuation annotation are
+separate programs. VO consumers receive $(c,v,args)$ and rewrites return both.
+The selected printed VO contains only its valuation, never the CQ prefix.
+From Physical onward a continuation carries the realization stack:
+$p$, $(p,s)$, or $(p,s,q)$. Each member is a separately printed program.
+ST-Realization checks that annotation references resolve in the separately
+supplied upper programs before a consumer runs and after a producer returns.
+Structures consumers take $(p,s,args)$; Sequence consumers take $(p,s,q,args)$.
+Rewrites return all stack members, including any legitimately changed upstream
+provider facts. Ordinary language contracts and rewrite correspondence remain
+unchanged. Authored programs initialize the stack in dependency order; subsequent
+continuations always print the separate stack. Observation and calibration
+describe only the selected annotation, not its transport envelope.
 \begin{lstlisting}
 pipeline {
     surface = [Path(tokens), ...];
@@ -38,18 +72,191 @@ pipeline {
 The order is surface, plan, ix, lower, Physical rewrites, select, Structures
 rewrites, represent, stage, sequence, decompose, grade, print. The shipped defaults
 are \code{plan}, \code{index_demands}, \code{lower}, \code{select},
-\code{represent}, \code{stage}, \code{sequence}, \code{sequential}, and
-\code{translate_pull}. Thus ST-Sequence is the default CPU path.
-Decompose is an optional list of Sequence rewrites.
-An explicit Structures terminal such as \code{own_push::push}, with no
-authored sequence, grade, or decompose phases, bypasses the default Sequence
-phases. Custom Sequence terminal paths require explicit sequence and grade
-phases; terminal compatibility is checked by the pass protocol.
+\code{represent}, \code{stage}, \code{sequence}, \code{plan_sequential},
+\code{sequential}, and \code{translate_pull}. The default decomposition
+\code{plan_sequential} is selected during configuration resolution, only when
+sequence, grade and decomposition are implicit and no plan, Physical rewrite,
+selection, Structures rewrite, representation or staging advice is authored.
+An authored decomposition replaces that default. ST-Entry executes the resolved
+queue unchanged: no pass-name matching or insertion occurs after resolution.
+ST-Sequence is the terminal CPU path; decomposition is a list of Sequence rewrites.
+The typed \code{print_input = structures} terminal declaration bypasses
+default Sequence phases and rejects authored sequence, grade, or decompose
+phases. Otherwise the configured/default Sequence phases are retained.
+The invariant is that aliasing a terminal cannot alter its input language:
+no macro path spelling participates in resolution. Each pass declares its
+actual source and target through \code{pass<L,M>}; those checked boundaries
+reject a terminal whose actual language disagrees with its declaration.
 \code{translate_pull} emits both ordinary and profile-counter variants.
 The workload corpus and fuzz configuration use this target by default.
 An authored fact-free program may enter at any compatible macro with
 \code{arguments \{..\}; pipeline \{..\}; <program>}. Passes receive no
 configuration beyond their arguments: every choice is in the program text.
+
+\paragraph{Diagnostic stage observation.}
+The facade accepts \code{observe \{ boundary = grade; stage = ::core::stringify; \}}
+before the ordinary \code{pipeline \{..\}} configuration. The selected boundary
+is an output of the same resolved queue, with all preceding arguments and
+rewrites unchanged: \code{cq}, \code{relational_plan},
+\code{index_requirements}, \code{physical}, \code{structures},
+\code{represent}, \code{stage}, \code{sequence}, \code{decompose},
+\code{grade}, or \code{final_rust}. Physical and Structures observation includes
+their configured same-language rewrites. A boundary absent from a selected
+terminal route is rejected. CQ observation checks the source after surface
+expansion. Complete Sequence input admits Sequence, decomposition/planning,
+grading and terminal observation only.
+
+The additional \code{vo} boundary exposes the default planner's shared checked
+valuation prefix: $\mathsf{plan}=\mathsf{elaborate}\circ\mathsf{prefixValuation}$.
+It requires an omitted CQ planning phase, rather than guessing the internal
+language of an authored planner from its path. Custom planners must expose their
+own internal boundaries.
+The continuation carries \code{pipeline \{..\} observe \{receiver\}} until the
+prefix ends. Source, target, correspondence and context checks still precede
+observation. The receiver gets the payload alone, not the continuation envelope.
+Even terminal Rust is captured after translation, before rustc type-checks or
+executes that expression; diagnostic output is not Rust execution evidence.
+The workload \code{explain} command generates these facade invocations for
+each boundary through the requested stopping point, preserving earlier artifacts
+and reporting the first failing boundary. It owns no second planning composition.
+
+
+\paragraph{Programmatic GPU driver inputs.}
+The TPC-H catalog resolves workload labels to serializable pipeline facts before
+compilation. The compiler receives no workload/profile label. Its input records
+\code{target = device | host}, \code{publication = host | device}, and a
+\code{recipe} containing retention selectors, membership choices, expansion
+selectors, partition/segment sizes and items. Missing target means device;
+missing publication means explicit host publication. The automatic recipe
+selects the shared rule-based planner; an absent schedule selects decomposition.
+Completed replay pipelines contain expanded invocations and Sequence advice,
+with the recipe cleared; the report retains the original recipe separately.
+\begin{mathpar}
+\Rule{DR-StageSource}{s=\mathsf{parseStageDSL}(T)\quad
+ \mathsf{uniqueNames}(s)\quad\mathsf{precedingProducers}(s)\quad
+ \mathsf{inputSchemas}(s)\quad\mathsf{domainIdentities}(s)\quad
+ \mathsf{terminalSlots}(s)}
+ {\mathsf{stageSource}(T)=s\text{, with Rust payload tokens unchanged}}
+
+\Rule{DR-ProjectedSet}{C=(c_0,\ldots,c_{w-1})\quad
+ \forall c\in C.\ |c|=n\quad
+ r_i=(c_0[i],\ldots,c_{w-1}[i])\\
+ I=\mathsf{representatives}(\{r_i\mid 0\le i<n\})}
+ {\mathsf{loadProjection}(C,n)=C[I]\quad
+  |\mathsf{loadProjection}(C,n)|=|\{r_i\mid 0\le i<n\}|}
+
+\Rule{DR-ProjectionReuse}{P\subseteq Q\quad
+ |\mathsf{cachedProjection}(P)|=n=|\mathsf{sourceRows}|\quad
+ \mathsf{unique}(\mathsf{cachedProjection}(P))}
+ {\mathsf{unique}(Q)\quad
+  \mathsf{loadProjection}(Q)\text{ reuses unchanged cached base columns}}
+
+\Rule{IO-GpuVerifiedKey}{K\subseteq P\quad
+ \mathsf{prepareVerifiedUnique}(T[K])\quad
+ \forall c\in K.\ \mathsf{SHA256}(\mathsf{loadedBytes}(c))=h_c}
+ {\mathsf{loadProjection}(T,P)\text{ may omit canonicalization}}
+
+The preparation manifest records the checked key and its column-byte hashes.
+The loader hashes the same bytes it decodes; a missing certificate, changed
+hash, or projection omitting a key column retains complete-row deduplication.
+These are IO checks, never compiler facts. Only injectively decoded integer
+key columns are admitted; dictionary codes alone do not certify decoded text.
+
+\Rule{IO-GpuPrepareKey}{|\mathsf{distinct}(T[K])|=|T|\quad
+ h_c=\mathsf{SHA256}(\mathsf{storedBytes}(c))\ (c\in K)}
+ {\mathsf{manifest}(T).\mathsf{verifiedKeys}\ni(K,(h_c)_{c\in K})}
+
+\Rule{IO-GpuCatalogKey}{\mathsf{IOVerifiedKey}(T,K)\quad K\subseteq P\quad
+ \mathsf{injective}(\mathsf{domainEncoding})}
+ {\mathsf{compress}(T[P])\text{ may omit canonicalization}}
+
+\Rule{DR-HostSet}{v=\mathsf{collectTypedProjection}(T,P)}
+ {\mathsf{hostInput}(T,P)=\mathsf{sortDedup}(v)}
+
+\Rule{DR-PreparedSet}{v=\mathsf{adaptDomains}(\mathsf{hostProducer}(p))\quad
+ p\text{ binds an actual stage input}}
+ {\mathsf{preparedInput}(p)=\mathsf{sortDedup}(v)}
+
+\Rule{DR-Target}{d=\mathsf{inputTarget}(p)\quad
+ \mathsf{compile}(s,p,d)=r}
+ {\mathsf{driver}(s,p)=r}
+
+\Rule{DR-Publication}{v=\mathsf{validity}(s,\mathsf{inputPublications})\quad
+ \ell=\mathsf{inputPublication}(p)\\
+ \ell=device\Rightarrow(\mathsf{inputTarget}(p)=device\land\neg\mathsf{nullable}(v))}
+ {\mathsf{publication}(s,p)=(\ell,v)}
+
+\Rule{DR-GroupedPublication}{\mathsf{publication}(s,p)=(device,v)\quad
+ s\text{ grouped}\quad \sigma=\text{head slots over keys then aggregates}\quad
+ \beta_k=\text{first binding positive atom field with recorded placement, else full}}
+ {\mathsf{grouped}(s,p)=(\sigma,\beta)\text{ recorded and checked before generation}}
+
+\Rule{DR-Recipe}{r=\mathsf{inputRecipe}(p)\quad
+ \rho=\mathsf{expandRecipe}(s,r)\quad\mathsf{checkedReplay}(s,\rho)=t}
+ {\mathsf{recipeCompile}(s,p)=(t,\rho)}
+
+\Rule{DR-Registry}{i=\mathsf{parseInvocation}(T)\quad
+ (L,f)=\mathsf{registry}(i.path)\quad s:L\quad f(s,i.args)=t}
+ {\mathsf{invoke}(s,T)=t}
+\end{mathpar}
+DR-StageSource is the TPC-H frontend boundary. Each query has an authored
+\code{queries/<name>.stages} program: table/dictionary/opaque-host producers,
+named captures (including date operands), CQ stages, owned publications and
+ordered terminal projections. Input bindings identify preceding publications
+or declared producers; no Rust source file is traversed. The checker compares
+declared schema tokens and domain identities, never interprets types or
+reconstructs producer expressions. Dictionary domains reach shared CQ
+operand normalization; host code-domain conversion uses the shared runtime
+domain interface. A date payload executes on the host, not in the compiler.
+Terminal projections consume stored column slots and explicit dictionary
+publication domains; constants are opaque host-once values. Stage-source text
+is retained beside per-stage Sequence and publication records.
+
+DR-ProjectedSet is an IO boundary, not compiler evidence: every compiler input
+already denotes a set. The ordinary resident loader and compressed catalog
+select representatives of complete projected rows before encoding and upload.
+Unequal column lengths are rejected. A strictly increasing projection needs no
+row-selection buffer; otherwise row indices are sorted and deduplicated, and
+already-unique projections keep their original columns without copies.
+Only identical ordered projections share immutable resident tables. Independently
+checked duplicate-free projections also share unchanged base-column allocations;
+survivor-selected projections never reuse those full-row allocations. Repeated
+column names share their one allocation within a projection. DR-ProjectionReuse
+uses the measured distinctness of a cached subset of columns to establish
+distinctness of a larger projection, without rereading cached columns. It
+uses neither authored keys nor column types. Independent column caching alone
+cannot establish projected-row uniqueness. Domain encoding in the compressed
+catalog is injective on the loaded values and preserves this set.
+DR-HostSet canonicalizes the actual typed tuples, including host fallback.
+DR-PreparedSet canonicalizes opaque-host and dictionary producers after their
+final domain adaptation, once before stage execution. Earlier stage publications
+are already engine set outputs and are not canonicalized again at load time.
+All these operations occur outside query timers; no trusted-key declaration or
+compiler context fact substitutes for canonicalizing the supplied rows.
+
+DR-Target propagates rejection unchanged: it never retries another machine or
+deletes authored advice. DR-Publication derives extrema validity from aggregate
+kinds and propagates recorded nullable columns through publication inputs, not
+from Rust type spelling. Nullable outputs use the host transfer protocol;
+device publication without validity support is rejected. Generated carriers
+and downstream input bindings consume the same recorded placement.
+DR-GroupedPublication records a resident grouped answer's conversion: the
+column slots and each key's bounds source (resident column metadata or one host
+scan of a host relation; aggregates and keys without input bindings take the full
+domain). Table loader placements follow the selected target; staged inputs carry
+their producer's publication placement. Missing input placements are errors.
+Independently of the producer, the checker requires each slot to name its head
+argument's key or aggregate, and each input bounds record to bind that key at
+the named positive atom field with residency equal to the recorded input
+placement. Input bounds on aggregate slots are rejected. The wrapper prints
+that record; it adds no device fence, and its timing remains host wall time.
+DR-Recipe uses only explicit selectors and geometry, applying the existing
+checked rewrites. Workload labels occur only in catalog registration.
+DR-Registry shares one Physical/Structures registry between proc-macro adapters
+and programmatic execution. It accepts registered bare names and
+\code{cq_rewrites::name} paths; unknown paths are errors rather than suffix
+aliases. Argument packets use \code{cq_stage::Invocation}; planning arguments
+use \code{cq_planning::PlanOptions} and the shared Plan-Prefix composition.
 
 \paragraph{Context envelopes at invocation boundaries.}
 The rules above retain the fact-free protocol. When a source already records
@@ -73,13 +280,29 @@ not introduce them; only the lower/select packet boundary authorizes
 introduction. Missing or inexact envelopes and unauthorized introductions
 are rejected as \textsc{CTX-Entry} failures.
 
-Optional features are standalone workspaces under \code{features/} that depend
-on the packaged core only: planners, rewrites, surface extensions (aggregation,
+An enclosing checked context may additionally attach an
+\code{output_consumer} requirement to the remaining pipeline: an original
+consumer identity, the complete ordered head identities, and the subset whose
+logical values it reads. This is not a member of $\Gamma$ and authorizes no
+canonical-consumer or host-set fact. Intermediate passes forward the typed
+requirement without interpreting it. The selection entry binds it once into
+Structures' original consumer obligations and compares that packet exactly
+against the transported requirement; ordinary passes cannot introduce or
+replace it. Structures checks the head against Physical, including host-once
+captures, and its rewrites preserve the original packet. Thus changing both
+selected reads and the claimed demand does not establish correspondence.
+
+Optional features under \code{features/} share the root development workspace
+for build reuse while depending only on public core APIs: planners, rewrites,
+surface extensions (aggregation,
 correlated subqueries, recursion as Rust contexts around checked
 core invocations), a push printer, a stacked IR, a diverged RA surface,
-composition, inspection and workloads. \code{tools/check_external.py} packages
-the core and builds and tests each feature outside the repository, and rejects a
-fixture that only builds in-tree.
+composition, inspection and workloads. Workspace membership does not permit
+core-to-feature dependencies; the dependency gate checks that direction
+independently. \code{tools/check_external.py} packages the core and builds and
+tests each feature outside the repository, and rejects a fixture that only
+builds in-tree. Packaging fixtures retain intentional standalone workspaces;
+GPU/oxide and Metal packages use separate experimental workspaces.
 
 \begin{theorem}[Conditional composition]
 \label{thm:composition}
@@ -92,19 +315,38 @@ domain inclusion makes $g$ defined; context adequacy lifts the argument to macro
 invocations.\end{proof}
 
 \paragraph{Set aggregate contexts.}
-The aggregate context records its row-stream canonicality proof, owned head
-columns, constant-group proof and \code{cq_storage::HashState}. The default
-Sequence translator preserves the checked canonical-return boundary; the extension folds
-that stream directly without adding another distinct set. Unknown terminals
-may repeat rows and retain an explicit fast-hashed distinct boundary.
+The aggregate context records owned head columns, constant-group proof and
+\code{cq_storage::HashState}. Its hole resumes the remaining pipeline with an
+empty context, so CK-Return (an inferred key or a recorded \code{return canon}
+and its canonical index) makes returned rows a set under every checked terminal.
+The extension folds that stream once and never claims \code{consumer = canonical},
+because count and sum observe multiplicity.
+Every selected terminal must preserve that canonical return, including its
+multiplicity; a terminal deliberately repeating canonical rows violates the
+printer obligation. The aggregate does not repair such a terminal with a second
+set boundary.
+The context's checked grouping keys and measure operands derive its logical
+value demand; generated Rust is not analyzed for that purpose. Every original
+head field, including ignored witnesses, remains part of the complete set
+identity. An ignored base field may therefore publish an injective value code
+under the independent representation contract, but never a row-position
+identity in place of a value. No primary-key premise is needed for such codes,
+and duplicate complete value tuples still collapse before the fold.
+Read group and measure fields retain their logical-value obligation; a blocked
+representation that cannot honor the fold's borrowing contract is rejected,
+not silently converted to a different publication mode. Host-captured keys and
+owned computed measures retain their original realization. These requirements
+do not change the empty optimization context in \textsc{EXT-SetFold}.
 \begin{mathpar}
-\Rule{EXT-SetFold}{\mathsf{checkedCanonicalTerminal}(\pi)\quad
- Q:\bot+\mathcal P(Row)}
+\Rule{EXT-SetFold}{\Gamma_{\rm hole}=\emptyset\quad\textsc{CK-Return}(hole)\quad
+ Q:\mathcal P_{\rm fin}(Row)}
  {\mathsf{aggregate}(Q)=\mathsf{fold}(Q)}
 
-\Rule{EXT-ConstantGroup}{\forall k\in K.\ \mathsf{literalBound}(k)}
+\Rule{EXT-ConstantGroup}{\forall k\in K.\ k\text{ is bound by a top-level }\code{let}\text{ recorded by A-Capture}}
  {\mathsf{groupFold}_K(Q)=\mathsf{optionalAccumulator}(Q)}
 \end{mathpar}
+The premise uses the CQ capture producer's closedness, never the shape of the
+\code{let} initializer, so a literal and any other closed key are treated alike.
 Constant grouping emits \code{SingleGroup}, which stores zero or one key and
 measure tuple without hashing. Empty input still has no group. Computed measures
 are borrowed for cloning at the fold, rather than materialized as another CQ

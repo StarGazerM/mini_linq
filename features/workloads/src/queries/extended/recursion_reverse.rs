@@ -17,8 +17,8 @@ pub fn check(scenario: Scenario) {
             relation Goal(x: i32);
             relation Edge(x: i32, y: i32);
             relation reach(x: i32);
-            reach(*y) :- Goal(x), Edge(y, x);
-            reach(*z) :- reach(y), Edge(z, y);
+            reach(y) :- Goal(x), Edge(y, x);
+            reach(z) :- reach(y), Edge(z, y);
         }
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();

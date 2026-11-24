@@ -1,24 +1,26 @@
 [workspace]
-members = ["tiles", "compress", "compress-host", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "datalog-runtime", "datalog", "datalog/facade", "datalog/macros", "doop", "srd-doop", "tpch"]
+members = ["tiles", "compress", "compress-host", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "datalog-runtime", "datalog", "datalog/facade", "datalog/macros", "doop", "srd-doop", "tpch", "fuzz", "join-lab"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 
 [workspace.dependencies]
-# Pinned heads of the maintained cuda-oxide and RCCL mini-linq/main fork branches.
-cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "299eda41b287642ef3323144d8fef8f16fe4fbe1" }
-cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "299eda41b287642ef3323144d8fef8f16fe4fbe1" }
-cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "299eda41b287642ef3323144d8fef8f16fe4fbe1" }
-rccl-memory = { git = "https://github.com/StarGazerM/rccl.git", rev = "1d33079a9b89ebe672618856f2f98afda0f74e12" }
-rccl-cub = { git = "https://github.com/StarGazerM/rccl.git", rev = "1d33079a9b89ebe672618856f2f98afda0f74e12" }
-rccl-thrust = { git = "https://github.com/StarGazerM/rccl.git", rev = "1d33079a9b89ebe672618856f2f98afda0f74e12" }
+# Pinned heads of the maintained cuda-oxide fork and the RCCL pooled-workspace branch.
+cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "57eacecc081fe1809a815ae4ca32643884dce15b" }
+cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "57eacecc081fe1809a815ae4ca32643884dce15b" }
+cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "57eacecc081fe1809a815ae4ca32643884dce15b" }
+rccl-memory = { git = "https://github.com/StarGazerM/rccl.git", rev = "317e8bf11936af91533e5da16370b9eac7bb81a2" }
+rccl-cub = { git = "https://github.com/StarGazerM/rccl.git", rev = "317e8bf11936af91533e5da16370b9eac7bb81a2" }
+rccl-thrust = { git = "https://github.com/StarGazerM/rccl.git", rev = "317e8bf11936af91533e5da16370b9eac7bb81a2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [profile.release]
 lto = false
-codegen-units = 1
+# Compile independent runtime modules and generated non-inlined query runners
+# concurrently; a single unit serializes LLVM across the dependency chain.
+codegen-units = 16
 
 # Proc macros and their pass crates run the whole Datalog/CQ compiler during
 # expansion; Cargo's build-override default (opt-level 0) leaves them unoptimized.
@@ -27,13 +29,3 @@ opt-level = 3
 
 [profile.dev.build-override]
 opt-level = 3
-
-# Generated DOOP host code places holes, strata and phases in partitioned
-# non-inlined runners; parallel LLVM codegen units compile them concurrently.
-[profile.release.package.doop-gpu]
-codegen-units = 16
-
-[profile.release.package.srd-doop-gpu]
-codegen-units = 16
-
-

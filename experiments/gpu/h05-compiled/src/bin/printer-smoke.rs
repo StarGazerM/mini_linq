@@ -25,13 +25,14 @@ fn main() {
             };
             physical {
                 relation Input(value:i64) = (&resident);
-                scan = pipe rename Input@0 {value -> value};
-                answer = pipe canon project scan keep {value};
+                scan = pipe rename Input {value -> value};
+                answer = let canon project scan keep {value};
                 return answer as answer(value);
             }
-            structures {
-                scan host scan = ::cq_gpu_runtime::DeviceColumns<'_, (i64,)> [];
-                answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+                scan host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'_, (i64,)> [];
+                answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                answer canon = rows;
             }
             sequence {
                 source = store rows scan;
@@ -39,6 +40,7 @@ fn main() {
                 output count;
             }
         };
+        // DECODE P: diagnostic smoke answer publication exposes host tuples for reference comparison.
         let mut actual = answer.to_host().expect("GPU smoke download");
         let mut expected: Vec<_> = mini_linq::compile! {
             pipeline {}

@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bench-check = { path = "../../../testkit/bench-check" }
+cq-load = { path = "../../../io/cq-load", default-features = false }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+gpu-datalog-runtime = { path = "../datalog-runtime" }
 gpu-device-columns = { path = "../device-columns" }
 gpu-compress = { path = "../compress" }
 gpu-compress-host = { path = "../compress-host" }
@@ -17,17 +20,21 @@ cuda-host.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 csv = "1"
+sha2 = "0.10"
 
 [build-dependencies]
+cq-workload-authored = { path = "../../../features/workloads/authored" }
+sha2 = "0.10"
+cq-stage = { path = "../../../facade/cq-stage" }
+cq-syntax = { path = "../../../languages/cq-syntax" }
+cq-planning = { version = "0.1.0", path = "../../../facade/cq-planning" }
 cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
 gpu-compress-host = { path = "../compress-host" }
 cq-lang-vo = { path = "../../../languages/cq-lang-vo" }
 cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
 cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
 cq-lang-sequence = { path = "../../../languages/cq-lang-sequence" }
-cq-order = { path = "../../../passes/cq-order" }
-cq-reduce = { path = "../../../passes/cq-reduce" }
-cq-elaborate = { path = "../../../passes/cq-elaborate" }
+cq-relational-lowering = { path = "../../../passes/cq-relational-lowering" }
 cq-index-policy = { path = "../../../passes/cq-index-policy" }
 cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }
 cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
@@ -36,7 +43,8 @@ cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
 cq-sequence-pull = { path = "../../../passes/cq-sequence-pull" }
 cq-gpu-sequence = { path = "../sequence" }
 cq-rewrite-passes = { path = "../../../features/rewrites/passes" }
-cq-load = { path = "../../../runtime/cq-load", default-features = false }
+cq-load = { path = "../../../io/cq-load", default-features = false }
+cq-storage = { path = "../../../runtime/cq-storage" }
 proc-macro2 = "1"
 prettyplease = "0.2"
 quote = "1"
@@ -49,6 +57,6 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "visit-mut", "extra-traits"] }
 cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
-cq-load = { path = "../../../runtime/cq-load", default-features = false }
+cq-load = { path = "../../../io/cq-load", default-features = false }
 cq-lang-sequence = { path = "../../../languages/cq-lang-sequence" }
 cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }

@@ -9,28 +9,31 @@ macro_rules! triangle {
             relation R(a:i32,b:i32) = ($r);
             relation S(b:i32,c:i32) = ($s);
             relation T(a:i32,c:i32) = ($t);
-            answer(a,b,c) :- R(a,b), S(b,c), if (*c >= 0), T(a,c);
+            answer(a,b,c) :- R(a,b), S(b,c), where c >= 0, T(a,c);
         }
     };
 }
 
 #[test]
 fn public_pipeline_records_sorted_runs_and_executes_default_answers() {
-    let baseline: ir::Program = syn::parse_str(triangle!(r, s, t;
-        print = cq_rewrite_test_driver::capture_structures;
+    let (baseline_physical, baseline) = cq_testkit::corpus::parse_structures_capture(triangle!(r, s, t;
+        print_input = structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
     ))
     .unwrap();
-    let rewritten: ir::Program = syn::parse_str(triangle!(r, s, t;
+    let (rewritten_physical, rewritten) = cq_testkit::corpus::parse_structures_capture(triangle!(r, s, t;
         structures = [cq_rewrites::sorted_runs];
-        print = cq_rewrite_test_driver::capture_structures;
+        print_input = structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
     ))
     .unwrap();
-    ir::check_rewrite(&baseline, &rewritten).unwrap();
+    ir::check_rewrite(&baseline_physical, &baseline, &rewritten_physical, &rewritten).unwrap();
+    // A relational predicate exposes the filtered build to storage selection;
+    // an opaque Rust `if` carries no relational planning information.
     assert!(
         rewritten.structures.entries.iter().any(|entry| {
             matches!(&entry.structure, Structure::Built { keyed, .. }
-            if matches!(&keyed.ty, syn::Type::Path(p)
-                if p.path.segments.last().unwrap().ident == "SortedRun"))
+            if keyed.provider.token == "sorted_run")
         }),
         "{:#?}",
         rewritten.structures
@@ -71,11 +74,11 @@ fn one_run_answers_both_payload_and_membership_reads() {
         pipeline { cq_rewrites::sorted_runs, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(a:i32) = (left); relation R(a:i32,b:i32) = (right);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x,b -> y};
             s = pipe semi eager[x] l,r;
             p = pipe probe first[x] s,r;
-            out = pipe canon project p keep {x,y};
+            out = let canon project p keep {x,y};
             return out as answer(x,y);
         }
     }
@@ -93,9 +96,9 @@ fn closed_owned_probe_key_uses_exact_sorted_run() {
             relation R(a:i64,b:i64) = (&right);
             u = pipe unit;
             l = pipe bind u with x:i64 = (3i64);
-            r = let rename R@0 {a -> x,b -> y};
-            p = pipe canon probe first[x] l,r;
-            return p as answer(*y);
+            r = let rename R {a -> x,b -> y};
+            p = let canon probe first[x] l,r;
+            return dedup p as answer(*y);
         }
     }.collect();
     assert_eq!(actual, BTreeSet::from([(30,), (31,)]));

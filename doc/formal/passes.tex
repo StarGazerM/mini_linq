@@ -1,18 +1,40 @@
 \section{Passes}
 \label{sec:passes}\label{sec:planning}\label{sec:pass-contracts}
 Each subsection gives the pass's signature, its construction rules on the
-checked domain, its independent check, and the refinement it supports. Every
+checked domain, its check, and the refinement it supports. Every
 constructor checks its target contract. A check $\mathsf{check}_f(s,t,\chi)$
-requires both local contracts, compares the ASTs the code compares, and never
-calls the constructor. Checks are sufficient structural conditions under the
+requires both local contracts and compares the ASTs the code compares.
+Independent checking is the target; CK-Transfer and the functional-root test
+in CK-EvidenceLe currently reuse producer logic, as qualified below.
+Checks are sufficient structural conditions under the
 premises of Section~\ref{sec:premises}: they reject some equal plans and decide
 no equivalence.
+
+\begin{mathpar}
+\Rule{Smallest-Resolve}
+ {a\text{ selects one positive CQ occurrence }i\quad
+  p=\mathit{Reads}(a)\quad
+  \{r\mid Steps(r)=p\land RA(r)\text{ is Rename}\}=\{r_i\}}
+ {\code{smallest}(\ldots,a,\ldots)\leadsto
+  \code{smallest}(\ldots,r_i,\ldots)}
+\end{mathpar}
+Planning produces $\mathit{Reads}$, the occurrence-to-first-VO-read table, and
+$Steps$ once from its actual compilation. The stage protocol carries both
+beside the program, not in any IR. Each Smallest invocation (including the
+Datalog wrapper) resolves only its own arguments when it executes. Planning
+does not inspect or rewrite any pending invocation. Missing or ambiguous table
+entries refuse the selector; downstream code never reconstructs CQ occurrences
+from relational definitions. Explicit paths alternate clause and branch
+indices; $\mathit{Reads}$ records the corresponding enclosing VO step and branch
+indices before the first local read. Unqualified aliases exist only for unique
+top-level positive occurrences, never for nested branch reads.
 
 \subsection{Normalization: CQ $\to$ CQ$_{\rm NF}$}
 For an atom at clause $i$, walk its arguments left to right against the declared
 types $\tau_j$. $B$ holds names bound by earlier clauses, $L$ names already seen in
 this occurrence (reset per occurrence), $A$ bare names this atom supplies that
-are not in $B$. Literals remain in the atom and bind no name. For other
+are not in $B$, and $Q$ is the complete logical scope (including the current
+branch's binders). Literals remain in the atom and bind no name. For other
 arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
 \begin{mathpar}
 \Rule{A-Variable}{a_j=x\quad x\notin L}
@@ -24,26 +46,142 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
 \Rule{A-Wildcard}{a_j=\_\quad k\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\text{unconstrained witness}]}
 
+\Rule{A-Closed}{a_j=e\quad\fv(e)\cap Q=\emptyset\quad k\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{where}\ k==\mathsf{Closed}(e)]]}
+
 \Rule{A-Prefix}{a_j=e\text{ is a remaining expression}\quad
- \uses(e,A)=\emptyset\quad k\text{ fresh}}
+ \fv(e)\cap Q\ne\emptyset\quad\uses(e,A)=\emptyset\quad k\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\mathit{before}:=\mathit{before}\concat[\mathsf{let}\ k:\tau_j=e]]}
 
 \Rule{A-Local}{a_j=e\text{ is a remaining expression}\quad
  \uses(e,A)\ne\emptyset\quad k,v\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{let}\ v:\tau_j=e,\ k=v]]}
+
+\Rule{A-Capture}{c=\mathsf{let}\ p=e\ \lor\ c=\mathsf{if}\ e\text{ top-level, or a closed head operand/aggregate argument}\\
+ \fv(e)\cap(Q\setminus\mathsf{captures})=\emptyset\quad\mathsf{binders}(p)\text{ bound nowhere else}}
+ {c\leadsto_{NF}\mathsf{captures}:=\mathsf{captures}\concat[c]\text{ (dependency order)}}
+
+\Rule{A-CaptureRef}{\mathsf{let}\ p=e\ \text{or}\ \mathsf{if}\ e\text{ in a branch}\quad
+ \fv(e)\cap Q_{branch}=\emptyset\quad c\text{ fresh}}
+ {\mathsf{let}\ p=e\leadsto_{NF}\mathsf{let}\ p=\mathsf{capture}\ c,\ \mathsf{if}\ e\leadsto_{NF}\mathsf{if}\ \mathsf{capture}\ c
+  \quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{let}\ c=e]]}
+
+\Rule{A-Alias}{\mathsf{where}\ x==y\text{ top-level}\quad x,y\text{ atom generators}\quad
+ \text{no block in }q\\
+ y\notin\mathsf{Protected}(q)\quad
+ \text{no atom repeats a name under }[y:=x]}
+ {q\leadsto_{NF}q[y:=x]\text{ without the solved identity}}
+
+\Rule{A-Domain}{x\ op\ t\text{ (in }\code{where}\text{, an atom or negated-atom position, membership or range)}\quad
+ x\text{ at a column of recorded domain id }d\text{ and payload }D:T\quad Q\vdash t:\mathsf{Closed}\quad k\text{ fresh}\\
+ (op',f)=\begin{cases}(op,\mathsf{exact})&op\in\{=,\ne\}\text{ or a position}\\
+ (op,\mathsf{lower})&op\in\{<,\geq\}\\
+ (<,\mathsf{upper})&op={\leq}\\
+ ({\geq},\mathsf{upper})&op={>}\end{cases}}
+ {x\ op\ t\leadsto_{NF}x\ op'\ k\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{Domain}(k,T,f,d,D,t)]]}
 \end{mathpar}
+A-Domain runs once per operand at normalization; a literal membership
+\code{x in [t, ...]} first becomes the disjunction of $x=t_i$, \code{x in a..b}
+becomes $x\geq a\land x<b$ (both \textsf{lower}) and \code{x in a..=b} becomes
+$x\geq a\land x<\mathsf{upper}(b)$. Because the code map $\varphi$ of an ordered
+domain is order-preserving on present values ($v\leq w\iff\varphi(v)\leq\varphi(w)$),
+$x<t\iff\varphi(x)<\mathsf{lower}(t)$ (first code $\geq t$) and
+$x\leq t\iff\varphi(x)<\mathsf{upper}(t)$ (first code $>t$); an absent
+\textsf{exact} value is the domain's non-member code (\code{StringCode::MAX}),
+which no row carries. \textsf{exact} needs \code{CodeDomain};
+\textsf{lower}/\textsf{upper} need \code{OrderedCodeDomain}, so an ordered
+comparison on an unordered domain is rejected by rustc. Columns without a
+domain keep their operands unchanged. The captured code is then an ordinary
+closed operand (A-Closed, IF-Capture); its typed domain record is carried unchanged.
+Already recorded translations with the same domain id stay unchanged.
+The declaration table interns domain spellings once; A-Domain compares only
+those recorded ids, not Rust expressions.
+Authored Rust calls, even identically spelled, never establish this provenance.
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
-Identities are relational clauses, not guards. Constraints, residual guards and
+Identities are relational clauses, not guards. Row-dependent Rust guards,
 lets and generators are copied; branch bodies normalize recursively with fresh names; a
-computed head becomes a final typed bind. In \code{R(x,f(x),g())}, the closed
-\code{g()} bind precedes the atom and the dependent \code{f(x)} bind follows it;
-these positions, not Rust argument order, define the written reference.
+row-dependent computed head becomes a final typed bind. Query-closed lets, guards,
+head operands and aggregate arguments are recorded once as captures, never body
+clauses, so ordering never places them; a closed branch binding keeps its binder
+as a capture reference. In \code{R(x,f(x),g())}, closed
+\code{g()} remains a once-bound host operand of an occurrence restriction;
+the dependent \code{f(x)} bind follows the atom. No closed atom operand creates
+a row binding or a Rust block dependency.
+After the per-atom rewrites, A-Alias solves relational variable equalities
+between top-level atom generators (in written order, keeping the left name
+unless only the right one is protected). $\mathsf{Protected}(q)$ holds the
+valuation (head) variables, negated atom columns, Rust binders and the
+generator inputs of every Rust expression, whose spellings are observed outside
+relational algebra. The solution is recorded only as plain shared names in the
+NF; an unsolved equality remains a relational predicate. Later passes never
+treat an equality class as a join key: lowering realizes only shared names.
 \emph{Check:} the NF contract only; there is no separate correspondence check.
 \emph{Refinement:} each rewrite replaces an argument by an equivalent
-identity or a bind at the position Rust would evaluate it, so meanings are equal.
+identity or a bind at the position Rust would evaluate it, and a pure total
+closed value evaluated once equals its per-row evaluation; A-Alias substitutes
+equals for equals in relational positions only, so meanings are equal.
 
 \subsection{Ordering: CQ$_{\rm NF}\to$ VO}
 \label{sec:planning-order}
+
+\paragraph{Step-1 ordering contract.}
+For a recorded scope $S=[s_0,\ldots,s_{n-1}]$, let $B_k$ be its recorded
+incoming supplied bindings plus the outputs of $s_0,\ldots,s_{k-1}$, $U_k$ its
+remaining steps, and $R(s),O(s)$ its declared requirements and outputs.
+Visible but unsupplied free columns of a hoisted arm are not in $B_k$.
+These are binding facts, not deductions from Rust syntax or types.
+Write $\mathsf{ready}(s,B)$ for $R(s)\subseteq B$ and
+$\mathsf{filter}(s,B)$ for $\mathsf{ready}(s,B)\land O(s)\subseteq B$.
+An atom's connectivity is sharing a declared output with $B$.
+``Earliest'' means before the next variable introduction: several ready
+filters cannot occupy the same sequence position, so they drain as a group;
+no ordering between such filters is imposed by I2.
+\begin{mathpar}
+\Rule{I1}{\forall k<n.\ R(s_k)\subseteq B_k}
+ {S:\mathsf{Ready}}
+
+\Rule{I2}{\forall k<n.\ O(s_k)\not\subseteq B_k
+ \Rightarrow \neg\exists t\in U_k.\ \mathsf{filter}(t,B_k)}
+ {S:\mathsf{EarliestFilters}}
+
+\Rule{I3}{\forall k<n.\ s_k\text{ introducing atom}\land O(s_k)\cap B_k=\varnothing
+ \Rightarrow \neg\exists t\in U_k.\ t\text{ atom}\land
+ \mathsf{ready}(t,B_k)\land O(t)\cap B_k\ne\varnothing}
+ {S:\mathsf{Connected}}
+
+\Rule{I4}{C_k\text{ candidates permitted by I1--I3}\quad
+ s_k\in\mathsf{allowed}(C_k,E_k,T_k)\quad
+ \text{written position is the last tie-break}}
+ {S:\mathsf{DeclaredChoice}}
+
+\Rule{I5}{D\text{ optional recorded stratum demand}\quad
+ W_k\subseteq D\quad
+ \text{every cited reused key in }W_k\text{ matches the recorded lookup}}
+ {S:\mathsf{SharedDemand}}
+
+\Rule{VO-Order}{S:\mathsf{Ready}\quad S:\mathsf{EarliestFilters}\quad
+ S:\mathsf{Connected}\quad
+ \forall k.\ \mathsf{citationsExist}(E_k,T_k,W_k)\land
+ s_k\in\mathsf{allowed}(C_k,E_k,T_k)}
+ {\mathsf{checkOrder}(S)\Downarrow\ok}
+\end{mathpar}
+I4 records structural choices, or cited evidence when present; Written is
+exempt from I4 only. In step 1 there is no cost stage. I5 transports optional
+shared demand but does not rank candidates yet, and records no reuse claim.
+The eventual I5 preference applies only within candidates tied under I1--I3.
+VO-Order checks each scope independently, including nested scopes, from
+recorded binding and choice facts; it neither calls the scheduler nor proves
+optimality. Advice constrains introducing atoms only: ready fully-bound
+checks drain independently of advised position. An authored violation of I1
+or I3 is rejected with its rule identity, never repaired by reordering atoms.
+A let introducing a fresh variable is not an I2 filter merely because it is
+a let. A fully-bound positive atom is an I2 filter even though syntactically
+it is an atom. Datalog records seed/delta identity, the driver policy and
+the occurrence permutation as structural input. Step 1 retains CPU
+WrittenOrder, GPU DeltaFirst and Incremental-prefix Storage selection.
+Removing that permutation planner and deriving Storage from VOs is the
+separately censused step 1b; no such ownership reversal is claimed here.
+
 Let $T$ be scalar-let- and generator-supplied names and $B_w$ the written prefix. Clause $i$ provides
 $\bar O_i$ and requires $R_i$:
 \begin{mathpar}
@@ -59,41 +197,87 @@ $\bar O_i$ and requires $R_i$:
 \Rule{D-For}{\bar N=\binds(p)\quad R=\uses(e,B_w)}
  {B_w;T\vdash\mathsf{for}\ p\ \mathsf{in}\ e\triangleright(\bar N,R)}
 
-\Rule{C-Ready}{i\in U\quad R_i\subseteq B\\
- \neg\mathsf{Rust}(c_i)\ \lor\
- (i=\min\{j\in U\mid\mathsf{Rust}(c_j)\}\land
-  \operatorname{Before}(i)\cap U=\emptyset)}
+\Rule{C-Ready}{i\in U\quad R_i\subseteq B}
  {U;B\vdash i:\mathsf{ready}}
 \end{mathpar}
-Generators are Rust nodes for C-Ready, not atom occurrences or relational
-facts. They share scalar lets' opaque placement: dependencies must be bound,
-all earlier Rust nodes must execute first, and every source Before fact must
-already hold. Later atoms mentioning their outputs are input-dependent access
-patterns, not alternative binders. Incomplete atom checks remain Before
-requirements. Generators cannot be reduction targets, reduction supports or
-independent build targets; a block containing one is not Rust-free.
-This remains true for a closed expression or a generator yielding no names.
+Generators require their RHS free variables, just as scalar lets and guards
+do. They are not atom occurrences or relational predicate facts. Later atoms
+mentioning their outputs require those bindings rather than supplying them.
+There is no written-order chain or predecessor-set condition. Generators
+cannot be reduction targets, reduction supports or independent build targets;
+a block containing one is not Rust-free. This remains true for a closed
+expression or a generator yielding no names.
 Identities and constraints require their variables and provide none
 (D-Constraint). A Rust-free block provides its free/interface heading; a Rust
 block requires its free names and is Rust. Heuristics repeatedly place the
-least-ranked ready clause; an empty ready set is an error. With $\kappa$ the
-equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
+least-ranked ready clause until none is ready. Connectivity counts
+only names actually shared after normalization, $s_i=|O_i\cap B|$: an unsolved
+equality class (A-Alias declined) is not a realizable join key.
+Let $a_i=[O_i\not\subseteq B]$. The scheduler first minimizes $a_i$,
+then the structural rank below, so ready nonintroducing work precedes
+introducing lets as well as introducing atoms. A final stable drainage
+applies the same I2 obligation to assembled Fine and authored schedules
+without changing projected subatoms or introducing choices.
+
+\emph{Totality.} Ordering is a total function of a WF-NF query and resolved
+advice; it never checks its output. User-authored inputs are resolved at the
+front (O-AdviceResolve, O-KnownResolve and checked declared-evidence correspondence), and the pipeline checks
+the produced schedule once (CK-Order, CK-StepAdvice or CK-EvidenceLe, each
+including WF-VO and VO-Order). The ready set is never empty while clauses
+remain. In a seeded scope, the written-earliest pending clause $c$ is ready:
+CQ-Where, CQ-Neg and IF-Environment bound every predicate, negation and Rust
+input of $c$ by its written prefix, CQ-Bind and CQ-For make every Rust binder
+fresh for its prefix (so a let-bound atom column is bound by an earlier
+clause), and every earlier clause is placed. A hoisted arm without a finite
+domain starts from no seed, and O-BlockPlacement hoists such a block only when
+every arm is $\mathsf{Placeable}_\varnothing$. Placeability is the least
+fixpoint of C-Ready, $P_{n+1}=\{i\mid R_i\subseteq S\cup\bigcup_{j\in P_n}O_j\}$,
+which no ranking changes, so every ranked schedule places every clause. Fine
+binds an eligible variable at every step for the same reason, and its binder
+exists by the eligibility filter. Elimination ranks an atom by the numbered
+variables it provides (S-Elimination); a free column of a nested block that
+the scope analysis does not number contributes nothing, so the rank is total.
 \begin{mathpar}
-\Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=[0,\ldots,m-1]}
+\Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=\mathsf{drain}_{I2}([0,\ldots,m-1])}
 
-\Rule{S-Connected}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|}
- {\mathsf{rank}_{Connected}(i,B)=(1,[s_i=0],0,i)}
+\Rule{S-WrittenConnected}{
+ C=\{i\in U\mid R_i\subseteq B\}\quad j=\arg\min_{i\in C}(a_i,i)\\
+ K=\{i\in C\mid c_i\text{ is an atom},\ |O_i\cap B|>0\}}
+ {\mathsf{next}_{WrittenConnected}=
+ \begin{cases}
+ \min K & a_j=1,\ c_j\text{ atom},\ |O_j\cap B|=0,\ K\ne\varnothing\\
+ j & \text{otherwise}
+ \end{cases}}
 
-\Rule{S-Filtered}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|}
- {\mathsf{rank}_{Filtered}(i,B)=(1,[s_i=0],f_i,i)}
+\Rule{S-Connected}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
+ {\mathsf{rank}_{Connected}(i,B)=(a_i,1,[s_i=0],0,i)}
 
-\Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|\\
+\Rule{S-Filtered}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
+ {\mathsf{rank}_{Filtered}(i,B)=(a_i,1,[s_i=0],f_i,i)}
+
+\Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|O_i\cap B|\\
  r\in\{GreedyWidth,Auto\}}
- {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|\kappa(B)\cup\kappa(O_i)|,i)}
+ {\mathsf{rank}_{r}(i,B)=(a_i,1,[s_i=0],|B\cup O_i|,i)}
 
 \Rule{S-Elimination}{c_i\text{ atom}\quad E=\mathsf{analysis}(q).\mathit{elimination\_order}\\
- e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\}\cup\{|E|\})}
- {\mathsf{rank}_{Elimination}(i,B)=(1,0,e_i,i)}
+ e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\cap E\}\cup\{|E|\})}
+ {\mathsf{rank}_{Elimination}(i,B)=(a_i,1,[|O_i\cap B|=0],e_i,i)}
+
+\Rule{H-MCSTie}{W=\mathsf{firstOccurrences}([\bar X_i\concat
+ \mathsf{sort}_{lex}(\widehat X_i)]_{i\ {\rm written}})\quad
+ N_0=[]\\
+ x_k=\arg\min_{x\in W\setminus\set(N_k)}
+ (-|\mathsf{adj}(x)\cap\set(N_k)|,\operatorname{pos}_W(x))\quad
+ N_{k+1}=N_k\concat[x_k]}
+ {\mathsf{eliminationOrder}(q)=\mathsf{reverse}(N_{|W|})}
+
+\Rule{S-BlockOccurrence}{c_i\text{ a block}\quad\neg\mathsf{Rust}(c_i)}
+ {\mathsf{isOccurrence}(c_i)=\mathsf{true}\quad
+  \mathsf{rank}(i,B)=\mathsf{rank}_{\rm atom}(O_i,R_i,B)}
+
+\Rule{O-BlockColumns}{c\text{ a block with free names }F_c
+ \text{ and interface }I_c}
+ {\bar X_c=\mathsf{sort}_{lex}(F_c)\concat\mathsf{sort}_{lex}(I_c)}
 
 \Rule{O-Coarse}{\mathit{seq}\text{ chosen}}
  {\mathsf{coarse}(\mathit{seq})=[\mathsf{fullSubatom}(i)\text{ or the copied central/Rust step}\mid i\in\mathit{seq}]}
@@ -102,38 +286,321 @@ equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
  (a,G_1,B_1,J)=\mathsf{introduce}(v,B_0)}
  {\mathsf{fineStep}(v,B)=G_0\concat a\concat G_1
    \concat[\mathsf{subatom}(j,B_1)]_{j\in J}}
+
+\Rule{O-FineHoldingOrder}{h=Prefix(r)\quad split=Fine\quad
+ \mathsf{rank}_r(i,P)=(a_i,b_i,c_i,d_i,i)\quad
+ \pi(a,b,c,d,i)=(b,c,d,i)}
+ {\sigma_{\rm hold}=\mathsf{schedule}_{C\text{-}Ready}
+   (q,\pi\circ\mathsf{rank}_r)\quad
+  \mathsf{sequence}_{h,Fine}(q)=\sigma_{\rm hold}}
+
+\Rule{O-FineVariables}{\sigma=\mathsf{sequence}_{h,Fine}(q)\quad
+ V_0=\begin{cases}
+ \mathsf{reverse}(\mathsf{eliminationOrder}(q))&h=Elimination\\
+ \mathsf{firstOccurrences}([\bar O_i]_{i\in\sigma})&\text{otherwise}
+ \end{cases}\\
+ A(x)=\mathsf{stableSort}_{\,\min\{\operatorname{pos}_\sigma(i)\mid x'\in O_i\}}
+       ([x'\in V_0\mid x'\sim x])}
+ {V=\mathsf{firstOccurrences}([A(x)]_{x\in V_0})}
+
+\Rule{O-FineChoice}{V\text{ from O-FineVariables}\quad
+ H_x=\{i\in\sigma\mid \mathsf{isOccurrence}(c_i),\
+       x\in O_i,\ R_i\subseteq P\}\\
+ E=\{x\in V_{\rm remaining}\mid x\in B\lor
+       (x\notin T\land H_x\ne\emptyset)\}\quad
+ c_x=[\exists i\in H_x.\ O_i\cap P\ne\emptyset]\\
+ x=\arg\min_{x\in E}([\,\neg c_x\,],\operatorname{pos}_V(x))\quad x\notin B}
+ {\mathsf{binder}(x)=\arg\min_{i\in H_x}
+   ([O_i\cap P=\emptyset],\operatorname{pos}_\sigma(i))}
+
+\Rule{O-WrittenFine}{i\in\sigma\quad\mathsf{isOccurrence}(c_i)\quad
+ [x_1,\ldots,x_l]=[x\in\bar O_i\mid x\notin B]\quad l>0}
+ {\mathsf{splitInPlace}(i,B)=
+   [\mathsf{subatom}(i,B\cup\{x_1,\ldots,x_j\})]_{j=1}^{l}}
+
+\Rule{O-EmptyCheck}{s_k=R@i(\bar\_)\quad
+ \exists j>k.\ s_j=R@i(K)\land\mathsf{introduces}(s_j)\ne\emptyset}
+ {\mathsf{omit}(s_k)}
+
+\Rule{VO-EmptyCheck}{s_k=R@i(\bar\_)}
+ {\forall j>k.\ s_j=R@i(K)\Longrightarrow\mathsf{introduces}(s_j)=\emptyset}
+
+\Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering, free heading }F,\ \text{arms }b_1,\ldots,b_m}
+ {b.placement={\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\lor
+ (\neg\mathsf{domain}(b)\land\exists j.\ \neg\mathsf{Placeable}_{\varnothing}(\mathsf{clauses}_F(b_j)))\\
+ \mathsf{hoisted}&\text{otherwise}\end{cases}}}
+
+\Rule{O-WrittenBlocks}{t=\mathsf{WrittenCoarse}(s)}
+ {\mathsf{compileWritten}_{order}(s)=
+ t[\forall b\text{ recursively}.\ b.placement:=\mathsf{correlated}]}
+
+\Rule{O-AdviceResolve}{\forall a\in\bar a.\ c_a=\mathsf{resolve}(a)\text{ names one top-level positive atom or block of }n\\
+ \forall a.\ K_a\ne\bot\Rightarrow c_a\text{ positive}\land K_a\subseteq\mathsf{vars}(c_a)\land K_a\text{ distinct}\\
+ \forall c.\ |\{a\in\bar a\mid c_a=c\land\mathsf{full}(a)\}|\le 1}
+ {\mathsf{resolve}(n,\bar a)=[(c_a,K_a)]_{a\in\bar a}}
+
+\Rule{O-StepAdvice}{n=N(q)\quad A=\mathsf{resolve}(n,\bar a)\quad
+ t=\mathsf{authorSteps}(n,A)}
+ {\mathsf{orderAdvice}(q,A)=\mathsf{restrict}(\mathsf{drain}_{I2}(t))}
+
+\Rule{CK-StepAdvice}{A=\mathsf{resolve}(n,\bar a)\quad\mathsf{WF}_{VO}(t)\quad\mathsf{VOOrder}(t)\\
+ L=\{c\mid (c,K)\text{ the first partial read of }c\text{ in }A,\
+ K=\varnothing\lor\mathsf{introduces}_t(\mathsf{firstRead}_t(c,K))=\varnothing\}\quad
+ \mathsf{CK\text{-}Le}(n,t,L)}
+ {\mathsf{checkAdvice}(n,\bar a,t)\Downarrow\ok}
+% Resolution checks the selector reference set; CK-StepAdvice, not the
+% planning walk, diagnoses dependency, subatom, and occurrence-phase errors.
+
+\Rule{O-EvidenceLe}{n=N(q)\quad \mathcal{E}=n.\mathit{declared\_evidence}\\
+ \forall i\in\mathsf{occ}(n).\ \mathsf{count}_{\mathcal{E}}(i)\text{ defined}\\
+ F=\{r\mid \mathsf{functional}_{\mathcal{E}}(n,r)\wedge\mathsf{dom}_{\mathcal{E}}(n,r)\}\ne\varnothing\quad
+ r=\arg\max_{r\in F}(\mathsf{count}_{\mathcal{E}}(r),-r)\\
+ t=\mathsf{orderAdvice}(n,\mathsf{keyedReads}_{\mathcal{E}}(n,r))}
+ {\mathsf{order}^{\mathcal{E}}(q)=t}
+
+\Rule{O-EvidenceFallback}{d=O_{\chi}(n)\quad\mathcal E=n.\mathit{declared\_evidence}\\
+ F=\{r\mid\mathsf{functional}_{\mathcal E}(n,r)\land
+             \mathsf{dom}_{\mathcal E}(n,r)\}\\
+ (\mathsf{blocks}(n)\ne\emptyset)\lor(|\mathsf{occ}(n)|<2)\lor
+ (\exists i.\mathsf{count}_{\mathcal E}(i)=\bot)\lor(F=\emptyset)\lor
+ \left(F\ne\emptyset\land
+ r=\arg\max_{r\in F}(\mathsf{count}_{\mathcal E}(r),-r)\land
+ \mathsf{keyedReads}_{\mathcal E}(n,r)=\mathsf{fullReads}(d)\right)}
+ {\mathsf{order}^{\mathcal E}_{\chi}(n)=d}
+
+\Rule{CK-EvidenceLe}{\mathcal{E}=n.\mathit{declared\_evidence}\quad \mathsf{WF}_{VO}(n,t)\\
+ F=\{r\mid \mathsf{functional}_{\mathcal{E}}(n,r)\wedge\mathsf{dom}_{\mathcal{E}}(n,r)\}\ne\varnothing\\
+ \mathsf{first}(t)\in F\quad
+ \mathsf{count}_{\mathcal{E}}(\mathsf{first}(t))=\max_{r\in F}\mathsf{count}_{\mathcal{E}}(r)\\
+ \forall i\ne\mathsf{first}(t).\ \mathsf{keyBound}_{\mathcal{E}}(i,\mathsf{boundBefore}(\mathsf{firstRead}(i)))\\
+ L=\{i\mid\mathsf{firstRead}(i)\text{ introduces nothing}\}\quad
+ \forall i\in L.\ f_i<3\quad \mathsf{CK\text{-}Le}(n,t,L)}
+ {\mathsf{check}^{\mathcal{E}}(n,t)\Downarrow\ok}
+
+\Rule{R-TpchEvidence}{\text{route}\in\{\mathsf{default},\mathsf{par}\}\quad
+ \mathcal{E}=\mathsf{checkedDocument}(\code{tpch-sf1-evidence.json})\quad
+ n.\mathit{declared\_evidence}=(\mathcal E,\mathsf{explicitBindings}(q))}
+ {\mathsf{plan}(q)=\mathsf{order}^{\mathcal{E}}(q)}
+
+\Rule{O-KnownResolve}{\mathsf{WFBindings}(t)\quad \neg R(\bar x)\text{ at top-level clause }i\text{ of }t.cq\quad
+ 1\le k\le|\{j\mid s_j\text{ a top-level positive read}\}|\\
+ p=\mathsf{boundary}_k(t\setminus\neg R(\bar x))\quad
+ \mathsf{logical}(\bar x)\subseteq B_p}
+ {\mathsf{resolve}(R@i\ \mathsf{at}\ k,t)=p}
+
+\Rule{O-KnownAt}{p=\mathsf{resolve}(R@i\ \mathsf{at}\ k,t)\quad
+ t'=t\text{ with }\neg R(\bar x)\text{ moved to position }p}
+ {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=\mathsf{drain}_{I2}(t')}
 \end{mathpar}
-Ready constraints rank $(0,0,0,i)$, other nonatoms $(0,0,1,i)$; Auto is
-GreedyWidth; Elimination uses reverse maximum-cardinality search on the primal
-graph. Written/Fine splits atoms in place. $\mathsf{flush}$ emits ready waiting
-steps (constraints first); a variable is eligible if no Rust step supplies it or
-it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
-then the others' checks. Incomplete atoms count toward Before until their full
-row is checked. Literal-only occurrences have an empty variable heading and
+Here the sole evidence source is the checked dataset document attached to the
+CQ input, not a VO annotation or planner option. For an occurrence's explicitly
+bound \code{full} input, $\mathsf{count}_{\mathcal E}$ reads its relation's
+\code{rows} fact only when its claim is \code{equal}, its source is
+\code{exact}, \code{declared} or \code{calibrated}, and its value is present.
+Other views, missing bindings, missing row facts and non-equality observations
+give $\bot$ and select O-EvidenceFallback; no number is guessed from syntax.
+Keys are the document's checked \code{keys} declarations whose complete
+column set survives the explicit correspondence. A missing/projected-away
+key supplies no keyed-read premise. No new key is inferred from a type,
+relation name or column spelling. The existing H-FilterRank policy and
+written-position ties are unchanged; they do not estimate missing statistics.
+
+A read of occurrence $i$ is \emph{keyed} under bound variables $B$
+($\mathsf{keyBound}_{\mathcal{E}}(i,B)$) when every column of some recorded key
+of its relation is a literal or a variable in $B$: it matches at most one row.
+$\mathsf{functional}_{\mathcal{E}}(n,r)$ holds when, starting from $r$ and
+closing over ready Rust bindings, every other top-level occurrence can follow as
+a keyed read. With $w$ the written root (the first top-level occurrence ready
+with nothing bound), $\mathsf{dom}_{\mathcal{E}}(n,r)$ holds when $r\ne w$,
+$\mathsf{count}_{\mathcal{E}}(r)\ge\mathsf{count}_{\mathcal{E}}(w)$, $f_r\ge f_w$, and
+no occurrence $j\notin\{r,w\}$ with $f_j\le f_w$ shares a variable with $r$: reduction
+semi-joins $r$ by its filtered neighbours, so such a neighbour filters $r$ at least as strongly as $w$ by a
+predicate $w$ lacks. A dominating root never trades a larger filtered input for a
+smaller one under any selectivity monotone in filter rank. $\mathsf{keyedReads}$ then repeatedly expands the ready keyed
+occurrence of least $(f_i,i)$ and, before it, looks up every other ready keyed
+occurrence with $f_i<3$ (a non-introducing read of its bound columns). This is
+RPT's LargestRoot restricted to key-functional trees: expansions never fan out,
+filters reject before payload is read. Without a count for every occurrence,
+with top-level blocks, or without a dominating functional root, $\mathsf{order}^{\mathcal{E}}$
+is $O_{Prefix(Connected),Coarse}$ and CK-EvidenceLe reduces to CK-Order; when the
+keyed order equals that order without lookups, the default plan is kept.
+The current CK-EvidenceLe implementation computes functional roots by calling
+the producer's ranked $\mathsf{keyedReads}$ planner for each candidate root
+and testing whether it succeeds. It then checks the recorded root, keyed
+first reads and filtered lookups directly; it does not require equality with
+the producer's complete read schedule. Thus this root-feasibility check is
+producer replay, not an independent proof of functional reachability.
+Evidence chooses only: every result is a plan WF-VO and CK-Le accept on their own,
+so a false count or key changes speed, never answers. O-KnownAt validates the
+requested admission level and its binding prerequisites, then applies I2:
+a requested late anti-join drains to its earliest ready boundary. It is
+applied before Masks and re-checked afterward; no requested level exempts a
+filter from VO-Order.
+
+In $\mathsf{authorSteps}$ unadvised filters (constraints, negations,
+guards) are placed as soon as ready; an unadvised Rust binding waits until the
+next advised step reads one of its bindings, or the end. Pure totality makes any
+position after its free variables and before its first use equivalent (WF-VO),
+and this keeps advised steps adjacent, e.g. an intersection site.
+For Prefix, Filtered and Elimination, ready constraints rank
+$(a_i,0,0,0,i)$ and other nonatoms $(a_i,0,0,1,i)$. WrittenConnected instead
+uses written clause preference for all ready work after the I2 partition,
+substituting the first ready connected atom only when I3 forbids its chosen
+disconnected introduction. This declared I4 policy preserves legal
+introducing-binding boundaries and same-boundary filter order; it does not
+eagerly hoist an introducing let just because its inputs are ready.
+Auto is GreedyWidth; Elimination uses reverse maximum-cardinality search on the
+primal graph. H-MCSTie starts with no numbered vertex, so the first vertex
+and every score tie use the first written occurrence (column order, then
+lexical equality aliases at that occurrence). Fine reverses the elimination
+order back to MCS order, then groups aliases by earliest scheduled supplier
+(O-FineVariables).
+Written/Fine and WrittenConnected/Fine split each chosen atom in column order
+(O-WrittenFine), then drain ready checks. $\mathsf{flush}$ emits ready waiting
+steps (constraints and negations first). In O-FineChoice, $B$ is the visible
+bound set, $P$ the supplied set and $T$ the Rust-supplied names. Eligible
+variables with a connected ready holder precede the others; ties use $V$.
+For an already bound variable there is no binder. Otherwise the first
+connected ready holding atom in the fixed heuristic sequence binds it,
+or the first ready holder if none is connected. The other holding atoms
+are checked in that sequence, deferring unready reads.
+For Prefix/Fine, O-FineHoldingOrder constructs this auxiliary holding
+sequence without the whole-occurrence introduction component $a_i$.
+It is a tie-break for the split reads, not the executable coarse schedule:
+membership of each split read is derived at its own boundary. S-Connected
+and S-Greedy retain $a_i$ for coarse scheduling; Fine still drains ready
+nonintroducing reads under I2, preserving their holding-sequence ties.
+Every atom's full correlated row must eventually be checked.
+Literal-only occurrences have an empty variable heading and
 are placed as complete zero-column reads before the fine variable loop.
-The production facade uses Written/Coarse; Filtered/Coarse serves external
-planners and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
+The production facade uses Prefix(Connected)/Coarse: the written root, then
+at each step a ready atom sharing a bound name before a disconnected
+one (earliest clause first), with ready relational predicates placed where
+their variables are bound. Written/Coarse with O-WrittenBlocks retains
+introducing-atom order and correlated blocks, but drains I2 checks and rejects
+I1/I3 violations; it is not an exemption from VO-Order. Ordinary Written/Coarse
+retains O-BlockPlacement and is the `plan(order(..))` fallback. Filtered/Coarse serves external planners
+and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
 $0$ for an occurrence containing a literal or a local constant equality, $1$ for a local constant range,
-$2$ for a derived domain, total predicate or finite relational block, and
-$3$ otherwise. Equality classes determine locality; opaque Rust guards
-never improve a rank. This is a syntax-only priority, not a cardinality
+$2$ for a derived domain, relational predicate or finite relational block,
+and $3$ otherwise. Ordering ranks through H-Local, the same targets O-Restrict
+records; the reducers and their checkers rank through the VO scope's recorded
+restrictions, so a filtered rank always names a restriction the lowering
+applies and a VO without restrictions (the written reference) ranks nothing as
+filtered by a predicate.
+Rust guards never
+improve a rank, regardless of their syntax or types. This is a syntax-only priority, not a cardinality
 estimate. Written remains available to explicit planner clients.
+
+Step advice extends the occurrence selectors with \code{R@i(cols)}: the listed
+query variables are the exact retained columns, including every already-bound
+column of that occurrence. A bare \code{R@i} reads the full correlated row.
+Partial reads introducing a variable are Fine steps (at most one new variable);
+adjacent reads of different occurrences on that variable expose intersection
+points, without choosing a Physical implementation. A non-introducing explicit
+partial read before any Fine read of that occurrence selects it into $L$, the checked
+lookup/expand set. Each selected occurrence must then have exactly one later
+full expansion with written ownership. An unbound listed variable denotes
+a Fine introduction, not an unchecked lookup. Duplicate/foreign columns,
+reads after expansion, incomplete rows and unsatisfied dependencies reject.
+Ready nonatoms are placed by free-variable readiness, constraints first;
+unnamed occurrences follow in written priority, while named partial occurrences
+must be completed explicitly. Without step advice, ordinary coarse advice
+and the default planner remain unchanged.
 \[
-\Rule{H-FilterRank}{P_i=\text{local total predicates on }\kappa(O_i)\quad
+\Rule{H-Local}{P\text{ a top-level }\mathsf{where}\text{ predicate or literal equality at clause }k,
+ \text{ or an E-Domain }D_x\text{ of one}\\
+ \vars(P)\ne\emptyset\quad\vars(P)\cap\mathsf{RustBound}=\emptyset}
+ {\mathsf{targets}(P)=\{i\mid c_i=R(\bar x)\text{ positive},\ \vars(P)\subseteq\bar x\}}
+\]
+H-Local is independent of where $P$ is written: an atom written after $P$
+is a target exactly like one written before it. A hoisted block that takes a
+finite prefix domain imposes no positional premise either: its domain is the
+VO prefix that binds its free columns (WF-BlockPlacement), which already
+carries every restriction of that prefix and still contains the free values of
+every answer.
+\[
+\Rule{H-FilterRank}{P_i=\{P\mid i\in\mathsf{targets}(P)\}\ \text{(ordering) or }
+ \{P\mid\mathsf{restrict}\ R@i\ \mathsf{where}\ P\in t\}\ \text{(reducers)}\quad
  L_i=\{0\mid O_i\text{ has a literal argument}\}}
- {f_i=\min(\{3\}\cup L_i\cup\{\mathsf{strength}(p)\mid p\in P_i\})}
+ {f_i=\min(\{3\}\cup L_i\cup\{\mathsf{strength}(p,w_p)\mid p\in P_i\})}
 \]
 \[
-\Rule{CK-Order}{\mathsf{WF}_{NF}(s)\quad\mathsf{WF}_{VO}(t)\\
+\Rule{H-FilterStrength}{w\in\{\mathsf{written},\mathsf{derived}\}\quad
+ \mathsf{const}(t)\Longleftrightarrow
+ t\text{ is literal or CQ-Closed}}
+ {\mathsf{strength}(P,w)=
+ \begin{cases}
+ 0&w=\mathsf{written},\ P=(t=u),\
+       \mathsf{const}(t)\lor\mathsf{const}(u)\\
+ 1&w=\mathsf{written},\ P=(t\mathrel{op}u),\
+       op\in\{<,\le,>,\ge\},\
+       \mathsf{const}(t)\lor\mathsf{const}(u)\\
+ 1&w=\mathsf{written},\ P=(x\ \mathsf{between}\ l\ \mathsf{and}\ h),\
+       \mathsf{const}(l)\land\mathsf{const}(h)\\
+ 2&\text{otherwise}
+ \end{cases}}
+\]
+In particular, written disjunctions (including disjunctions of equalities),
+$\ne$, finite membership and all derived domains have strength $2$.
+Here $w_p$ records whether the predicate is written or is an implied domain;
+for a recorded restriction, equality with a written source predicate
+determines written provenance.
+\[
+\Rule{O-Restrict}{t=\mathsf{order}(s)\quad\forall P.\ \forall i\in\mathsf{targets}(P).\
+ \mathsf{restrict}\ R_i@i\ \mathsf{where}\ P\text{ heads the scope}}
+ {t'=t\setminus\{\mathsf{where}\ P\mid\text{every written instance of }P\text{ has a target}\}}
+\]
+\[
+\Rule{CK-Order}{\mathsf{WF}_{NF}(s)\quad\mathsf{WF}_{VO}(t)\quad t.cq=s\\
  \mathsf{OrderObligations}(s,t,\chi)}
  {\mathsf{check}_{order}(s,t,\chi)\Downarrow\ok}
+
+\Rule{CK-OrderObligations}{\forall\sigma\in\mathsf{scopes}(t).\ \forall k<|\sigma|.\ \sigma_k\notin\mathsf{Reduce}\\
+ \forall\sigma.\ \forall i\in\mathsf{atoms}(\sigma).\ \exists k.\ \mathsf{clause}(\sigma_k)=i\\
+ \chi.split=\mathsf{Coarse}\Rightarrow\forall\sigma,i.\
+  |\{k\mid\mathsf{clause}(\sigma_k)=i\}|=1\land\forall k.\ \mathsf{clause}(\sigma_k)=i\Rightarrow\mathsf{cols}(\sigma_k)=\vars(c_i)\\
+ \chi.split=\mathsf{Fine}\Rightarrow\forall\sigma,k.\ |\mathsf{intro}(\sigma_k)|\le1\\
+ \chi.order=\mathsf{Written}\Rightarrow\forall\sigma.\ \forall k<l.\
+  \mathsf{intro}(\sigma_k)\ne\emptyset\ne\mathsf{intro}(\sigma_l)\Rightarrow\mathsf{clause}(\sigma_k)\le\mathsf{clause}(\sigma_l)\\
+ \mathsf{restrictionsConsistent}(s,t)}
+ {\mathsf{OrderObligations}(s,t,\chi)}
+
+\Rule{CK-Restrict}{\forall P\text{ written}.\ |\{\mathsf{where}\ P\in t\}|\in\{0,|\{k\mid c_k=P\}|\}}
+ {\mathsf{restrictionsConsistent}(s,t)}
 \]
-$\mathsf{OrderObligations}$: unchanged CQ; no reductions; every atom has a
-subatom; Coarse has one full subatom per atom; Fine introduces at most one
-variable per subatom; Written keeps NF order. Filtered/Coarse independently
-checks that no ready occurrence outranks the recorded choice. Other rankings
-remain construction choices. \emph{Refinement:} by the VO contract (relational
-steps earlier, Rust order and Before kept, full rows checked).
+O-Restrict records where every relational predicate runs. Each H-Local target
+becomes a restriction \code{restrict R@i where P;} at the head of its scope,
+in H-Local order; implied domains exist only as restrictions. A written
+predicate keeps its prefix \code{where} step unless every written instance of
+it has a target. Every ordering producer (plain, advised, evidence, LE and the
+planners' transfer route) records restrictions this way; a rescheduling
+producer (LE, advised lookups) restricts its own schedule, so prefix
+predicates still constrain its choices. The written
+reference (\code{compile_written}) records none, but still obeys VO-Order.
+Within each source clause, H-Local lists the written predicate first, then
+its implied domains in the order below; each predicate's targets are in
+written occurrence order.
+\[
+\Rule{O-DomainOrder}{X=\{x\mid\text{E-Domain derives }D_x\ne C\}}
+ {\mathsf{impliedDomains}(C)=[D_x]_{x\in\mathsf{sort}_{lex}(X)}}
+\]
+In CK-OrderObligations, $\mathsf{scopes}(t)$ is the top-level step list and every
+block arm's step list, $\mathsf{clause}(\sigma_k)$ the NF clause of an atom or
+block step, $\mathsf{cols}(\sigma_k)$ its listed bound columns,
+$\mathsf{intro}(\sigma_k)$ the variables it introduces (WF-VO analysis) and
+$\mathsf{atoms}(\sigma)$ the positive atom clauses of the scope. A predicate
+placed only by restrictions has no position. VO-Order independently checks
+readiness, earliest-filter placement and connectivity on every executable VO.
+Filtered/Coarse no longer replays its producer's ranking. CK-Restrict
+requires a predicate to drop the prefix steps of all its written instances or
+none; WF-Restrict checks each restriction's legality, without rerunning the
+producer. Other ranks remain construction choices.
+The planners' CQ-to-RA correspondence entry takes an occurrence-coverage
+reference (CQ, steps and WF binding analysis), not an executable VO; it neither
+chooses a schedule nor exempts a recorded VO from VO-Order.
+\emph{Refinement:} by the VO contract (free-variable dependencies,
+unchanged total Rust expressions, relational predicates and full rows checked).
 
 \subsection{Hypergraph analysis and GYO}
 \label{sec:graph-extraction}\label{sec:gyo-construction}
@@ -194,8 +661,8 @@ and $\mathsf{red}(i,j)$ the reduction of $i$ by $j$ on their shared classes:
 \Rule{R-Tree}{J=\mathsf{analysis}(q).\mathsf{join\_tree}\ne\mathsf{None}}
  {\mathsf{Tree}(VO)=\mathsf{insertAtReadyPrefix}(VO,\mathsf{up}(J)\concat\mathsf{down}(J))}
 \end{mathpar}
-The insertion point is the first atom/block, or the earliest prefix providing
-the Rust bindings a finite block domain needs. \code{Hypergraph} uses the
+The insertion point is the first atom/block, or, when a hoisted block takes a
+finite prefix domain, the earliest prefix binding its free columns. \code{Hypergraph} uses the
 filtered reducer only on acyclic scopes, but exact atom-to-block cuts on any
 scope: each atom sharing columns with a finite Rust-free block is semijoined
 through that block's derived relation. Each branch is analyzed independently.
@@ -218,22 +685,45 @@ full support index. This optional omission preserves exact joins, makes no
 key assumptions, and does not suppress derived-domain support.
 Reductions distribute into positive uses and never into negated originals.
 \[
-\Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\\
+\Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\quad t.cq=s.cq\\
  \mathsf{ReduceObligations}(s,t,\chi)}
  {\mathsf{check}_{reduce}(s,t,\chi)\Downarrow\ok}
 \]
-$\mathsf{ReduceObligations}$: reduction-free source, unchanged CQ, equal step
-erasure; under None no reductions; under Tree an acyclic source with every
-directed tree edge once, all upward before downward, respecting parent/child
-order; Hypergraph requires exact atom-to-block cuts in both cyclic and acyclic
-scopes, and only the independently filter-supported tree edges in acyclic
-scopes, with strongest upward siblings first. The checker traverses each
-cut component independently and checks actual support-version provenance.
-Cyclic block-free scopes have no reductions. Missing cuts, unsupported
-reductions, and non-tree atom-to-atom reductions are rejected.
+\[
+\Rule{CK-ReduceObligations}{\mathsf{red}(s)=\emptyset\quad\mathsf{erase}(t)=s\quad
+ \chi=\mathsf{None}\Rightarrow E=\emptyset\quad
+ \chi=\mathsf{Tree}\Rightarrow J\ne\bot\\
+ \forall(i,j)\in E.\ (j,i)\in J\lor(i,j)\in J\lor\mathsf{cut}(i,j)\quad
+ |\mathsf{red}(t)|=|E|\\
+ \forall(c,p)\in J.\ \forall e\in\{(p,c),(c,p)\}.\ \mathsf{req}(e)\Rightarrow e\in E\quad
+ \chi=\mathsf{Hypergraph}\Rightarrow\forall i,j.\ \mathsf{cut}(i,j)\Rightarrow(i,j)\in E\\
+ \chi=\mathsf{Hypergraph}\Rightarrow\forall(i,j)\in E.\ v_j<3\land(\mathsf{cut}(i,j)\lor\mathsf{req}(i,j))\\
+ \forall(i,j),(i',j')\in E\setminus\mathsf{cut}.\ (j,i)\in J\land(i',j')\in J\Rightarrow\mathsf{pos}(i,j)<\mathsf{pos}(i',j')\\
+ \forall(c,p),(p,g)\in J.\ \mathsf{pos}(p,c)<\mathsf{pos}(g,p)\land\mathsf{pos}(p,g)<\mathsf{pos}(c,p)\\
+ \chi=\mathsf{Hypergraph}\Rightarrow\forall(i,j),(i,j')\in E\setminus\mathsf{cut}.\
+  (j,i),(j',i)\in J\land\mathsf{pos}(i,j)<\mathsf{pos}(i,j')\Rightarrow F_j\le F_{j'}\\
+ \chi=\mathsf{Masks}\Rightarrow\mathsf{check}_{reduce}^{Masks}(s,t)\Downarrow\ok\\
+ \forall b\in\mathsf{Blocks}(s),\ a<|b.arms|.\
+  \mathsf{ReduceObligations}(s_{b,a},t_{b,a},\chi_{b,a})}
+ {\mathsf{ReduceObligations}(s,t,\chi)}
+\]
+Per scope, $E\subseteq\mathsf{clauses}^2$ is the set of recorded
+\code{reduce i with j} pairs of $t$ (Masks excluded: CK-Masks checks those),
+$\mathsf{red}(t)$ their list and $\mathsf{pos}(i,j)$ the step index;
+$J$ is the child-to-parent map of the reduction tree (the GYO join tree under
+Tree, H-SpanningCore's tree for acyclic Hypergraph, $\bot$ otherwise);
+$\mathsf{cut}(i,j)$ holds under Hypergraph when $c_i$ is an atom, $c_j$ a block and
+they share a variable; $\mathsf{req}(i,j)$ is true outside Hypergraph and otherwise
+$f_{j\mid i}<3\land\neg(f_{j\mid i}=1\land f_{i\mid j}=0)$ (R-Filtered);
+$v_j$ is the filter rank of $j$ lowered by earlier reductions of $j$, and
+$F_j$ the minimum rank in $j$'s subtree. Arm scopes $s_{b,a},t_{b,a}$ use the
+arm's own reduction graph and $\chi_{b,a}=\chi$ made effective for a cyclic arm.
+The checker traverses each cut component independently and checks actual
+support-version provenance; it never runs the reducer.
 
-The default plan is left-deep in written order: the left natural-join operand
-streams and the right builds, and no pass commutes operands. Its reductions
+The default plan is left-deep in Prefix(Connected)/Coarse order: the left
+natural-join operand streams and the right builds. Elaboration preserves that
+recorded operand order. Its reductions
 (Masks) follow a reduction tree. H-SpanningCore defines it on every scope: the
 GYO join tree when acyclic; otherwise the GYO ears plus a spanning tree of the
 residual cyclic core whose edges join clauses sharing a variable (most shared
@@ -243,24 +733,64 @@ first scheduled clause, the outer stream, and reduces each inner clause by its
 child subtrees that carry a relational filter or a block cut, children first and
 strongest siblings first, before the stream starts; exact atom-to-block cuts
 reduce inner atoms. The outer is never a target or a support: its probes filter
-it in written order, so no reduced stream is stored. This is the bottom-up pass
-of the Yannakakis reducer rooted at the stream; on acyclic scopes it fully
-reduces the stream, so every surviving stream row matches in every probe and
-no top-down pass is needed. CK-Masks recomputes that schedule from the source
-steps on scope-local clauses and requires the target's reductions to equal it.
+it in scheduled order, so no reduced stream is stored. This is the bottom-up pass
+of the Yannakakis reducer rooted at the stream, restricted to filter-carrying
+subtrees: an unfiltered child subtree has no syntactic evidence that it removes
+rows (a key/foreign-key join), so its semijoin is omitted as likely pure
+overhead. Consequently Masks is a full reducer only when every edge it omits is
+in fact non-reducing on the instance; otherwise a stream row may match an inner
+clause and then fail a later unfiltered probe, costing that probe but never
+correctness. \code{Tree} remains the unconditional full reducer on acyclic
+scopes. CK-Masks checks scope-local edge membership and completeness, not
+equality to a reconstructed schedule. Let $C$ be every atom-to-block cut
+whose target and support both differ from the outer, and $M$ every
+R-Masks edge with an atom target. A subtree is filtered when it contains a
+local filter or a target of a cut in $C$. Each edge of $C\cup M$ occurs once
+and no other edge occurs. Cuts precede tree edges; every reduction of a
+support precedes its use; tree siblings run by subtree filter rank then
+written clause. Independent subtrees may interleave. Reductions precede the
+first stream step, or, when a hoisted block takes a finite prefix domain,
+the first source boundary binding all its free columns (VO checks
+readiness). The outer exclusion includes a block used as the outer.
 \begin{mathpar}
 \Rule{H-SpanningCore}{T_0=\mathsf{GYOEars}(q)\quad
  T_1=\mathsf{spanningTree}(\mathsf{core}(q),\ \text{most shared, earliest})}
  {\mathsf{reductionTree}(q)=T_0\cup T_1}
 
-\Rule{R-Masks}{r=\mathsf{outer}(s)\quad c\ne r\quad
+\Rule{R-Placement}{E=\mathsf{occurrences}(q)\quad
+ C=\{i\mid s_i=\mathsf{block}_{\mathsf{correlated}}(\ldots)\}}
+ {\mathsf{reducerGraph}(q,s)=\mathsf{hypergraph}(q,E\setminus C)}
+
+\Rule{R-Masks}{r=\mathsf{outer}(s)\quad c\ne r\quad d\ne r\quad
  d\in\mathsf{children}_{\mathsf{reductionTree}\ \text{rooted at}\ r}(c)\quad
  \mathsf{filteredSubtree}(d)}
- {\mathsf{red}(c,d)\ \text{before}\ r,\ \text{children first}}
+ {\mathsf{red}(c,d)\ \text{before the ready stream boundary, children first}}
 
-\Rule{CK-Masks}{\mathsf{reductions}(t)=\mathsf{masks}(s)\ \text{on scope-local clauses}}
+\Rule{CK-Masks}{\mathsf{edges}(t)=C\cup M\quad
+ \mathsf{Once}(t)\quad\mathsf{OuterExcluded}(t)\\
+ \mathsf{ReadyBoundary}(s,t)\quad\mathsf{CutsFirst}(t)\quad
+ \mathsf{ChildrenFirst}(t)\quad\mathsf{StrongestSiblings}(t)}
  {\mathsf{check}_{reduce}^{Masks}(s,t)\Downarrow\ok}
 \end{mathpar}
+\[
+\Rule{R-MasksOrder}{C\text{ the eligible atom-to-block cuts}\quad
+ \rho(c)=\min_{j\in\mathsf{subtree}(c)}
+       \min(f_j,\ 2\text{ if }j\text{ is a cut target, else }3)\\
+ L(c)=\mathsf{sort}_{(\rho(d),d)}(\mathsf{children}(c))\\
+ P(c)=\mathop{\concat}_{d\in L(c)}
+       \left(P(d)\concat[\mathsf{red}(c,d)\mid c\ne r,\rho(d)<3]\right)}
+ {\mathsf{maskSchedule}=
+  [\mathsf{red}(a,b)]_{(a,b)\in\mathsf{sort}_{(b,a)}(C)}
+  \concat[P(r)\text{ with nonatom targets and edges already in }C\text{ removed}]}
+\]
+R-MasksOrder fixes the producer's depth-first post-order, not an additional
+CK-Masks rejection: that checker still accepts independent subtree
+interleavings satisfying its partial-order premises.
+Correlated blocks denote a prefix-dependent computation, not an independently
+available reduction operand. R-Placement excludes their occurrences before
+incidence, GYO and tree analysis; their written binders still scope later
+clauses. Both reduction construction and checking consume this scope analysis.
+
 
 \begin{theorem}[Full reducer]
 On a join tree, upward reverse-BFS then downward BFS semijoins preserve
@@ -274,64 +804,93 @@ survives every semijoin.\end{proof}
 \emph{Refinement:} semijoins are relational and only remove tuples absent from
 the join, so meanings are equal; Rust steps are untouched.
 
-\subsection{Elaboration: VO $\to$ RA prime}
+\subsection{Relational lowering: VO $\to$ RA prime}
+The total entry has type
+$\mathsf{CheckedVO}\to(\mathsf{RA},T)$, where the private carrier pairs an
+immutable VO borrow with the analysis returned by WF-VO. Only the checker
+constructs this carrier; a caller-supplied analysis is not evidence of WF-VO.
 State $(D,M,p,B)$: emitted definitions, latest result per clause, optional
-prefix, its heading. Relations are emitted lazily at first mention with their
-fixed occurrence paths.
+prefix, its heading. Relations are emitted lazily at first mention. Beside
+the RA, lowering returns the seam side table
+$T:\operatorname{names}(D)\rightharpoonup\mathsf{Pos}(s)$ from RA result names
+to VO step positions (the step index, then branch and step index inside each
+enclosing block step); neither program records the other's identities.
+Write $\mathsf{first}_s(i)$ for the position of the first step of the scope
+of $s$ that reads clause $i$ (an atom read, or the first block step of a block).
 \begin{mathpar}
-\Rule{E-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
+\Rule{RL-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
  {\emit(D,o)=(D\concat[r=o],r)}
 
-\Rule{E-Relation}{i\notin\dom M\quad C_i=\{c_j=a_j\mid a_j\text{ is literal}\}\\
+\Rule{RL-Occurrence}{i\notin\dom M\quad C_i=\{c_j=a_j\mid a_j\text{ is literal}\}\\
  m_i:\operatorname{cols}(R_i)\setminus\dom C_i\cong\bar X_i\quad
- (D',r)=\emit(D,\delta_{m_i}(\pi_{\dom m_i}\sigma_{C_i}(R_i@i)))}
- {\mathsf{relation}(i;D,M)=(D',M[i\mapsto r],r)}
+ (D',r)=\emit(D,\delta_{m_i}(\pi_{\dom m_i}\sigma_{C_i}(R_i)))}
+ {\mathsf{relation}(i;D,M,T)=(D',M[i\mapsto r],T[r\mapsto\mathsf{first}_s(i)],r)}
 
-\Rule{E-Check}{K\subsetneq X_i\quad\mathsf{introduces}=\emptyset\quad p\ne\bot}
- {(D,M,p,B)\xrightarrow{i,K}(D',M,s,B)\quad[(D',s)=\emit(D,p\ltimes r)]}
+\Rule{RL-Check}{\mathsf{introduces}=\emptyset\quad(K\subsetneq X_i\lor p=\bot\lor B=\emptyset)\\
+ p_0=\mathsf{unitize}(p)}
+ {(D,M,p,B)\xrightarrow{i,K}(D',M,s,B)\quad[(D',s)=\emit(D,p_0\ltimes r)]}
 
-\Rule{E-Project}{K\subsetneq X_i\quad\neg(\mathsf{introduces}=\emptyset\land p\ne\bot)\\
+\Rule{RL-Project}{K\subsetneq X_i\quad\mathsf{introduces}\ne\emptyset\\
  (D',s)=\emit(D,\pi_Kr)}
  {\mathsf{subatomRight}(i,K)=(D',s)}
 
-\Rule{B-Root}{p=\bot\quad s=\mathsf{subatomRight}(i,K)}
+\Rule{RL-Root}{p=\bot\quad\mathsf{introduces}\ne\emptyset\quad s=\mathsf{subatomRight}(i,K)}
  {(D,M,p,B)\xrightarrow{i,K}(D,M,s,B\cup K)}
 
-\Rule{B-Join}{p\ne\bot\quad\text{E-Check inapplicable}\quad s=\mathsf{subatomRight}(i,K)\\
+\Rule{RL-Join}{p\ne\bot\quad\text{RL-Check inapplicable}\quad s=\mathsf{subatomRight}(i,K)\\
  (D',t)=\emit(D,p\bowtie s)}
  {(D,M,p,B)\xrightarrow{i,K}(D',M,t,B\cup K)}
 
-\Rule{C-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
+\Rule{RL-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
  (D',s)=\emit(D,\operatorname{guard}_e p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B)}
 
-\Rule{C-Bind}{\mathsf{step}=\mathsf{Let}(pat[:\tau]=e)\quad\bar N=\binds(pat)\\
+\Rule{RL-Bind}{\mathsf{step}=\mathsf{Let}(pat[:\tau]=e)\quad\bar N=\binds(pat)\\
  p_0=\mathsf{unitize}(p)\quad(D',s)=\emit(D,\operatorname{bind}_{pat[:\tau],e}p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))}
 
-\Rule{C-For}{\mathsf{step}=\mathsf{For}(pat\ \mathsf{in}\ e)\quad\bar N=\binds(pat)\\
+\Rule{RL-For}{\mathsf{step}=\mathsf{For}(pat\ \mathsf{in}\ e)\quad\bar N=\binds(pat)\\
  p_0=\mathsf{unitize}(p)\quad(D',s)=\emit(D,\operatorname{for}_{pat,e}p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))}
 
-\Rule{E-ReduceWith}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{with}\ j\\
+\Rule{RL-Reduce}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{with}\ j\\
  (D',s)=\emit(D,M(i)\ltimes_{\equiv}M(j))}
  {(D,M,p,B)\longrightarrow(D',M[i\mapsto s],p,B)}
 
-\Rule{C-Finish}{\text{all VO steps consumed}\\
+\Rule{RL-Finish}{\text{all VO steps consumed}\\
  p_0=\mathsf{unitize}(p)\quad(D',r)=\emit(D,\pi_Wp_0)}
  {(D,M,p,B)\Downarrow(D',\mathsf{output}\ r\ \mathsf{as}\ h(\bar e))}
 
-\Rule{E-Constraint}{\vars(C)\subseteq\vars(R)\text{ for a complete earlier binder}\\
- \text{optimizing elaboration; no scalar-let- or generator-supplied column}}
- {C\text{ may select }R\text{ before joining};\quad
-  \text{otherwise select the bound prefix}}
+\Rule{RL-Constraint}{\mathsf{step}=\mathsf{Constraint}(P)\quad
+ \vars(P)\subseteq B\quad p_0=\mathsf{unitize}(p)}
+ {\mathsf{elaborate}(P,p)=\sigma_Pp_0\text{ at its recorded VO placement}}
 
-\Rule{E-Domain}{C=\bigvee_i\bigwedge_j C_{ij}\quad
- D_{ix}=\{C_{ij}\mid C_{ij}\text{ restricts only }x\text{ against literals}\}\\
- \forall i.\ D_{ix}\ne\varnothing}
- {C\Longrightarrow D_x=\bigvee_i\bigwedge D_{ix}\quad
-  \text{push }D_x\text{ onto }x\text{'s complete binder; retain }C}
+\Rule{RL-Restrict}{\mathsf{restrict}\ R_i\ \mathsf{where}\ P_1,\ldots,P_n\text{ recorded in the scope}\\
+ E=\{P_k\text{ literal equalities}\}\quad G_1,\ldots,G_m=\text{the others grouped by }\vars}
+ {\mathsf{relation}(i)=\sigma_{G_m}\cdots\sigma_{G_1}\sigma_E(\delta_{m_i}(R_i))}
 
+\Rule{CK-RelationalLoweringRestrict}{(\mathsf{restrict}\ i\ \mathsf{where}\ P)\text{ in a scope of }s\quad
+ T(r)=\mathsf{first}_s(i)\\
+ r=r_0,\ t(r_{k+1})=\sigma_{\theta_{k+1}}r_k\ (0\leq k<n),\ \text{no }\sigma\text{ reads }r_n\quad
+ \mathsf{conj}(P)\subseteq\textstyle\bigcup_{k\leq n}\mathsf{conj}(\theta_k)}
+ {\mathsf{restrictionPlaced}(s,t,T,P)}
+
+\Rule{E-Domain}{C=\mathsf{Or}([\,[C_{ij}]_j\,]_i)\quad
+ D_{ix}=\{C_{ij}\mid \mathsf{atomic}(C_{ij}),\
+       \vars(C_{ij})=\{x\},\
+       \mathsf{otherOperands}(C_{ij})\subseteq
+          \mathsf{Literals}\cup\mathsf{CQClosed}\}\\
+ \forall i.\ D_{ix}\ne\varnothing\quad
+ D_x=\mathsf{Or}([\ D_{ix}\ ]_i)\ne C}
+ {C\Longrightarrow D_x\quad
+  \text{record }D_x\text{ as O-Restrict restrictions; retain the exact }C}
+
+\end{mathpar}
+Here $\mathsf{atomic}$ means one comparison, \code{between}, or
+\code{in} conjunct with a variable operand. The outer \code{Or} and its
+branch conjunct lists are the written syntax, not a distributive-normal-form
+conversion: a nested \code{Or} conjunct contributes no atomic domain.
+\begin{mathpar}
 \Rule{CT-Constraint}{\vars(C)=\bar x\quad\mathsf{columns}(\bar x)=\bar t\\
  \mathsf{closure}(C)=\{C\}\cup\{D_x\mid\text{E-Domain derives }D_x\}}
  {\mathsf{facts}\longmapsto\mathsf{facts}\cup
@@ -340,107 +899,127 @@ fixed occurrence paths.
 \Rule{RA-Constraint}{\vars(\theta)\subseteq V\quad
  \theta\text{ central and Eq/Ord-admissible}}
  {\sigma_\theta:\operatorname{Set}(V)\longrightarrow\operatorname{Set}(V)}
+
+\Rule{RL-Block}{b.placement=\mathsf{hoisted}\quad H=F_b\cup I_b
+ \quad\text{or}\quad b.placement=\mathsf{correlated}\quad H=B\cup F_b\cup I_b}
+ {\mathsf{elaborateBlock}(b,p)=
+ \mathsf{arms}(b,H,\mathsf{over}=
+   [p\mid b.placement=\mathsf{correlated}])}
+
+\Rule{CK-BlockPlacement}{(\mathsf{block}\ b)\text{ at }\mathsf{first}_s(b)\quad
+ T(u)=\mathsf{first}_s(b)\quad t(u)=\mathsf{union}(u_1,\ldots,u_n)\ \mathsf{block}\ O\\
+ n=|b.branches|\quad(O.fallback\ne\bot)\Leftrightarrow(b.kind=\mathsf{else})\quad
+ (O.over\ne\bot)\Leftrightarrow(b.placement=\mathsf{correlated})}
+ {\mathsf{BlockPlaced}(s,t,T,b)}
+
+\Rule{RL-Seam}{T\text{ injective}\quad
+ \dom T=\{r\mid t(r)=\mathsf{rename}\ldots\}\cup\{u\mid t(u)=\mathsf{union}\ldots\ \mathsf{block}\ O\}\\
+ \operatorname{ran}T=\{\mathsf{first}_s(i)\mid i\text{ read in its scope}\}\cup\mathsf{Neg}(s)\\
+ \forall r.\ t(r)=\mathsf{rename}\ldots\Leftrightarrow T(r)\notin\mathsf{Blocks}(s)}
+ {\mathsf{SeamTable}(s,t,T)}
+
+\Rule{RL-SeamRename}{T(r)=\mathsf{first}_s(i)\quad i=R_i(\bar a)\quad
+ t(r)=\mathsf{rename}\ R\ m\ C\\
+ R=R_i\quad m=\{c_j\mapsto a_j\mid a_j\text{ variable}\}\quad C=\{c_j=a_j\mid a_j\text{ literal}\}\\
+ T(r')=k\in\mathsf{Neg}(s),\ s_k=\neg R'(\ldots)\Rightarrow t(r')=\mathsf{rename}\ R'\ldots}
+ {\mathsf{SeamRenames}(s,t,T)}
+
+\Rule{RL-SeamReduce}{(\mathsf{reduce}\ i\ \mathsf{with}\ j(K))\text{ in a scope of }s\quad
+ T(r_i)=\mathsf{first}_s(i)\quad T(r_j)=\mathsf{first}_s(j)\\
+ Q=\{\{x,y\}\mid x\in\bar X_i,\ y\in\vars(K),\ x\ne y,\ x\equiv y\}\\
+ \bigl(Q=\emptyset\land t(d)=l\ltimes g\bigr)\lor
+ \bigl(Q\ne\emptyset\land t(d)=\pi(\sigma_\theta(l\bowtie g))\land Q\subseteq\mathsf{eqs}(\theta)\bigr)\\
+ r_i\in\operatorname{reach}(l)\quad r_j\in\operatorname{reach}(g)}
+ {\mathsf{reductionNamed}(s,t,T,i,j)}
 \end{mathpar}
 A full subatom always joins; a partial check uses the whole clause relation.
 $\mathsf{unitize}$ emits Unit when no prefix exists; binds copy pattern,
-annotation and expression. In E-ReduceWith, $\ltimes_\equiv$ matches every
-support column with the target's class; when protected Rust or head names block
-renaming it is realized as join/select/project. Optimizing elaboration pushes
-literal equalities and constraints onto the occurrence supplying all their
-columns (E-Constraint), in queries with and without blocks; alias solving is
-applied only to block-free queries. Rust-free blocks hoist to a derived relation
-over $F\cup I$, using a named finite prefix domain for missing generators;
-blocks with Rust run per row over the prefix. The written reference
-(\code{compile_written}) disables all hoisting.
+annotation and expression. In RL-Reduce, $\ltimes_\equiv$ matches every
+support column with the target's class; when A-Alias left two names of one
+class unsolved (protected Rust or head names, or a repeated atom argument) it
+is realized as join/select/project over the support projected to its recorded
+subatom columns, the same wiring CK-RelationalLowering states. Lowering consumes recorded predicate placement: a
+recorded restriction selects its occurrence (RL-Restrict) and every other
+predicate is a prefix step (RL-Constraint). It computes no predicate targets,
+pushes nothing that VO does not record, and chooses no joins.
+CK-RelationalLoweringRestrict checks that each restriction selects its own occurrence.
+It never renames variables: aliases are solved in CQ$_{\rm NF}$.
+Recorded hoisted blocks form a derived relation over $F\cup I$, using the
+current prefix projected to $F$ as the finite domain for missing generators
+(VO binds $F$ before the block and before every reduction reading it; there
+is no written-order domain); recorded correlated blocks run
+per row over the prefix. Lowering never chooses this alternative. The
+written-reference ordering entry \code{cq_order::compile_written} records
+correlated placement recursively and no restriction, so
+\code{cq_relational_lowering::compile} lowers it with every predicate at its written
+position.
+Structural block views replace every recorded origin of a prefix variable by
+the same context column, including equal origins contributed by different
+joined atoms. Replacing only the heading representative would leave references
+to prefix atoms outside the view.
+Query-closed operands are fixed for the invocation just like literal operands.
+E-Domain copies their unchanged expression payloads; it does not evaluate or
+compare them during compilation. Operand representation therefore cannot remove
+necessary per-column domains or their admissible reductions.
 The E-Domain closure is recomputed independently while checking both schedules;
 unjustified added selections and removal of the original disjunction are
-rejected. Recognized relational predicates are selections with exact expression and
-binding payloads; an opaque source guard cannot be replaced by one because
-the Rust-chain obligation would fail. Domain derivation uses only literal
-equalities, comparisons, inclusive ranges and literal membership, never
-database statistics or foreign-key assumptions.
+rejected. Explicit relational predicates retain exact constraint and binding
+payloads; an opaque source guard cannot be replaced by one because unchanged
+Rust expression identity is required. Domain derivation uses only equalities,
+comparisons, inclusive ranges and membership over literal or CQ-Closed operands,
+never database statistics or foreign-key assumptions.
 \[
-\Rule{CK-Elaborate}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
- t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
- \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\\
- \forall i.\ \operatorname{Before}_s(i)\subseteq\operatorname{Before}_t(i)\\
- \mathsf{OutputBindings}(s)=\mathsf{OutputBindings}(t)}
- {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}
+\Rule{CK-RelationalLowering}{\mathsf{WF}_{VO}(s)\quad
+ \mathsf{StructuralFacts}(s,t)\quad\mathsf{SeamTable}(s,t,T)\quad\mathsf{SeamRenames}(s,t,T)\\
+ \forall(\mathsf{restrict}\ i\ \mathsf{where}\ P)\in s.\ \mathsf{restrictionPlaced}(s,t,T,P)\\
+ \forall b\in\mathsf{Blocks}(s).\ \mathsf{BlockPlaced}(s,t,T,b)\quad
+ \forall(\mathsf{reduce}\ i\ \mathsf{with}\ j)\in s.\ \mathsf{reductionNamed}(s,t,T,i,j)}
+ {\mathsf{check}_{lowering}(s,t,T)\Downarrow\ok}
+
+\Rule{CK-RLStructure}{\Sigma=\mathsf{RL}(s)\quad\mathsf{WF}_{RA}(t)\\
+ t.declarations=s.cq.declarations\quad t.captures=s.cq.captures\quad
+ t.output.head=s.cq.head\\
+ \mathsf{check}_{RA\text{-}rewrite}(\Sigma,t)\Downarrow\ok}
+ {\mathsf{StructuralFacts}(s,t)}
 \]
-The checker builds a schedule from the supplied VO and compares fixed occurrence
-paths and column bindings, equality closure, predicate shapes, named reduction
-support, Rust payloads and bindings, output heading and head. Union siblings
-match by occurrence footprint, fallback siblings in order, negated references by
-original branch. \emph{Refinement:} occurrences, constraints and Rust chain are
-those of the source with relational facts no later, so by the premises the
-target refines the source.
-For pure positive targets produced by \code{simplify_expansions},
-CK-Elaborate also permits an inverse dead-expansion certificate. Starting
+In CK-RLStructure, $\Sigma=\mathsf{RL}(s)$ is the structural reference: the RA
+program obtained by folding the RL rules over the supplied VO steps (no
+order is chosen, no target name is consulted), with renames, joins,
+projections, selections, Rust payloads with their lexical scopes, block
+unions and anti joins exactly as the steps state them. The RA rewrite check
+(Section~\ref{sec:ra}) then compares $\Sigma$ with $t$: equal rename
+multisets (a rename is identified by its relation, mapping and constants),
+equality closure, predicate shapes, Rust payloads and their free-variable
+bindings, union siblings by footprint, fallback siblings in order, negated
+references by original branch, and its absorption and dead-expansion
+certificates. $\mathsf{first}_s$, $\mathsf{Neg}(s)$ and $\mathsf{Blocks}(s)$ are
+the positions of first reads, negation steps and first block steps of every
+scope of $s$; $\mathsf{Neg}(s)$ positions name their negated relation's rename.
+In RL-SeamReduce, $\equiv$ is the scope's CQ equality closure and
+$\mathsf{eqs}(\theta)$ the unordered variable pairs of $\theta$'s equalities.
+The structural check \code{check_reference} needs no side table and also
+relates a target to a VO it was not lowered from (a written reference).
+\emph{Refinement:} renames, constraints, Rust expressions and their recorded
+placements are those of the source; totality and the representation laws
+establish equal answers.
+
+
+For pure positive targets produced by \code{cq_ra_rewrites::simplify_expansions},
+the RA rewrite check's inverse dead-expansion certificate applies: starting
 only from the supplied RA target, it tentatively replaces a semijoin by a
-natural join. Independent demand analysis of that \emph{expanded source}
+natural join, and independent demand analysis of that \emph{expanded source}
 must prove all added columns unobservable, including newly created implicit
-downstream join keys. The ordinary structural comparison then checks the
-resulting equivalent witness against the supplied VO schedule. Required
-named reductions are still checked on the \emph{original target}; inverse
-expansion cannot invent their edges or column matches. This certificate
-does not recompile the VO, select a planner, or merge equality facts from
-independent existential supports. A split projected-witness view in either
-original schedule excludes this fallback: exposing a full read cannot erase
-its original correlation obligations. Rust, negative and block programs
-retain their existing checker.
+downstream join keys. Recorded reductions are still checked on the target
+itself by RL-SeamReduce; inverse expansion cannot invent their edges or
+column matches.
 
-\paragraph{Independent dimension branches.}
-\textsc{S-JoinBranch} chooses the atom with the most shared equality-class
-columns (at least three; written position breaks ties) as a static fact spine.
-A locally filtered one-key dimension remains an early independent probe.
-The remaining dimension components absorb connected ears only when all
-non-spine connections leave through one neighbor heading and the ear's fact-key
-set is contained in its parent's. This groups Supplier/Nation and Part/PartSupp without
-collapsing a Customer/Supplier cycle. Every member receives the branch's
-strongest local filter priority, so a point-filtered Supplier/Nation branch
-is scheduled before a merely range-filtered Orders neighbor. These are
-compile-time structural heuristics, not estimates of relation cardinalities.
-\textsc{WF-JoinBranch} checks the recorded disjoint full-atom groups, their
-connectivity and exact external/head interfaces. Opaque Rust, lets and union
-blocks conservatively retain the ordinary checked schedule.
-\textsc{E-JoinBranch} elaborates each group to a separate exact natural-join
-DAG rooted at its first scheduled atom, with connected child subtrees built
-before their parent probes them. It applies local relational predicates,
-projects the interface, and joins that named result to the spine. This avoids
-a Cartesian product between independent children such as Part and Nation.
-No uniqueness or foreign-key premise
-is used. \textsc{CK-JoinBranch} independently requires the projected DAG for
-each VO group in addition to the unchanged global occurrence, predicate,
-reduction and Before proof. Reduction erasure preserves branch metadata.
-For recorded independent branches, the optional Hypergraph policy emits no
-semijoin reducer: a branch must not depend on scanning the fact side merely
-to build its support. The checker forbids those optional reductions rather
-than accepting a missing tree obligation. Explicit Tree on an incompatible
-grouped VO is rejected; ungrouped Tree retains the full reducer.
-The subsequent RA simplifier retains its existing relational rewrite proof.
-\begin{mathpar}
-\Rule{S-JoinBranch}{f=\mathsf{WidestSharedKeyAtom}(q)\quad
- B=\mathsf{ConnectedDimensionEars}(q,f)}
- {\mathsf{branches}_{Filtered,Coarse}(q)=B}
-
-\Rule{E-JoinBranch}{b=\{a_1,\ldots,a_k\}\quad I=\mathsf{Interface}(q,b)}
- {\mathsf{elaborateBranch}(b)=
-  \pi_I\sigma_{P_b}(R_{a_1}\bowtie\cdots\bowtie R_{a_k})}
-
-\Rule{CK-JoinBranch}{\mathsf{WF}_{VO}(s)\quad
- \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\\
- \forall b\in s.branches.\ \mathsf{LiveExactProjectedDAG}(t,b,I_b)}
- {\mathsf{checkBranches}(s,t)\Downarrow\ok}
-\end{mathpar}
-
-
-\paragraph{Example: computed arguments pin placement.}
+\paragraph{Example: free variables determine eligibility.}
 In \code{answer(a,w) :- R(a,x), S(a,y), T(y,z), let k = combine(*x,*y), let
-p = left_key(k,*y), let q = right_key(*x,*z), U(p,q,w), if *x > 0, if
-permitted(k,*z), V(w);} the comparison \code{*x > 0} may select $R$ early, but
-\code{combine} cannot move before $T$ and \code{permitted} cannot swap with an
-earlier bind; $V$ may move earlier. The \code{constraint_planning} and
-\code{argument_placement} drivers check these placements structurally.
+p = left_key(k,*y), let q = right_key(*x,*z), U(p,q,w), where x > 0, if
+permitted(k,*z), V(w);} the relational predicate may select $R$ early.
+\code{combine} requires only $x,y$, not $T$; \code{permitted} requires $k,z$,
+not the preceding independent binding of $q$. Both Rust expressions remain
+unchanged. A Rust spelling \code{if *x > 0} would not produce a range read.
 
 \paragraph{Abstract laws.} A ghost join tree witnesses coarse assembly, and
 retention justifies projection before a join:
@@ -460,6 +1039,11 @@ reduction support and the head; it searches no general subtree pruning.
 \label{sec:pass-index}
 Traverse definitions in order from empty $D$:
 \begin{mathpar}
+\Rule{IX-Policy}{\mathsf{WF}_{RA}(s)\quad\mathsf{WF}_{IX}(t)\quad t.ra=s\\
+ F=\mathsf{firstUses}(s)\quad
+ t.indexes=[(i_k,F_k)\mid 0\leq k<|F|]}
+ {\mathsf{lower}_{index}(s,t)}
+
 \Rule{IX-Reuse}{D(i)=(r,C,supply)}{D\vdash(r,C,supply)\Downarrow(i,D)}
 
 \Rule{IX-New}{(r,C,supply)\notin\operatorname{ran}D\quad i=i_{|D|}}
@@ -486,21 +1070,43 @@ Traverse definitions in order from empty $D$:
  {D\vdash d\Downarrow D}
 
 \Rule{CK-Index}{\mathsf{WF}_{RA}(s)\quad\mathsf{WF}_{IX}(t)\quad t.ra=s\\
- t.indexes=[i_n=d_n]_{n=0}^{k-1}\text{ from first-use derivation}}
+ \forall u\in\mathsf{keyedReads}(s).\ \exists d\in t.indexes.\ \mathsf{desc}(d)=\mathsf{desc}(u)\\
+ \forall d\in t.indexes.\ \exists u\in\mathsf{keyedReads}(s).\ \mathsf{desc}(d)=\mathsf{desc}(u)\\
+ \forall k<|t.indexes|.\ t.indexes_k.name=i_k\land\mathsf{desc}(t.indexes_k)=\mathsf{firstUses}(s)_k}
  {\mathsf{check}_{index}(s,t,())\Downarrow\ok}
 \end{mathpar}
 Antijoin uses IX-Join on its explicit key only. \emph{Refinement:} equality,
 since IX adds no meaning.
+Here $\mathsf{desc}$ is the recorded triple (relation, logical column ordinals,
+supply) of a descriptor, and of a read by the local premises of IX-Join, IX-Const
+and IX-Range; $\mathsf{firstUses}(s)$ lists the distinct read descriptors in
+definition order.
+It does not invoke the producer's demand traversal or reconstruct its ordered
+output list. The checked analysis associates each keyed read with the existing
+recorded requirement; repeated reads may share that entry. Local WF-IX permits
+missing entries, while CK-Index requires complete coverage.
 
 \subsection{Physical lowering: IX $\to$ Physical}
 Lowering restates each RA result with one physical operator and the mode its
 reads allow; defaults are first probes, eager semis and anti, union defaults of
 Section~\ref{sec:physical}.
+For each selection, the checked IX read association supplies the recorded
+\code{const} or \code{range} operator class; an unkeyed selection stays a filter.
+Join keys are decoded from the associated requirement's logical ordinals, not
+recomputed by heading intersection. CK-Demands independently checks the resulting
+Physical reads against IX.
 An occurrence's literal bindings remain on its rename, not a select operator.
 Such a rename is retained (\code{let}, or \code{exists} for an empty heading):
 every chosen index is built over the filtered, projected occurrence, and a
 stream source retains filtered rows rather than filtering a reusable host scan.
 \begin{mathpar}
+\Rule{PH-Lower}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
+ \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\Downarrow\ok\\
+ t.host\_sets=A.host\_sets\quad
+ t.consumer\_canonical=A.consumer\_canonical\quad
+ \mathsf{check}_{physical}(s,t)\Downarrow\ok}
+ {\mathsf{lower}_{physical}(s,A,t)}
+
 \Rule{PH-Range}{\theta\text{ constant order bounds on one column }c}
  {\mathsf{reads}(range\ select\ r\ if\ (\theta))=(r,\{c\},range)}
 
@@ -511,27 +1117,56 @@ stream source retains filtered rows rather than filtering a reusable host scan.
 
 \Rule{CK-Physical}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
  \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\quad
- \textsc{CK-Return}(t,\Gamma)}
+ \mathsf{canonicalBoundaries}(t)\quad\textsc{CK-Return}(t,\Gamma)}
  {\mathsf{check}_{physical}(s,t)\Downarrow\ok}
 \end{mathpar}
 No missing demand is synthesized; merge has its own ordering premise; the check
 accepts any admissible recorded decisions. \emph{Refinement:} erasure equals the
 source RA, and modes only change evaluation.
+In PH-Lower, $A$ is the parsed fact packet passed to
+\code{cq_physical_lowering::compile_with}; fields of the Physical body are
+written directly on $t$. The relation constrains successful producer outputs,
+without requiring every admissible Physical choice to be a default choice.
+PH-CanonPlacement states the existing canonicality obligations and exact default
+placement cases in Section~\ref{sec:physical}. The independent checker propagates
+keys through the submitted Physical operators and recorded canon boundaries;
+it does not call the lowering's \code{canonical()} traversal. Local checking
+refuses noncanonical group inputs; seam checking refuses a noncanonical return
+unless a return canon or an authorized canonical consumer owns that boundary.
+Removing union canon is consequently refused when it leaves either observation
+uncanonicalized, not simply because the default constructor chose that flag.
+Redundant canon is permitted, even on fallback-disjoint arms.
+The optional \textsc{PH-ConstantGuard} Physical rewrite exposes a literal-bearing
+rename as a private pipe rename, a private pipe selection of the same literal
+equalities, and a projection onto exactly the original mapped columns.
+The checker inspects those recorded operators: the source relation and occurrence,
+original mappings, literal values and columns remain identical; each intermediate
+is new and used exactly once. Erasure contracts this checked expansion back to
+the original rename, including its literal restrictions. No Rust expressions or
+types are recognized, and the producer is not rerun by the checker.
 
 \subsection{Structure selection: Physical $\to$ Structures}
 The default constructor copies Physical and records default types for every
-built level, host reader fallback, retained collection and dedup boundary;
+built level, host reader fallback and retained collection, including support
+for the selected keyed layouts; dedup and computed-head boundaries record
+the Sort strategy rather than a provider type;
 compatible membership prefixes may share a curried structure; a smallest
 intersection records two candidate levels per retained side; const/range
-supplies never justify a build. This restriction concerns predicate reads,
-not atom literals: literal-bearing renames always build their filtered relation.
+supplies never justify a build. Empty-key probes read the whole relation by rows
+or scan; they never justify a built index. The Structures contract rejects every
+zero-column built index. Both CPU pull and push realizations enumerate the
+recorded whole-relation rows for a cartesian probe and test a witness for
+empty-key membership; neither refers to a keyed fallback for those reads.
+The const/range restriction concerns predicate reads, not atom literals:
+literal-bearing renames always build their filtered relation.
 Their entries use the ordinary \code{let} retention and index rules, without
 filtered-storage annotations. Literal restriction and projection belong only to
 the occurrence's row source; GPU materializes that source in the build phase.
 The optional \code{positional(H,...)} arguments assert host capabilities at this
 boundary; Physical contains only relational schemas, so unspecified hosts keep
 the previous representation. The initial selector handles recorded point/range
-reads and single-column \code{i64} eager membership. It chooses retained masks
+reads and single-column eager membership; the recorded provider spells its
+key codec without compiler inspection of Rust types. The selector chooses retained masks
 for eligible rescans or shared reads and leaves single filtered index-only
 builds streaming. Supplemental exact keysets beside payload indexes are explicit
 entries. Multi-key reductions, lazy semi and unsupported spines keep their old
@@ -544,11 +1179,82 @@ point conjunct; positional pipe reads retain all residual conjuncts.
 \end{mathpar}
 \[
 \Rule{CK-Structures}{\mathsf{WF}_{Physical}(s)\quad\mathsf{WF}_{Structures}(t)\\
- s=t.physical\text{ as AST and serialized tokens}}
+ s=t.physical\quad\mathsf{tokens}(s)=\mathsf{tokens}(t.physical)}
  {\mathsf{check}_{structures}(s,t)\Downarrow\ok}
 \]
 \emph{Refinement:} the embedded Physical is unchanged; each type
 represents its relation under the storage laws (a premise checked by tests).
+
+\subsubsection{Representation recording: Structures $\to$ Structures}
+In the two recording passes, $s.entries$ denotes the Structures entry list;
+$s.repr$, $s.stages$ and $s.retained$ denote the corresponding checked-analysis
+maps. Replacing $entries$ preserves the provider declarations and every other
+field. A result in a definition-order list denotes that definition's name.
+For \code{cq_represent}, let $E_s$ be the results admitted by its direct-chain
+eligibility function: noncanonical pipes whose operator is rename, select,
+point, range, project, semi or anti, whose predecessor is eligible, and whose
+heading is covered by the first scan lineage together with owned computed
+columns. A rename has no predecessor; semi and anti use their left input.
+Write $p_s$ for this predecessor function and $p_s^*(X)$ for its reflexive
+ancestor closure. Let $L_s(r)$ be the first recorded scan lineage and
+$O_s(r)=\mathsf{computed}_s(r)\cap H_s(r)$.
+The argument packet $a$ selects
+\[
+ \mathsf{reprSelection}(s,a)\triangleq
+ \begin{cases}
+ \varnothing & a=\epsilon,\\
+ E_s & a=\mathsf{positions},\\
+ p_s^*(X) & a=\mathsf{positions}(X),\ X\subseteq E_s.
+ \end{cases}
+\]
+Entries below follow Physical definition order; existing decisions, including
+tuple decisions, are never overwritten. The target contract also checks that
+new positional decisions have positional predecessors.
+\begin{mathpar}
+\Rule{STR-Represent}{\mathsf{WF}_{Structures}(s)\quad\mathsf{WF}_{Structures}(t)\\
+ S=\mathsf{reprSelection}(s,a)\setminus\operatorname{dom}(s.repr)\\
+ \Delta=[\,r\ \mathsf{repr}=\mathsf{positions}(L_s(r),O_s(r))\mid
+             r\in\mathsf{definitions}(s.physical),\ r\in S\,]\\
+ t=s[\mathit{entries}:=s.entries\mathbin{+\!\!+}\Delta]\quad
+ t.physical=s.physical}
+ {\mathsf{lower}_{represent}(s,a,t)}
+\end{mathpar}
+
+\subsubsection{Stage recording: Structures $\to$ Structures}
+For \code{cq_staging}, $s+e$ appends one entry without changing any other field.
+Let $B_s$ be the set of left inputs of probes with a non-host, single-level
+built right index on exactly the probe columns, no matching membership entry,
+no filtered right constant on those columns, no computed left columns, and a
+left scan spine of select/point/range/project ending at a constant-free rename.
+Only individually admissible, previously unstaged boundaries belong to $V_N$:
+\[
+ V_N\triangleq\{r\mid r\notin\operatorname{dom}(s.stages)\land
+                   \mathsf{WF}_{Structures}(s+(r\ \mathsf{stage}=\mathsf{batch}\ N))\}.
+\]
+The policy sets $N=128$ for empty arguments and reads positive $N$ from
+\code{batch(N)} otherwise. Let $J=\varnothing$ for empty arguments and
+$J=\{r\in V_N\mid\mathsf{mode}_s(r)=\mathsf{pipe}\}$ otherwise.
+Here $\mathsf{input}_s$ is the Physical operator's single-input accessor
+(undefined where that accessor returns none).
+\[
+ C\triangleq\{\mathsf{input}_s(r)\mid r\in J\cap\operatorname{dom}(\mathsf{input}_s),\
+       \mathsf{input}_s(r)\notin
+       \operatorname{dom}(s.retained)\cup\operatorname{dom}(s.stages)\},
+ \qquad B=B_s\cap V_{128}.
+\]
+\begin{mathpar}
+\Rule{STR-Staging}{\mathsf{WF}_{Structures}(s)\quad\mathsf{WF}_{Structures}(t)\quad N>0\\
+ D=\{r\mapsto128\mid r\in B\}\cup
+   \{r\mapsto N\mid r\in J\setminus(C\cup B)\}\\
+ \Delta=[\,r\ \mathsf{stage}=\mathsf{batch}\ D(r)\mid
+          r\in\mathsf{definitions}(s.physical),\ r\in\operatorname{dom}(D)\,]\\
+ t=s[\mathit{entries}:=s.entries\mathbin{+\!\!+}\Delta]\quad
+ t.physical=s.physical}
+ {\mathsf{lower}_{staging}(s,a,t)}
+\end{mathpar}
+Thus default probe boundaries keep size 128 even under explicit batch advice;
+additional maximal pipe boundaries use the requested size. Checking the whole
+target remains necessary after the individual candidate checks.
 
 \subsection{Realization: checked Sequence $\to$ Rust}
 The default CPU translator consumes checked, sequentially graded Sequence.
@@ -556,7 +1262,25 @@ Its host interpreter uses row adapters over the \code{cq-storage} traits;
 the shared realization helpers also serve an external push printer that
 consumes Structures directly. Rust translation has no source/target
 correspondence check; evidence is answer oracles, rustc trait guards and
-expansion fixtures. Interfaces at the Rust boundary:
+expansion fixtures.
+For the shared \code{cq_physical_realization::sources_with} entry, $s$ is
+Structures, $A$ is its checked analysis, and $t$ is the returned printer context.
+Let $\mathsf{indexBuilds}(t)$ extract the set of (result, key levels, provider
+type tokens) from built-index constructions in its statements and prepared
+stream fragments, including deferred arm fragments. This excludes temporary
+host-set certification tables and ordinary rows collections.
+The producer obligation is:
+\[
+\Rule{P-Realize}{\mathsf{WF}_{Structures}(s)\quad A=\mathsf{analysis}_{Structures}(s)\\
+ t.analysis=A\quad
+ t.physical=\{r\mapsto d\mid d\in s.physical.definitions,\ r=d.name\}\\
+ \mathsf{indexBuilds}(t)=
+ \{(r,L,\mathsf{tokens}(p.ty))\mid r\in\operatorname{dom}(A.built),\
+                                      (L,p)\in A.built(r)\}}
+ {\mathsf{lower}_{sources}(s,A,t)}
+\]
+This records provider fidelity, not a new Rust semantic checker: generated
+trait obligations and the storage abstraction laws still apply.
 \begin{mathpar}
 \Rule{IF-Surface}{\operatorname{parse}_{CQ}(T)=s\quad
  \text{no unexpanded extension clause remains in }s}
@@ -576,31 +1300,73 @@ expansion fixtures. Interfaces at the Rust boundary:
 \Rule{IF-Parameter}{p\in\vars_H(\theta)\quad b_p\text{ fresh}}
  {p\longmapsto\code{let b_p = \&p;}\text{ once outside all query loops}}
 
-\Rule{IF-Range}{C=\{d_1\}\quad H:\code{OrderedRead}\text{ at the matching key type}}
- {\mathsf{window}(H,C)\text{ is an ordered read; otherwise scan/filter, no build}}
+\Rule{IF-Capture}{\mathsf{let}\ p=e\in\mathsf{captures}\quad b\text{ fresh}\quad
+ \mathsf{if}\ g\in\mathsf{captures}}
+ {\code{let b = e; let p = \&b;}\text{ once before IF-Parameter};\
+  \text{each move closure reading }p\text{ owns }\code{Clone::clone(\&b)}\text{ and rebinds }\code{p = \&b};\
+  \text{answer}=\code{if g \{rows\} else \{empty\}};\ 
+  \mathsf{capture}\ c\longmapsto\code{Clone::clone(c)}\ /\ \code{*c}}
+Every captured value uses plain ownership. Each closure instance clones the
+values it reads, at every nesting level; direct reads use the original value.
+Rust checks \code{Clone}; \code{Copy} captures need no allocation, while other
+captures pay their own clone cost (authors can wrap large values explicitly).
+A typed $\mathsf{Domain}(k,T,f,D,t)$ capture realizes its binding as
+\code{let k:T = ::cq\_storage::domain::f(\&(D), \&(t))} before this same rule.
+No type-dependent selection, shared handle or capture-induced collection exists.
+
+\Rule{IF-Range}{\mathsf{native}(r,c,\{d\})=\rho\quad\rho\in\{\code{range},\code{ordered}\}}
+ {\mathsf{window}(H,d)\longmapsto\code{dispatch::range}/\code{window}(H,\ldots)\text{; unrecorded: scan/filter, no build}}
 
 \Rule{IF-Leaf}{d=\code{relation R(...)=}(e)\quad b\text{ fresh}\quad
  \Gamma_H\vdash_{Rust}e}
  {d\longmapsto\code{let b = \&(e);}\quad R\mapsto b}
 
-\Rule{IF-Dispatch}{\mathsf{nativeEligible}(H,C)\quad H:\mathsf{ReadAt}(C)}
- {\mathsf{read}(H,C)\longmapsto\mathsf{nativeRead}(H,C)}
+\Rule{IF-HostDecl}{\code{relation R(}d_1,\ldots,d_n\code{) host [}K\code{] [borrowed] reads [}P\code{] [supports [}S\code{]]}\\
+ K\neq\emptyset\text{ distinct declared columns}\quad
+ K=\{d_1,\ldots,d_{|K|}\}\ \lor\ |K|=1\\
+ \{\code{candidates},\code{range},\code{ordered}\}\cap P\neq\emptyset\Rightarrow K\text{ prefix}\quad
+ \code{range}\in P\Rightarrow|K|=1\\
+ \code{borrowed}\Rightarrow P\subseteq\{\code{membership}\}\quad
+ \text{a supports clause is present}\Rightarrow\code{exact}\in P}
+ {\mathsf{hostReads}(R,K)=P\quad\mathsf{hostSupports}(R,K)=S}
 
-\Rule{IF-Fallback}{\neg\mathsf{nativeEligible}(H,C)\ \lor\ H\not:\mathsf{ReadAt}(C)}
- {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\mathsf{build}(\alpha(H),C))}
+\Rule{IF-Dispatch}{\mathsf{native}(r,c,C)=(\rho,\vec K)\quad\mathsf{hostReads}(R,K)\ni\rho}
+ {\mathsf{read}(H,C)\longmapsto\code{dispatch::}\rho(H,\vec K)\quad
+  \code{require::native\_}\rho\code{::<}\vec\tau_K\code{,\_>(\&}H\code{)}\text{ once}}
+
+\Rule{IF-Fallback}{\mathsf{fallback}(r,c,C)=T}
+ {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\code{<}T\code{ as Build<\_>>::build}(\alpha(H)))}
 \end{mathpar}
-For keyed host reads, $\mathsf{nativeEligible}(H,C)$ holds at a leading
-declaration prefix, or at a single nonleading borrowed-key column
-$C=\{d_{j+1}\}$ when $H:\code{IndexedColumn<j>}$. The zero-based slot is derived
-from the checked declaration and rename, not inferred from matching Rust types.
-The explicit read's key is the one-field tuple of that column's declared owned
-type; its payload supplies every other column in declaration order, with exact
-source occurrences and chronology. Its cursor borrows or pins that same
-immutable source, not a temporary dispatch wrapper. Exact membership requires
-its separate Rust trait; retention and expansion still require Copy and
-Copy plus ExactSizeIterator respectively. An unsupported slot or capability
-uses the ordinary fallback. Computed keys, multicolumn nonleading keys,
-candidate enumeration and PointLookup retain their existing paths.
+A host is a plain row source unless its relation declares keyed reads
+(\textsc{IF-HostDecl}): a \code{host [}$K$\code{]} clause names a nonempty
+key, which is a leading declaration prefix or one indexed column, the reads
+$P\subseteq\{\code{exact},\code{membership},\code{candidates},\code{range},
+\code{ordered}\}$ its value answers on that key, and optionally the
+\code{retain}/\code{expand} cursor contracts of its exact read. A
+\code{borrowed} key stores borrowed columns (\code{(\&T,\ldots)}) and declares
+membership only. Only the declaration decides; Rust types are never
+inspected. Every keyed host read has exactly one Structures record: a native
+read (\textsc{STR-NativeHost}), or a fallback provider. \textsc{IF-Dispatch}
+prints one direct call for a native record on its key $\vec K$, listed in
+host declaration order, and one \code{require::native\_}$\rho$ guard outside
+all closures: a host whose type lacks the declared capability or answers
+another key type fails there, with rustc naming the missing trait
+(\code{IndexRead}, \code{PointLookup}, \code{ExactMembership},
+\code{Candidates}, \code{SeekRangeLookup} or \code{OrderedRead}). There is no
+autoref tier and no silent fallback. A nonprefix one-column key reads the
+explicitly indexed declaration slot through \code{ColumnHost<\_,j>}, whose
+zero-based slot is derived from the checked declaration and rename; its
+payload supplies every other column in declaration order, with exact source
+occurrences and chronology. Computed and generated keys own their key once
+(\code{OwnKey}) for the native call. Retention and expansion of a native
+exact read require the declared support and still require Copy and Copy plus
+ExactSizeIterator respectively. Every other read uses its recorded fallback,
+built once by one direct typed \code{Build} call (\textsc{IF-Fallback}).
+A point key includes every equality constant: literals keep their typed value,
+and closed operands, including A-Domain captures, keep their captured
+reference (\textsc{IF-Parameter}). \code{OwnKey} owns a captured key once per
+read; a mismatch with the declared native key is a Rust trait error, not a
+scan fallback.
 
 \begin{mathpar}
 \Rule{IF-Positional}{r\text{ has a checked positional read }(H,C,P)}
@@ -656,27 +1422,21 @@ retained. Both printers enforce the Structures contract and emitted
 capabilities from a Rust host type. Push continues to reject written merge and
 smallest choices, including unused results.
 
-Native keyed reads are chosen by stable autoref dispatch at the exact
-leading-prefix key type, with the recorded fallback otherwise; const/range reads
-scan and filter without building; merge requires \code{OrderedRead}. Rows borrow
+Native keyed reads come from host declarations and are recorded in Structures,
+with a recorded fallback otherwise. Merge readers record an ordered fallback,
+not a native ordered read, for compatibility with Sequence keyed lookups.
+Unrecorded const/range reads scan and
+filter without building; merge requires \code{OrderedRead}. Rows borrow
 host and built fields; computed columns and lookup keys are owned; canonicality
 never follows from a host type.
 
-\paragraph{Host-set certificates.}
-\begin{mathpar}
-\Rule{IF-HostSet}{\code{host\_set R}\in t\quad
- \mathsf{exactDistinct}(\mathsf{fullRows}(R))=true}
- {\mathsf{certify}(R)\Downarrow\ok}
-\end{mathpar}
-Before any operator relies on \textsc{PH-HostSet}, the printer checks the
-entire input heading, not a query projection. Duplicate rows fail the query
-with an error naming the relation; hash collisions are resolved by exact
-tuple equality, never by fingerprints alone. CPU printers share eager
-full-row certification. The GPU printer emits an exact device certificate:
-adjacent comparison simultaneously checks lexicographic sortedness and
-duplicates; unsorted input uses an exact row-index hash table. Only a
-successful certificate permits query execution. This obligation is absent
-without the opt-in fact and leaves the default CPU path unchanged.
+\paragraph{Input sets.}
+Every declared input relation is a set. Loading and ingestion establish
+distinctness of the actual relation supplied to the query, including any
+loader-side projection, before timed query execution. Printers emit no
+input-distinctness certificates, opt-in facts, or query-time verification.
+This premise concerns complete input rows, not arbitrary projected keys;
+key-losing query projections still require canonicalization.
 
 \paragraph{Opaque generator realization.}
 Write $I_r$ for the input row stream and $\mathsf{extend}_p(\rho,v)$ for
@@ -684,7 +1444,7 @@ destructuring item $v$ and extending the row with the fresh pattern columns.
 The same checked Bind node has the following two realizations:
 \begin{mathpar}
 \Rule{P-For}{\mathsf{Bind}(r,p,e)\text{ carries the \code{for} token}\\
- \mathsf{scopeOK}\quad\mathsf{preserveBefore}\quad\mathsf{finitePure}(e)}
+ \mathsf{scopeOK}\quad\mathsf{unchangedExpression}\quad\mathsf{finitePureTotal}(e)}
  {\mathsf{pull}:
  I_r.\mathsf{flat\_map}(\rho\mapsto
  \mathsf{into\_iter}(e(\rho)).\mathsf{map}(v\mapsto\mathsf{extend}_p(\rho,v)))\\
@@ -698,20 +1458,46 @@ iteration stays inside that step's row scope. Generated item columns have
 the same owned-computed representation as scalar bind columns, while existing
 host references retain their origins. No collector, sorting or deduplication
 is inserted at the generator itself; existing canonical boundaries suffice.
+Shared generator callables retain host-column lifetimes for iterators borrowing
+their inputs, but quantify computed-column borrows independently for every
+call. A row-local computed value must not borrow for the enclosing callable's
+lifetime merely because the unchanged expression also captures host state.
+Zero-sized type witnesses connect prepared scalar results and generator item
+patterns to later callable inputs. Rust infers unannotated computed columns
+from these connections; preparing a witness evaluates neither the original
+expression nor its pattern-extractor closure.
 Absent the token, the scalar printer remains a one-row extension and must not
-call \code{IntoIterator}. A generator is a partial stage boundary, never a
-total kernel merely because its RHS is closed. Rust checks the iterator/item
-and lifetime obligations; the checker preserves the tag, dependencies and
-Before facts, while finite purity remains the host premise.
+call \code{IntoIterator}. Generator iteration is pure and total by premise;
+stage eligibility depends on its representation. Rust checks iterator/item
+and lifetime obligations; the checker preserves the tag, original expression
+and free-variable bindings; finite pure total iteration remains a host premise.
 
-\subsection{Facade compositions}
+\subsection{Shared planning compositions}
 With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction, $E$ elaboration,
-and $S$ checked redundant-support absorption:
+and $S$ checked redundant-support absorption, Plan-Prefix is the reusable
+\code{cq_planning::compile_prefix} core composition, re-exported by
+\code{mini_linq::planning} and \code{cq_planners_plan}, not a macro-local policy.
+Its \code{PlanOptions} parser is shared by macro and programmatic callers:
+\code{order(...)}, \code{ordering(...)} and \code{no_reduce} occur at most once, reduction and skip
+packets may repeat, and a trailing options comma is rejected. The checked
+\code{prefix_valuation} API exposes $w$ before elaboration.
+\code{ordering(...)} carries upstream ordering inputs (Datalog seed/delta
+identity, driver, permutation, shared demand); the composition records them
+unchanged as $v_0.ordering$ (VO-OrderingInputs) and no ordering choice reads them.
+Qualified \code{PlanOptions} selectors name clauses of the authored input $q$.
+Normalization preserves top-level atom/block order, so its inserted bindings
+and restrictions induce a positional map $\rho$ from those source clauses
+to $N(q)$. Apply $\rho$ to qualified order, reduction and skip selectors before
+passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 \begin{mathpar}
-\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
- r=\text{None if \code{no_reduce}, otherwise Masks}\\
- w=\mathsf{advise}(R_{None,r}(v))\quad a=E(w)}
- {\code{mini_linq::passes::plan}(q)=a}
+\Rule{Plan-Prefix}{p=\rho(\mathsf{parsePlanOptions}(args))\quad n=N(q)\quad
+ v_0={\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
+ \mathsf{order}^{n.declared\_evidence}(n)\ \text{checked by CK-EvidenceLe}&n.declared\_evidence\text{ present}\\
+ O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}}\\
+ v=\mathsf{known}(p.known)(v_0[ordering:=p.ordering])\quad
+ r=\text{None if }p.no\_reduce,\text{ otherwise Masks}\\
+ w=\mathsf{advise}(R_{None,r}(v),p)\quad \mathsf{known}(p.known)\text{ re-checked on }w\quad a=E(w)}
+ {\code{compile_prefix}(q,p)=\code{mini_linq::passes::plan}(q,args)=a}
 
 \Rule{R-Advice}{\mathsf{skip}(T,S)\Rightarrow\mathsf{red}(T,S)\in w\quad
  \mathsf{reduce}(T,S)\ \text{or}\ \mathsf{skip}(T,S)\Rightarrow
@@ -727,7 +1513,7 @@ and $S$ checked redundant-support absorption:
  w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
 
-\Rule{Plan-Transfer}{n=N(q)\quad v=C_{atoms}(O_{Written,Coarse}(n))\quad w=R_{None,Masks}(v)\\
+\Rule{Plan-Transfer}{n=N(q)\quad v=O_{WrittenConnected,Coarse}(n)\quad w=R_{None,Masks}(v)\\
  r=\mathsf{outer}(w)\quad T=\mathsf{reductionTree}(q)\ \text{rooted at}\ r\\
  F=\{\mathsf{red}(r,c)\mid c\in\mathsf{children}(r),\ \mathsf{filteredSubtree}(c)\}\\
  B=\{\mathsf{red}(c,p)\mid p=\mathsf{parent}(c),\ \exists\ \text{filter outside}\ \mathsf{subtree}(c)\}\ \text{parents first}}
@@ -735,20 +1521,69 @@ and $S$ checked redundant-support absorption:
 
 \Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
  {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
+% CK-Transfer currently specifies producer replay, not independent checking.
 
-\Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad w=R_{None,Masks}(v)\\
- \text{for each inner occurrence }R\text{ in GYO ear order:}\\
+\Rule{Plan-Le}{n=N(q)\quad v=O^{unrestricted}_{Written,Coarse}(n)\\
+ \text{for each inner occurrence }R\text{ in O-LeEarOrder:}\\
  \mathsf{lookup}(R)=R(\bar b,\_)\ \text{at the first point its bound key }\bar b\text{ is available}\\
- \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{at the latest point before }
- \mathsf{firstUse}(\bar y)\lor\mathsf{Before}\text{ boundary}\lor\text{scope exit}}
- {\code{cq_planners::order(le)}(q)=E(\mathsf{le}(w))}
+ \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{before first use or scope exit,}\\
+ \text{finishing ready connected expansions before any disconnected expansion}\\
+ \mathsf{CK\text{-}Le}(n,\mathsf{le}(v),L)\quad w=R_{None,Masks}(\mathsf{restrict}(\mathsf{le}(v)))}
+ {\code{cq_planners::order(le)}(q)=\mathsf{simplify}(E(w))}
+
+\Rule{O-LeEarOrder}{A\text{ the inner atom occurrences}\quad
+ G=[c\mid\mathsf{Absorb}(c,p)\in\mathsf{gyoSteps}(q),\ c\in A]}
+ {\mathsf{earOrder}=\mathsf{firstOccurrences}(G)\concat
+       \mathsf{sort}_{written}(A\setminus\set(G))}
+
+\Rule{O-LeDemand}{v=O^{unrestricted}_{Written,Coarse}(n)\quad
+ Y_i=\mathsf{intro}_v(i)\quad K_i=\vars(i)\cap B^v_i\\
+ D(s)=\begin{cases}
+ K_i&s\text{ reads inner atom }i\\
+ \vars(s)&s\text{ equality or constraint}\\
+ \mathsf{logicalVars}(s,B^v_s)&s\text{ negation}\\
+ \mathsf{freeVars}(s,B^v_s)&s\text{ Rust step}\\
+ F_s&s\text{ Rust-free block}\\
+ B^v_s&s\text{ Rust-containing block}
+ \end{cases}\\
+ A_D=[i\text{ unexpanded}\mid Y_i\cap D(s)\ne\emptyset]_{\rm written}}
+ {\mathsf{before}(s)=
+       [\mathsf{expand}(i)\text{ recursively demanding }K_i]_{i\in A_D}}
+
+\Rule{O-LeExit}{A'=\{i\text{ inner}\mid\neg\mathsf{expanded}(i)\}}
+ {\mathsf{finishScope}=[\mathsf{expand}(i)]_{i\in\mathsf{sort}_{written}(A')}}
 
 \Rule{CK-Le}{\mathsf{erase}(t)=n\quad
- \forall R.\ \mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each}\\
- \mathsf{columnsOwned}(t)=\mathsf{columnsOwned}(n)\quad \mathsf{outer}(t)=\mathsf{outer}(w)\\
- \text{WF-VO}(t)\quad \mathsf{check}^{Masks}(t)}
- {\mathsf{check}^{Le}(q,t)\Downarrow\ok}
+ \forall R\in L.\ (\mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each})
+ \ \lor\ (\bar b=\emptyset\land\bar y\ne\emptyset\land
+ \mathsf{expand}(R)\text{ exactly once, no lookup})\\
+ \mathsf{auto}\Longrightarrow\mathsf{columnsOwned}_{L}(t)=\mathsf{columnsOwned}_{L}(n)
+ \land\mathsf{outer}(t)=\mathsf{outer}(w)\\
+ \mathsf{advised}\Longrightarrow\mathsf{outer}(t)=\mathsf{first}(t)\quad
+ \text{WF-VO}(t)}
+ {\mathsf{check}^{Le}(q,t,L)\Downarrow\ok}
 \end{mathpar}
+Automatic Plan-Le keeps the written outer stream and written column
+ownership. An advised schedule chooses its root: its outer stream is its
+first read, which is expanded once, and WF-VO alone fixes which columns each
+expansion introduces; lookups still introduce nothing. A zero-column lookup
+of an occurrence later introducing columns is omitted (O-EmptyCheck); the
+expansion itself establishes nonemptiness. Other residual root checks are
+guards over Unit, never unit-projected enumerations. Final I2 drainage moves
+ready nonintroducing steps without adding any role or history annotation.
+Membership is exactly $\mathsf{intro}(k)=\emptyset$; a stationary read
+following a moved read receives no special treatment. In particular there is
+no separator-following check rule. RA and Physical receive no VO check marker.
+O-LeDemand walks $v$ in schedule order before O-Restrict removes prefix
+predicates: even a predicate later restricted to its occurrence demands its
+columns here. Inner occurrences demand their incoming written-chain keys,
+so an inner consumer can trigger its owner's expansion. Expansion recursively
+demands its key, skips already expanded occurrences, and still obeys Plan-Le's
+connected-growth premise. O-LeExit invokes the same expansion operation in
+written order. A zero-heading projection of an occurrence remains a read.
+Demand-driven expansion obeys I3 even when an unrelated aggregate guard
+demands a disconnected occurrence first.
+
 The \code{no_reduce} option disables implicit Masks reductions, not explicit
 \code{reduce(T with S)} advice. Such advice therefore composes with the empty
 Masks schedule. A \code{skip(T with S)} still requires an existing Masks
@@ -757,12 +1592,14 @@ silently becoming a no-op.
 
 \code{order(transfer)} is an exact-semijoin adaptation of robust predicate
 transfer (Zhao et al., SIGMOD'25), not the paper's vectorized Bloom pipeline or
-RPT+'s adaptive execution. $C_{atoms}$ preserves every predicate, binding and
-block boundary, but within each maximal top-level run of atoms prefers the
-earliest atom connected to already bound columns. It preserves written ties
-and does not invent a connection for genuinely disconnected components.
-This prevents avoidable Cartesian prefixes even when opaque Rust excludes
-additional transfer reductions. The reduction tree is rooted at the stream;
+RPT+'s adaptive execution. Transfer uses the shared CQ scheduler's declared
+WrittenConnected I4 preference (S-WrittenConnected): preserve legal written
+introductions, including introducing-binding boundaries and same-boundary
+filter order, with readiness, I2 drainage and I3 connectivity enforced first.
+It has no separate boundary-limited atom scheduler and constructs no illegal
+Written intermediate. Genuinely disconnected components are permitted only
+when no connected atom is ready.
+The reduction tree is rooted at the stream;
 when that is the largest relation the root coincides with LargestRoot.
 The most-shared-first spanning core matches the paper's maximum-spanning-tree weights.
 The forward pass is the Masks pass plus the stream's reductions by its filtered
@@ -774,37 +1611,98 @@ exact semijoins, not Bloom filters. Checked absorption removes redundant support
 versions before Physical chooses which remaining results to retain. Scopes containing
 opaque Rust keep only their Masks reductions: there the structural RA
 correspondence check rejects some sound transfer schedules.
+CK-Transfer currently erases the recorded reductions, checks the remaining
+ordering, reruns Masks construction and the transfer producer, and requires
+exact equality with the target. The rule above describes that implementation;
+it is not an independent check of the transfer premises.
 
 \code{order(le)} is the Lookup \& Expand decomposition of Birler, Kemper and
 Neumann (VLDB'24) as a VO construction: a lookup is a partial subatom that
 introduces no names (a semijoin of the stream prefix), an expansion is the
 later full subatom of the same occurrence. Lookups are placed in GYO ear order
-as soon as their bound key is available, expansions as late as demand, Rust
-Before boundaries or scope exit permit, so acyclic scopes form two-phase plans.
+as soon as their bound key is available, expansions as late as column demand
+or scope exit permits, so acyclic scopes form two-phase plans.
 Expansions are coarse full rows under an explicit CK-Le obligation, not Fine
 subatoms. Whether a later probe reuses the lookup's cursor is a Structures
 representation decision, not part of this plan.
+The phase checker is shared by \code{cq_order} and the external planner, rather
+than reimplemented by the facade. For Plan-Le, $L$ is every inner occurrence
+in each scope, the outer has one full read with written ownership, and the
+caller additionally checks Masks reductions. For step advice, $L$ is only the
+explicit lookup occurrences at the top level; unselected Fine/coarse reads and
+unchanged nested scopes retain WF-VO obligations, and the advised outer stream
+is the schedule's first read (not necessarily the written one). The phase check
+runs before Masks and before optional reduction advice; checked expansion
+simplification follows elaboration.
 
-\code{plan} is left-deep in written order and defaults to checked Masks
+\code{plan} is left-deep in Prefix(Connected)/Coarse order by default, with
+explicit or evidence-based order available, and defaults to checked Masks
 reduction: every scope, acyclic or cyclic, reduces its inner clauses along the
 outer-rooted reduction tree (R-Masks) and by exact atom-to-block cuts; every
 branch is its own scope. Reduction compilation is independently checked before
 elaboration, and elaboration is checked against the reduced VO schedule. The
 external Hypergraph and Transfer planners additionally apply a checked RA
-realization rewrite. It uses
-$L\ltimes(R\ltimes L)=L\ltimes R$ and
-$L'\bowtie(R\ltimes L)=L'\bowtie R$ only when the required shared columns of $L'$
-are proven contained in $L$ by reduction lineage. The corresponding left-operand
-law removes $(L\ltimes R)\bowtie R$'s duplicate membership test (and similarly
-for a semijoin consumer). Right-side support pruning takes precedence; the
-left-side law must be proved using the surviving RHS, not a discarded
-restriction. This is local absorption, not a maximal fixed-point guarantee.
-Dead reduced copies are removed; independent consumers that still need a
-reduction keep the same restricted witness alive.
-The rewrite is checked against the original RA and does not alter the reduction
-algorithm.
+realization rewrite. Its policy absorbs only at a \emph{direct consumer},
+iterating on the current named RA DAG, never on an earlier VO position.
+Write $H(r)$ for a result heading and $u(r)$ for its number of operand uses,
+including output and block-metadata references. For $d=P\ltimes L$, put
+$K=H(P)\cap H(L)$. Define $W_K(r,L)$ by a path backwards from $r$ to the
+\emph{same named result} $L$, retaining $K$ at every vertex, following selection,
+projection, either natural-join operand, or the left semijoin operand.
+Let $\mathsf{Pipe}_K(d,J)$ mean that the forward path
+$d=x_0,x_1,\ldots,x_n,J$ has $u(x_i)=1$ and $K\subseteq H(x_i)$ for every $i$.
+Each internal $x_i$ is a selection, a natural join, or a semijoin whose
+\emph{left} operand is $x_{i-1}$; natural joins may use either operand.
+In particular projection (row canonicalization), grouping, opaque Rust,
+negative operators, blocks, shared consumers and output are barriers.
+The endpoint $J$ is a natural join, or a semijoin, using $x_n$ on either
+side; its other operand $q$ must satisfy $W_K(q,L)$. No changed definition
+may be in negative ancestry, and $d$ has no opaque/group ancestry.
+\begin{mathpar}
+\Rule{RA-Absorb}{
+ d=P\ltimes L \quad K=H(P)\cap H(L) \quad
+ \mathsf{Pipe}_K(d,J) \quad W_K(q,L)
+}{
+ G \equiv G[d:=P]\setminus\mathsf{Dead}
+}
+\end{mathpar}
+The substitution rewires the sole consumer and removes unreachable definitions.
+Since the pipe retains $K$, a row rejected by $d$ cannot survive $J$; no
+canonicalization or opaque execution observes the extra intermediate rows.
+The independent checker certifies successive substitutions from source and
+target RA alone, preserving all remaining definitions and payloads by name.
+Topological serialization order is not part of the certificate.
+Legality does not imply that every legal absorption should be produced.
+A semijoin is a pushed-down filter: deleting it is a strict filtering win
+only when nothing lies between it and the join repeating its filtering.
+Crossing intermediates un-pushes that filter, a separate cost decision outside
+this policy. For direct absorption, sharing is harmless only when \emph{every}
+use is bypassed together. Let $U(d)$ list all operand uses, including output
+and metadata uses, and let $\mathsf{Other}(J,d)$ name the opposite operand
+of that particular use. With the same negative/opaque ancestry exclusions:
+\begin{mathpar}
+\Rule{RA-AbsorbDirect}{
+ d=P\ltimes L \quad K=H(P)\cap H(L) \quad U(d)\ne\varnothing \\
+ \forall u\in U(d).\ u=(J,\mathsf{side})\ \land\
+ \mathsf{op}(J)\in\{\bowtie,\ltimes\}\ \land\ W_K(\mathsf{Other}(J,d),L)
+}{
+ G\equiv G[d:=P]\setminus\mathsf{Dead}
+}
+\end{mathpar}
+Define $G\longrightarrow_{\mathrm{direct}}G'$ by RA-AbsorbDirect: all direct
+consumers witness the same support, all uses are replaced together, and no
+intermediate definition is crossed. The checker also retains RA-Absorb's
+general linear-path legality above; the producer selects only the direct rule.
+\begin{mathpar}
+\Rule{RA-AbsorbPolicy}{
+ G\mathrel{\longrightarrow_{\mathrm{direct}}^{*}}G'
+ \quad \nexists G''.\ G'\longrightarrow_{\mathrm{direct}}G''
+}{
+ \mathsf{simplifyReductions}(G)=G'
+}
+\end{mathpar}
 
-For LE's checked RA \code{simplify_expansions} pass, let $H_L,H_R$ be the
+For LE's checked RA \code{cq_ra_rewrites::simplify_expansions} pass, let $H_L,H_R$ be the
 source operand headings, $K=H_L\cap H_R$, and $D_s(r)$ the demanded columns of source result
 $r$. Under set canonicalization the additional local laws are
 \[
@@ -839,7 +1737,8 @@ negative originals and block ancestry are therefore unchanged. The general
 schedule contract is not weakened.
 Set
 \code{pipeline \{ plan = mini_linq::passes::plan(no_reduce); \}}
-to disable optional semijoins while retaining written order. Configuration
+to disable optional semijoins while keeping the default Prefix(Connected)
+order. Configuration
 passes this argument through its existing named planning invocation.
 \code{plan} uses the optimizing elaborator, so even the opt-out is not
 the exact reference. Generic and the external Graph spelling belong to the
@@ -849,10 +1748,20 @@ ordering policy.
 \paragraph{Join-filter selection and realization.}
 \textsc{SEL-JoinFilter} records a scalar filter for every admissible
 (\textsc{STR-JoinFilter}) covering probe or semijoin into a statically filtered,
-total hash build, one per \code{i64} column of its key, at the scan its
-exclusive spine reaches; this is the bitmap a build side pushes to the deepest
-probe-side scan. A scan may therefore carry filters from several builds.
-Every eligible build selects an exact \code{AdaptiveKeySet}.
+total single-level build, one per scalar column of its key, at the scan its
+exclusive spine reaches. A scan may carry filters from several builds.
+Every eligible payload-index build whose selected token declares
+\code{join\_filter} defaults to \code{join\_filter\_membership}, spelling
+\code{DenseMembership<K,67108864>}, with conditional projected-key construction.
+Explicit borrowed advice requires source \code{run\_filter} and the scalar
+complete stored key layout; its token declares \code{borrowed\_filter}.
+Explicit attached advice declares \code{attached\_filter}; these realization
+facts are mutually exclusive and neither is selected by source retyping.
+A membership-only build already answers
+the same exact key test and receives no redundant supplementary filter.
+The dense provider requires \code{K: OrderKey} (\textsc{STR-AdaptiveMembership});
+a key without it is a rustc error at the one typed build, never a hash
+fallback. Explicit \code{retype} advice records another filter provider.
 Selection does not sample cardinalities or assume keys or foreign keys.
 Approximate structures live in an external feature and require explicit
 \code{cq_rewrites::retype} advice; the printer has no algorithm-specific branch.
@@ -861,9 +1770,25 @@ Sharing requires the same scan occurrence, build version, scalar key, source-ind
 layout, filter type and column marker; covering-operator identity alone does not
 require another filter. First-witness order supplies scan-local identities, also
 used to distinguish profile labels.
-\textsc{IF-JoinFilter} constructs each distinct checked provider from the existing
-index's distinct keys, projected to the filtered key column, through
-\code{Build} on $(k,())$ pairs, emits \code{require::conservative::<K,T>}, then
+\textsc{IF-JoinFilter} consumes recorded source and realization facts.
+With neither realization fact, \code{Build} consumes projected
+\code{Keys::distinct\_keys} only after activation. Exact source finalization uses
+a unit sidecar only for an authored optional-statistic guard. Default filters
+retain ordinary construction and \code{Keys::key\_count} activation. Explicit borrowed \code{RunFilterView} references completed ordered keys.
+Explicit \code{attached\_filter} uses a \code{BuildSidecar} incremental builder
+through \code{BuildWithSidecar::build_with_sidecar::<ROWS,MAX\_GROUP>(source,builder)}.
+That result publishes index and filter together; recursive tuple builders
+attach multiple filters without a post-build \code{distinct\_keys} scan.
+The Structures \textsc{STR-Construction} record supplies the row/max mask.
+Its checker verifies provider-declared \code{statistics\_build} support and
+matching immutable publication witnesses, without replaying selection.
+Ordinary records emit \code{Build::build}; demanded records emit
+\code{BuildWithStatistics}. Printers never select a protocol from accessor
+declarations. Unrequested accumulated scalars are absent; cheap lengths remain.
+Rust proves the marker's \code{ColumnSlot} and the constructed filter's
+\code{require::conservative::<K,T>} obligations. Borrowed views instead implement
+\code{ReadPredicate}, with optional \code{RunFilterPredicate} preserving identity;
+they do not implement \code{ConservativeMembership}. Realization then
 filters positions before fetching payloads: the first filter through the
 block-skipping read, the others on its surviving positions, in decision order.
 Host block bounds use the provider's conservative \code{any_in}; an absent bound
@@ -873,26 +1798,38 @@ A scan read before some covering provider is built (for example a retained
 host publication ordered ahead of that build) applies only the filters already
 built: an omitted filter is the trivial conservative filter that passes every
 key, so the covering exact operators still decide membership.
-\textsc{IF-JoinFilterAbandon} decides at runtime whether to construct the
-filters of a build at all: a build whose distinct keys exceed 35\% of the rows
-of its positional source occurrence constructs none (the creation threshold of
-dynamic predicate transfer, RPT+), and its abandoned filters pass every key,
-which the one-sided conservative law permits. A build without a single
-positional source occurrence always constructs its filters. Only the covering
-exact operators decide membership either way.
+\textsc{SEL-FilterPolicy} records every filter's one policy from final
+positional bases: \code{policy abandon 35 of }$B$\code{ keys }$S$ when its
+build has a positional lineage base $B$, otherwise \code{policy always}. The key
+source $S$ is \code{key\_count} (\code{Keys::key\_count}, constant cost, which
+completes a deferred build), or the covering provider's declared exact Keys
+statistic accessor when authored advice selected a borrowed or attached
+realization. This measured incumbent is the only automatic policy. The P7.3 cost
+rule may only veto it from recorded evidence, and no recorded evidence supports
+a veto: unknown evidence keeps the incumbent. \textsc{STR-FilterPolicy} checks
+the base, percentage and statistic declaration without rerunning selection.
+\textsc{IF-JoinFilterAbandon} carries out the recorded policy at runtime. A recorded
+accessor returns \code{Option<u64>}, and absence selects identity rather than a
+\code{Keys::key\_count} recount; \code{key\_count} is exact. Present build keys are
+compared with the recorded population using \code{u128} products of \code{u64}
+counts. An abandoned filter passes every key and skips default projected
+construction. Explicit attached construction observes keys before activation,
+and abandonment does not promise to recover that construction cost.
+The printer derives no policy; only exact covering operators decide membership.
 \begin{mathpar}
 \Rule{SEL-JoinFilter}{
  \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
- \mathsf{filteredBuild}(b)\quad
+ \mathsf{filteredBuild}(b)\quad\neg\mathsf{membershipOnly}(b)\quad
+ \mathsf{facts}(b).\mathsf{join\_filter}\quad
  \mathsf{positionalHost}(s)\\
- T=\code{AdaptiveKeySet<i64,I64Codec,67108864>}
+ T=\mathsf{recordedBorrowedOrSidecar}(b,k)
 }{
  \mathsf{select}(s,b,k,j)=
  \mathsf{joinFilter}(T,b,k,j,\mathsf{marker}(s,k))
 }
 
 \Rule{IF-JoinFilter}{
- F_i=\mathsf{buildFilter}_{T_i}(\pi_{k_i}\mathsf{keys}(\mathsf{index}_{b_i}))\quad
+ F_i=\mathsf{recordedViewOrAttachedSidecar}_{T_i}(\mathsf{index}_{b_i})\quad
  \mathsf{STR\text{-}JoinFilter}(s,F_i,b_i,k_i,j_i)\quad
  \mathsf{builtBefore}(b_i,s)\ (1\le i\le n)\\
  \mathsf{keepBlock}(B)=
@@ -903,12 +1840,41 @@ exact operators decide membership either way.
  (\mathsf{staticRead}_{\mathsf{keepBlock}}(s))
 }
 
+\Rule{SEL-FilterPolicy}{
+ \mathsf{joinFilter}(F,b,\ldots)\quad\mathsf{lineageBase}(b)=B\quad
+ B\in\mathsf{positionalBases}\\
+ S=\mathsf{declaredExactKeysAccessor}(b)\ \text{if}\ \mathsf{borrowedOrAttached}(F)\
+ \text{else}\ \mathsf{key\_count}
+}{
+ \mathsf{policy}(F)=\mathsf{abandon}(35,B,S)
+ \quad\text{otherwise}\ \mathsf{policy}(F)=\mathsf{always}
+}
+
 \Rule{IF-JoinFilterAbandon}{
- \mathsf{source}(b)=s'\quad
- 20\,|\mathsf{keys}(\mathsf{index}_b)| > 7\,|s'|
+ \mathsf{policy}(F)=\mathsf{abandon}(p,B,S)\quad
+ \bigl(S(\mathsf{index}_b)=\mathsf{None}\ \lor\
+ (S(\mathsf{index}_b)=\mathsf{Some}(n)\land 100n>p|B|)\bigr)
 }{
  F=\top\quad(\forall x.\ F.\mathsf{test}(x))
+}
+
+\Rule{SEL-NativeHost}{
+ r=\mathsf{rename}(R)\text{ read by }c\text{ on }C\quad
+ \neg\mathsf{merge}(c)\quad
+ \bigl(\mathsf{point}(c)\Rightarrow
+   \mathsf{leadingPrefix}_R(\mathsf{renames}(C))\bigr)\quad
+ \rho=\min_{\mathsf{need}(c)}\{\rho\in\mathsf{hostReads}(R,\mathsf{renames}(C))\}
+}{
+ \mathsf{native}(r,c,C)=(\rho,\mathsf{declOrder}_R(C))\quad
+ \text{otherwise }\mathsf{fallback}(r,c,C)\text{ is recorded}
 }
 \end{mathpar}
 Absent bounds make the corresponding block test true. The emitted filter and
 exact probe preserve surviving occurrence order and multiplicity.
+Merge readers always record an ordered fallback rather than a native ordered
+read: Sequence keyed lookups do not execute native ordered reads. This selection
+policy preserves supported generated code; the checker still rejects authored
+native ordered Sequence lookups.
+Point readers with non-leading keys retain scan-and-filter rather than a native
+point read. Native scans do not replace Physical host renames that are both
+canonical and piped: their ordered host canonical source must be preserved.

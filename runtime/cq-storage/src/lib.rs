@@ -1,9 +1,8 @@
 //! Physical access traits and concrete data structures for generated programs.
 //!
-//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
-//! binds and guards keep their written chain; relational steps may move only
-//! earlier across them. Their free variables determine their partial-function
-//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Embedded Rust expressions are opaque, pure and total by premise. Their free
+//! variables determine placement; no written-order chain restricts relational
+//! work. I/O, mutation and evaluation counts are outside the query meaning.
 //! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
 //! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
@@ -12,12 +11,18 @@
 //! is available only through the operation traits; a user type implementing
 //! [`Build`] plus the access traits a plan uses is a first-class structure,
 //! and the compiler names it without inspecting it.
+//! Generated code constructs a recorded provider with one direct
+//! `<Provider as Build<_>>::build` call: the codec and the provider type are
+//! recorded Structures facts, so a key lacking the provider's bound (for
+//! example [`OrderKey`] for [`DenseMembership`] or [`I64Codec`]) is a rustc
+//! error, never a silent change of representation.
 //!
 //! [`Answers`], [`GroupedAnswers`] and allocation-free [`SingleGroup`] compose
 //! query outputs as inputs. Grouped keys occupy the leading declared columns.
-//! [`dispatch`] selects direct reads
-//! by type, with one lazy fallback per query read. Host uniqueness is never a
-//! language premise; caller-selected distinct state establishes canonical plans.
+//! [`dispatch`] holds the direct native host reads a host declaration states
+//! and the lazy fallback storage of every other recorded host read. Host
+//! uniqueness is never a language premise; the canonical index recorded by
+//! index selection establishes distinct outputs.
 //!
 //! # Abstraction functions
 //!
@@ -40,7 +45,7 @@
 //!   retain the block. Reads preserve base order and exact predicate results.
 //!   [`Fetch`] reconstructs a named column from the same live occurrence.
 //!   Chunked reads AND exact predicate masks and preserve scalar-read order;
-//!   [`stage`] selections expose survivors before a partial operation executes.
+//!   [`stage`] selections expose survivors before downstream row operations.
 //! - `α(selection)` is the selected occurrence bag. Narrowing is intersection;
 //!   immutable snapshots and their projected builds preserve source order and
 //!   multiplicity. Selection does not confer OrderedRead.
@@ -87,11 +92,16 @@ pub(crate) use count;
 
 #[cfg(any(feature = "counters", feature = "operator-timing"))]
 pub mod counters;
+pub mod dedup;
 pub mod dispatch;
 mod hash_index;
 mod hash_state;
+mod item_columns;
+pub mod scan;
+pub use item_columns::{ColumnRow, ItemColumns, TupleColumns};
 mod join_filter;
-pub use join_filter::{JoinFilterPredicate, selective_build};
+mod key;
+pub use join_filter::{JoinFilterPredicate, NoJoinFilter, selective_build, selective_build_statistic};
 mod host;
 mod instrument;
 mod membership;
@@ -102,20 +112,29 @@ mod radix_run;
 mod radix_spline;
 pub mod rows;
 pub mod sequence;
+mod set_buckets;
 pub mod sharded;
 mod sorted_run;
+mod run_filter;
+mod sidecar;
+pub use run_filter::{RunFilterPredicate, RunFilterSource, RunFilterView};
+pub use sidecar::{
+    BuildSidecar, BuildWithSidecar, BuildWithStatistics, MergeSidecarBuilder, ProjectedSidecar,
+    SidecarBuilder, SidecarInput,
+};
 pub use sharded::Sharded;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers, SingleGroup};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
-pub use hash_state::{HashSet, HashSetConstructor, HashState};
+pub use hash_state::{HashMap, HashSet, HashState};
+pub use key::{BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense, OrderKey, OrdinalWord};
 pub use membership::{ConservativeMembership, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
-pub use radix_run::{RadixKey, RadixRun, RadixRunReadState, RadixRunView};
+pub use radix_run::{RadixCursor, RadixKeys, RadixRun, RadixRunReadState, RadixRunView};
 pub use radix_spline::{RadixSplineMetadata, RadixSplinePoint};
 pub use sorted_run::{RunCursor, SortedRun};
 pub use trie::Trie;
@@ -134,6 +153,13 @@ pub mod require {
     pub fn seek<T: super::IndexRead>(_: T) {}
     pub fn candidates<T: super::Candidates>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
+    /// A recorded native host read (IF-HostDecl) on declared key `K`: a host
+    /// whose type lacks the declared capability fails here, naming the trait.
+    pub fn native_exact<K, T: super::IndexRead<Key = K>>(_: &T) {}
+    pub fn native_point<K, T: super::PointLookup<Key = K>>(_: &T) {}
+    pub fn native_membership<K, T: super::ExactMembership<K>>(_: &T) {}
+    pub fn native_candidates<K, T: super::Candidates<Key = K>>(_: &T) {}
+    pub fn native_range<Q, T: super::dispatch::SeekRangeLookup<Q>>(_: &T) {}
     pub fn conservative<K: ?Sized, T: super::ConservativeMembership<K>>(_: &T) {}
     pub fn ordered<T: super::OrderedRead>(_: T) {}
     /// A direct ordered read must use the leading declared key type.
@@ -167,46 +193,99 @@ pub fn relational_cmp<T: Ord + ?Sized>(left: &T, right: &T) -> std::cmp::Orderin
     left.cmp(right)
 }
 
-mod string_literal {
-    pub trait Sealed {}
-    impl Sealed for str {}
-    impl Sealed for String {}
-    impl<T: super::StringValue + ?Sized> Sealed for &T {}
+/// Code domains: the authored value→code map of an interned column.
+///
+/// A column whose declaration names a domain (`col: Ty in (D)`) stores codes.
+/// CQ normalization (A-Domain) translates every closed operand compared with
+/// that column once on the host through these functions; execution then compares
+/// codes with [`relational_eq`]/[`relational_cmp`]. `exact` maps an absent value
+/// to a code no stored value has. `lower`/`upper` exist only for domains whose
+/// code order is the value order (sorted dictionaries); for a present or absent
+/// value `v`: `x < v ⇔ code(x) < lower(v)`, `x >= v ⇔ code(x) >= lower(v)`,
+/// `x <= v ⇔ code(x) < upper(v)`, `x > v ⇔ code(x) >= upper(v)`.
+pub trait CodeDomain {
+    type Value: ?Sized;
+    type Code;
+    /// The code of `value`, or a code assigned to no stored value.
+    fn exact(&self, value: &Self::Value) -> Self::Code;
 }
 
-/// The standard string representations accepted beside a string literal.
-/// Sealing excludes arbitrary user conversions or cross-type PartialEq code.
-pub trait StringValue: string_literal::Sealed {
-    fn string_value(&self) -> &str;
+/// An order-preserving [`CodeDomain`]: codes sort exactly as their values.
+/// Unordered domains (first-sight interners) do not implement it, so ordered
+/// `where` comparisons on their columns are rejected by rustc.
+pub trait OrderedCodeDomain: CodeDomain {
+    /// The least code whose value is not less than `value`.
+    fn lower(&self, value: &Self::Value) -> Self::Code;
+    /// The least code whose value is greater than `value`.
+    fn upper(&self, value: &Self::Value) -> Self::Code;
 }
-impl StringValue for str {
-    fn string_value(&self) -> &str {
-        self
+
+impl<T: CodeDomain + ?Sized> CodeDomain for &T {
+    type Value = T::Value;
+    type Code = T::Code;
+    fn exact(&self, value: &Self::Value) -> Self::Code {
+        T::exact(*self, value)
     }
 }
-impl StringValue for String {
-    fn string_value(&self) -> &str {
-        self.as_str()
+impl<T: OrderedCodeDomain + ?Sized> OrderedCodeDomain for &T {
+    fn lower(&self, value: &Self::Value) -> Self::Code {
+        T::lower(*self, value)
     }
-}
-impl<T: StringValue + ?Sized> StringValue for &T {
-    fn string_value(&self) -> &str {
-        T::string_value(*self)
+    fn upper(&self, value: &Self::Value) -> Self::Code {
+        T::upper(*self, value)
     }
 }
 
-pub fn relational_string_eq<L: Eq + StringValue + ?Sized, R: Eq + StringValue + ?Sized>(
-    left: &L,
-    right: &R,
-) -> bool {
-    left.string_value() == right.string_value()
+/// Host-once operand translation printed by A-Domain captures.
+pub mod domain {
+    use super::{CodeDomain, OrderedCodeDomain};
+    use std::borrow::Borrow;
+
+    pub fn exact<D, V>(domain: &D, value: &V) -> D::Code
+    where
+        D: CodeDomain + ?Sized,
+        V: Borrow<D::Value> + ?Sized,
+    {
+        domain.exact(value.borrow())
+    }
+    pub fn lower<D, V>(domain: &D, value: &V) -> D::Code
+    where
+        D: OrderedCodeDomain + ?Sized,
+        V: Borrow<D::Value> + ?Sized,
+    {
+        domain.lower(value.borrow())
+    }
+    pub fn upper<D, V>(domain: &D, value: &V) -> D::Code
+    where
+        D: OrderedCodeDomain + ?Sized,
+        V: Borrow<D::Value> + ?Sized,
+    {
+        domain.upper(value.borrow())
+    }
 }
-/// String literals compare the contents of standard String/str values.
-pub fn relational_str_cmp<L: Ord + StringValue + ?Sized, R: Ord + StringValue + ?Sized>(
-    left: &L,
-    right: &R,
-) -> std::cmp::Ordering {
-    left.string_value().cmp(right.string_value())
+
+/// Encode a host operand into a recorded column key representation.
+///
+/// The representation law requires this conversion to preserve the equality
+/// and ordering used by `Column::key`. Identity keys clone their value.
+/// Providers may implement additional codecs.
+pub trait PredicateValue<'a, K> {
+    fn predicate_value(&'a self) -> K;
+}
+impl<'a, K: Clone> PredicateValue<'a, K> for K {
+    fn predicate_value(&'a self) -> K {
+        self.clone()
+    }
+}
+
+// Encoding only: cq-print supplies closed host operands; the identity PredicateValue does not decode row values.
+pub fn encode_predicate<'a, H, C, T>(_: H, _: C, value: &'a T) -> C::Key
+where
+    H: PositionalRows,
+    C: Column<H>,
+    T: PredicateValue<'a, C::Key> + ?Sized,
+{
+    value.predicate_value()
 }
 
 pub fn intersect_lower<Q: Ord>(a: std::ops::Bound<Q>, b: std::ops::Bound<Q>) -> std::ops::Bound<Q> {
@@ -247,11 +326,15 @@ pub mod fetch;
 pub mod positional;
 pub mod selection;
 pub mod stage;
-pub use adaptive::{AdaptiveKeySet, BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense};
+pub mod statistics;
+pub use adaptive::{
+    AdaptiveKeySet, AdaptiveMembership, AdaptiveMembershipBuilder, AttachedDenseMembership,
+    AttachedDenseMembershipBuilder, DenseMembership,
+};
 pub use fetch::Fetch;
 pub use positional::{
     BlockId, BlockRead, Column, ColumnSlot, ExactIntervalMembership, Membership, Point,
-    PositionalRows, ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
+    PositionalRows, ReadPredicate, RowId, RowPredicate, Window, read_with_filter, test_position,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};
 pub use stage::{Chunk, for_chunks};

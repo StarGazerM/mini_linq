@@ -1,0 +1,25 @@
+// elimination_fine_triangle.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*,
+// passes.tex I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner elimination,fine: "fine enumerates the reversed elimination order" (facade table) = MCS order a,b,c.
+// c0=R(a,b), c1=S(b,c), c2=T(c,a)
+// H-MCSTie: maximum-cardinality search starts and breaks ties by first written
+// variable occurrence. Coarse reverses MCS; Fine uses the forward MCS sequence.
+// O-FineVariables: prioritize variables with a connected ready holder, then use
+// grouped heuristic variable order (forward MCS for Elimination). O-FineChoice:
+// choose a connected holder first, then its fixed heuristic sequence position.
+struct Triangle ; relation R (first : i32 [0] , second : i32 [0]) ; relation S (first : i32 [0] , second : i32 [0]) ; relation T (first : i32 [0] , second : i32 [0]) ; answer (a , b , c) : - R (a , b) , S (b , c) , T (c , a) ;
+valuation {
+    // fineStep(a): holders c0 (e=1), c2 (e=0), both disconnected -> c2 by S-Elimination rank
+    T @ 2 (_ , a) ;
+    // introduce(a): check of other holder c0
+    R @ 0 (a , _) ;
+    // fineStep(b): holders c0 (connected via a) and c1 (disconnected) -> c0
+    R @ 0 (a , b) ;
+    // introduce(b): check of other holder c1
+    S @ 1 (b , _) ;
+    // fineStep(c): c1 (e=0) and c2 (e=0) both connected -> written c1
+    S @ 1 (b , c) ;
+    // introduce(c): check of other holder c2; full row
+    T @ 2 (c , a) ;
+}

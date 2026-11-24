@@ -6,12 +6,94 @@ fn cq(tokens: proc_macro2::TokenStream) -> cq::Program {
 }
 
 #[test]
+fn closed_branch_lets_and_guards_reference_fresh_query_captures() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(a:i32); relation answer(a:i32,b:i32);
+        answer(x,v) :- { R(x), let v:i32 = 1, if host() } | { S(x), let v:i32 = 2 };
+    });
+    let normal = cq::normal::normalize(&source).unwrap();
+    let captures: Vec<_> = normal
+        .query
+        .captures
+        .items
+        .iter()
+        .map(|item| item.to_token_stream().to_string())
+        .collect();
+    assert_eq!(
+        captures,
+        [
+            "let __cq_c_0 : i32 = 1",
+            "let __cq_c_1 : bool = host ()",
+            "let __cq_c_2 : i32 = 2"
+        ]
+    );
+    let text = normal.query.body.to_token_stream().to_string();
+    assert!(
+        text.contains("R (x) , let v : i32 = capture __cq_c_0 , if capture __cq_c_1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("S (x) , let v : i32 = capture __cq_c_2"),
+        "{text}"
+    );
+    cq::normal::check(&normal).unwrap();
+    assert!(cq::normal::check(&source).is_err());
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    let printed: cq::Program = syn::parse2(normal.to_token_stream()).unwrap();
+    assert_eq!(printed, normal);
+}
+
+#[test]
+fn generator_equalities_become_shared_names_unless_protected_or_blocked() {
+    let body = |tokens: proc_macro2::TokenStream| {
+        let normal = cq::normal::normalize(&cq(tokens)).unwrap();
+        cq::normal::check(&normal).unwrap();
+        normal.query.body.to_token_stream().to_string()
+    };
+    // A-Alias: the solved equality is a shared join name, recorded in NF.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32); relation T(y:i32);
+            relation answer(a:i32,b:i32);
+            answer(a,b) :- R(a,x), S(y,b), where x == y && b > 3, T(y);
+        }),
+        "R (a , x) , S (x , b) , where b > 3 , T (x)"
+    );
+    // Opaque Rust observes both spellings: the equality stays a predicate.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32);
+            relation answer(a:i32,b:i32);
+            answer(a,b) :- R(a,x), S(y,b), where x == y, if ok(x,y);
+        }),
+        "R (a , x) , S (y , b) , where x == y , if ok (x , y)"
+    );
+    // Blocks keep their written names.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32);
+            relation U(b:i32); relation V(b:i32); relation answer(a:i32,b:i32);
+            answer(a,b) :- R(a,x), S(y,b), where x == y, { U(b) } | { V(b) };
+        }),
+        "R (a , x) , S (y , b) , where x == y , { U (b) } | { V (b) }"
+    );
+    // Renaming must not repeat a name inside one atom.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(x:i32,y:i32); relation answer(x:i32);
+            answer(x) :- R(x,y), where x == y;
+        }),
+        "R (x , y) , where x == y"
+    );
+}
+
+#[test]
 fn normalization_preserves_literals_and_extracts_other_non_variable_arguments() {
     let source = cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
         relation S(b: i32, c: i32);
-        answer(x, z) :- R(x, 5), S(_, z), R(x, x), if z > 1;
+        answer(x, z) :- R(x, 5), S(_, z), R(x, x), where z > 1;
     });
     let normal = cq::normal::normalize(&source).unwrap();
     let text = normal.query.to_token_stream().to_string();
@@ -19,13 +101,51 @@ fn normalization_preserves_literals_and_extracts_other_non_variable_arguments() 
     assert!(text.starts_with("answer (x , z) : - R (x , 5)"), "{text}");
     // The wildcard is a distinct witness; repeated variables get relational equality.
     assert!(
-        text.contains("S (__cq_1_0 , z) , R (x , __cq_2_1) , if x == __cq_2_1 , if z > 1"),
+        text.contains("S (__cq_1_0 , z) , R (x , __cq_2_1) , where x == __cq_2_1 , where z > 1"),
         "{text}"
     );
     cq::normal::check(&normal).unwrap();
     assert!(cq::normal::check(&source).is_err());
     // Normalizing again is the identity.
     assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    assert_eq!(
+        syn::parse2::<cq::Program>(normal.to_token_stream()).unwrap(),
+        normal
+    );
+}
+
+#[test]
+fn closed_atom_operands_are_relational_restrictions_not_rust_bindings() {
+    for body in [
+        quote!(R(x, { france })),
+        quote!({ R(x, { france }) } | { R(x, { germany }) }),
+    ] {
+        let source = cq(quote! {
+            struct Q;
+            relation R(key:i32, value:CodeAlias);
+            answer(x) :- #body;
+        });
+        let normal = cq::normal::normalize(&source).unwrap();
+        let items = cq::blocks::walk(&normal.query.body);
+        assert!(items.iter().all(|item| item.rust_step().is_none()));
+        let closed = items
+            .iter()
+            .filter_map(|item| {
+                let cq::BodyItem::Constraint(condition) = item else {
+                    return None;
+                };
+                condition.parameters().next()
+            })
+            .map(ToTokens::to_token_stream)
+            .map(|tokens| tokens.to_string())
+            .collect::<Vec<_>>();
+        assert!(closed.contains(&quote!({ france }).to_string()));
+        if source.query.body.len() == 1 && matches!(source.query.body[0], cq::BodyItem::Block(_)) {
+            assert!(closed.contains(&quote!({ germany }).to_string()));
+        }
+        assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+        cq::normal::check(&normal).unwrap();
+    }
 }
 
 #[test]
@@ -49,18 +169,18 @@ fn literal_repeat_and_computed_terms_have_distinct_semantic_kinds() {
     let source = cq(quote! {
         struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32);
         relation answer(a:i32,b:i32);
-        answer(x, 100 / *x) :- R(x,-1), if *x != 0,
+        answer(x, 100 / *x) :- R(x,-1), where x != 0,
             S(10 / *x,y), R(y,y);
     });
     let normal = cq::normal::normalize(&source).unwrap();
     let text = normal.to_token_stream().to_string();
     assert!(text.contains("R (x , - 1)"), "{text}");
     assert!(
-        text.contains("if x != 0 , let __cq_2_0 : i32 = 10 / * x , S"),
+        text.contains("where x != 0 , let __cq_2_0 : i32 = 10 / * x , S"),
         "{text}"
     );
     assert!(
-        text.contains("R (y , __cq_3_1) , if y == __cq_3_1"),
+        text.contains("R (y , __cq_3_1) , where y == __cq_3_1"),
         "{text}"
     );
     assert!(matches!(
@@ -97,6 +217,15 @@ fn same_atom_expressions_follow_the_atom_even_before_their_binding_column() {
 }
 
 #[test]
+fn computed_atom_arguments_cannot_use_a_later_atoms_binder() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(b:i32);
+        answer(x) :- R(10 / *x), S(x);
+    });
+    assert!(cq::contract::check(&source).is_err());
+}
+
+#[test]
 fn rust_metadata_includes_host_captures_and_pattern_bindings() {
     let item: cq::BodyItem = syn::parse_quote!(let (y,z): (i32,i32) = (host(*x), *x + captured));
     let metadata = item.rust_step().unwrap();
@@ -115,22 +244,14 @@ fn rust_metadata_includes_host_captures_and_pattern_bindings() {
 }
 
 #[test]
-fn equality_and_result_dedup_reject_known_non_leibniz_columns() {
+fn relational_type_obligations_are_left_to_rustc() {
     for source in [
         quote!(struct Q; relation R(value:f64); answer(x) :- R(x);),
         quote!(struct Q; relation R(key:f64,value:i32); answer(y) :- R(1.0,y);),
         quote!(struct Q; relation R(key:f64,value:i32); answer(y) :- R(x,y), R(x,y);),
         quote!(struct Q; relation R(value:i32); relation answer(computed:f64); answer(*x as f64) :- R(x);),
     ] {
-        let error = cq::normal::normalize(&cq(source)).unwrap_err().to_string();
-        assert!(
-            error.contains("Leibniz admissibility of a column type")
-                && error.contains("Rust code cannot distinguish `==`-equal values")
-                && error.contains("f64/f32 (0.0 == -0.0)")
-                && error.contains("hand-written lenient Eq")
-                && error.contains("column"),
-            "{error}"
-        );
+        cq::normal::normalize(&cq(source)).unwrap();
     }
     let malformed: cq::Equality = cq::Equality {
         left: syn::parse_quote!(x),
@@ -141,52 +262,123 @@ fn equality_and_result_dedup_reject_known_non_leibniz_columns() {
 }
 
 #[test]
-fn a_host_capture_in_the_head_becomes_a_final_binding() {
+fn a_host_capture_in_the_head_becomes_a_host_capture_not_a_body_binding() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation answer(a:i32);
         answer(host_value) :- R(x);
     });
     assert!(cq::normal::check(&source).is_err());
     let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
     assert!(matches!(
-        normal.query.body.last(),
-        Some(cq::BodyItem::Let(_))
+        normal.query.captures.items.as_slice(),
+        [cq::syntax::Capture::Let(_)]
     ));
     cq::normal::check(&normal).unwrap();
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
 }
 
 #[test]
-fn tuple_annotations_expose_known_float_columns_to_the_leibniz_check() {
-    for source in [
-        quote! {
-            struct Q; relation R(t:i32);
-            answer(t) :- R(t), let (x,y):(f64,i32)=(1.0,2), if * x == 1.0;
-        },
-        quote! {
-            struct Q; relation R(t:i32);
-            answer(x) :- R(t), let (x,y):(f64,i32)=(1.0,2);
-        },
-        quote! {
-            struct Q; relation R(t:i32);
-            answer(x) :- R(t), let (_, (ref x, _)):(i32,(f64,i32))=(0,(1.0,2));
-        },
-    ] {
-        let error = cq::normal::normalize(&cq(source)).unwrap_err().to_string();
-        assert!(
-            error.contains("column `x`") && error.contains("f64") && error.contains("Eq"),
-            "{error}"
+fn closed_lets_and_guards_are_captures_in_dependency_order() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation answer(a:i32,b:i32,c:i32);
+        answer(x,b,c) :- R(x), let b:i32 = 1, let c:i32 = b + 1, if host();
+    });
+    let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
+    let captures: Vec<_> = normal
+        .query
+        .captures
+        .items
+        .iter()
+        .map(|item| item.to_token_stream().to_string())
+        .collect();
+    assert_eq!(
+        captures,
+        ["let b : i32 = 1", "let c : i32 = b + 1", "if host ()"]
+    );
+    cq::normal::check(&normal).unwrap();
+    let printed: cq::Program = syn::parse2(normal.to_token_stream()).unwrap();
+    assert_eq!(printed, normal);
+}
+
+#[test]
+fn closed_let_where_equality_becomes_a_closed_relational_restriction() {
+    let source = cq(quote! {
+        struct CaptureLiteral;
+        relation R(x: i32);
+        answer(x) :- R(x), let c: i32 = 7, where c == 7;
+    });
+    cq::contract::check(&source).unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.captures.items.len(), 1);
+    let cq::BodyItem::Constraint(condition) = &normal.query.body[1] else {
+        panic!("capture equality must remain a relational restriction");
+    };
+    assert_eq!(condition.variables().count(), 0);
+    assert_eq!(
+        condition
+            .parameters()
+            .map(|expression| expression.to_token_stream().to_string())
+            .collect::<Vec<_>>(),
+        ["c"]
+    );
+    cq::normal::check(&normal).unwrap();
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    assert_eq!(
+        syn::parse2::<cq::Program>(normal.to_token_stream()).unwrap(),
+        normal
+    );
+}
+
+#[test]
+fn opaque_closed_let_guard_and_head_keep_capture_where_in_scope() {
+    let source = cq(quote! {
+        struct CaptureOpaque;
+        relation R(x: i32); relation answer(x: i32, value: i32);
+        answer(x, closed_value(2)) :- R(x),
+            let c: i32 = closed_value(0), if closed_value(1) == 7, where c == 7;
+    });
+    cq::contract::check(&source).unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.body.len(), 2);
+    assert_eq!(normal.query.captures.items.len(), 3);
+    let cq::BodyItem::Constraint(condition) = &normal.query.body[1] else {
+        panic!("capture equality must remain a relational restriction");
+    };
+    assert_eq!(condition.variables().count(), 0);
+    assert_eq!(condition.parameters().count(), 1);
+    let captures = normal.query.captures.to_token_stream().to_string();
+    for index in 0..3 {
+        assert_eq!(
+            captures.matches(&format!("closed_value ({index})")).count(),
+            1
         );
-        assert!(!error.contains("declare the result"), "{error}");
     }
+    cq::normal::check(&normal).unwrap();
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    assert_eq!(
+        syn::parse2::<cq::Program>(normal.to_token_stream()).unwrap(),
+        normal
+    );
+}
+
+#[test]
+fn tuple_annotations_do_not_supply_destructured_output_types() {
     let source = cq(quote! {
         struct Q; relation R(t:i32);
         answer(x,y) :- R(t), let (x,y):(i32,i32)=(1,2);
     });
-    cq::normal::normalize(&source).unwrap();
+    assert!(cq::normal::normalize(&source).is_err());
+    let declared = cq(quote! {
+        struct Q; relation R(t:i32); relation answer(x:f64,y:i32);
+        answer(x,y) :- R(t), let (x,y):(f64,i32)=(1.0,2);
+    });
+    cq::normal::normalize(&declared).unwrap();
 }
 
 #[test]
-fn tuple_binding_types_recurse_and_preserve_explicit_borrow_modes() {
+fn tuple_binding_types_remain_host_inferred() {
     let binding: cq::Let = syn::parse_quote!(
         let (a, (ref b, ref mut c), z):(i32,(f64,String),u8)=(1,(2.0,String::new()),0)
     );
@@ -197,13 +389,8 @@ fn tuple_binding_types_recurse_and_preserve_explicit_borrow_modes() {
         .collect();
     assert_eq!(
         types,
-        [
-            ("a", "i32"),
-            ("b", "& f64"),
-            ("c", "& mut String"),
-            ("z", "u8")
-        ]
-        .map(|(name, ty)| (name.to_owned(), ty.to_owned()))
+        [("a", "_"), ("b", "_"), ("c", "_"), ("z", "_")]
+            .map(|(name, ty)| (name.to_owned(), ty.to_owned()))
     );
     let binding: cq::Let = syn::parse_quote!(let (a,..,z):(i32,u8,u16,f64)=(1,2,3,4.0));
     let types: Vec<_> = binding
@@ -214,8 +401,8 @@ fn tuple_binding_types_recurse_and_preserve_explicit_borrow_modes() {
     assert_eq!(
         types,
         [
-            ("a".to_owned(), "i32".to_owned()),
-            ("z".to_owned(), "f64".to_owned())
+            ("a".to_owned(), "_".to_owned()),
+            ("z".to_owned(), "_".to_owned())
         ]
     );
 }
@@ -238,15 +425,14 @@ fn tuple_annotations_do_not_guess_named_types_or_reference_match_ergonomics() {
 }
 
 #[test]
-fn rust_comparisons_round_trip_and_capture_only_host_names() {
+fn relational_comparisons_round_trip_and_capture_only_host_names() {
     for body in [
-        "if x == y, if *x != &y, if x < y, if x <= y, if x > y, if x >= y",
-        "if -3 < *x, if x <= 5u32, if lower < x, if x >= upper, if lower == upper",
-        "if x >= -3 && x <= upper, if x == -1 || x == 2 || x == 3",
-        "if (x >= lower && x <= upper && (y == 1 || y == 2)) || (x != y && y >= 3)",
-        "if (x == 1) || (x == 2) || (y == 3)",
-        "if !(!(x == y) || (x < lower && !(y >= upper)))",
-        "if (x < 0 || y < 0) && (x > -3 || y > -3)",
+        "where x == y, where x != y, where x < y, where x <= y, where x > y, where x >= y",
+        "where x > -3, where x <= 5u32, where x > lower, where x >= upper",
+        "where x >= -3 && x <= upper, where x in [-1, 2, 3]",
+        "where (x >= lower && x <= upper && (y == 1 || y == 2)) || (x != y && y >= 3)",
+        "where (x == 1) || (x == 2) || (y == 3)",
+        "where (x < 0 || y < 0) && (x > -3 || y > -3)",
     ] {
         let source: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32,b:i32); answer(x) :- R(x,y), {body};"
@@ -269,7 +455,10 @@ fn rust_comparisons_round_trip_and_capture_only_host_names() {
             _ => None,
         }) {
             assert!(c.variables().all(|v| v == "x" || v == "y"));
-            assert!(c.parameters().all(|v| v == "lower" || v == "upper"));
+            assert!(
+                c.parameters()
+                    .all(|v| ["lower", "upper"].contains(&v.to_token_stream().to_string().as_str()))
+            );
         }
     }
 }
@@ -304,37 +493,30 @@ fn custom_cq_constraint_syntax_is_rejected() {
 #[test]
 fn constraint_scope_and_premises_are_local_contract_obligations() {
     for source in [
-        "struct Q; relation R(a:i32); answer(x) :- if * x < cutoff, R(x);",
-        "struct Q; relation R(a:i32); answer(x) :- R(x), if * y < cutoff, let y:i32 = 1;",
+        "struct Q; relation R(a:i32); answer(x) :- where x < cutoff, R(x);",
+        "struct Q; relation R(a:i32); answer(x) :- R(x), where y < cutoff, let y:i32 = 1;",
     ] {
         let p: cq::Program = syn::parse_str(source).unwrap();
-        let e = cq::normal::check(&p).unwrap_err().to_string();
-        assert!(e.contains("before it is bound"), "{e}");
+        assert!(cq::normal::check(&p).is_err());
     }
     for ty in ["f64", "(i32,f32)", "fn()"] {
         let p: cq::Program = syn::parse_str(&format!(
-            "struct Q; relation R(a:{ty},b:i32); answer(y) :- R(x,y), if * x < cutoff;"
+            "struct Q; relation R(a:{ty},b:i32); answer(y) :- R(x,y), where x < cutoff;"
         ))
         .unwrap();
-        let e = cq::normal::check(&p).unwrap_err().to_string();
-        assert!(e.contains("Eq") || e.contains("Ord"), "{e}");
+        cq::normal::check(&p).unwrap();
     }
     let mut p: cq::Program =
-        syn::parse_quote! { struct Q; relation R(a:i32); answer(x) :- R(x), if * x < cutoff; };
+        syn::parse_quote! { struct Q; relation R(a:i32); answer(x) :- R(x), where x < cutoff; };
     let cq::BodyItem::Constraint(c) = &mut p.query.body[1] else {
         panic!()
     };
     c.map_terms(&mut |t| {
-        if matches!(t, cq::syntax::constraint::Term::Parameter(_)) {
-            *t = cq::syntax::constraint::Term::Parameter(syn::parse_quote!(x));
+        if matches!(t, cq::syntax::constraint::Term::Closed(_)) {
+            *t = cq::syntax::constraint::Term::Closed(syn::parse_quote!(x));
         }
     });
-    assert!(
-        cq::normal::check(&p)
-            .unwrap_err()
-            .to_string()
-            .contains("query variable")
-    );
+    assert!(cq::normal::check(&p).is_err());
 }
 
 #[test]
@@ -354,14 +536,29 @@ fn literals_preserve_argument_positions_and_do_not_bind_head_or_block_names() {
     assert!(!literal_head.query.is_basic());
     assert!(cq::normal::check(&literal_head).is_err());
     let normal = cq::normal::normalize(&literal_head).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
     assert!(matches!(
         normal.query.body[0],
         cq::BodyItem::Positive { .. }
     ));
-    assert!(matches!(normal.query.body[1], cq::BodyItem::Let(_)));
+    assert_eq!(normal.query.captures.items.len(), 1);
     let shifted_float = cq(quote! {
         struct Q; relation R(a:i32,b:f64);
         answer(x) :- R(7,x);
     });
-    assert!(cq::normal::check(&shifted_float).is_err());
+    cq::normal::check(&shifted_float).unwrap();
+}
+
+#[test]
+fn cq_has_no_ordering_inputs() {
+    // Ordering inputs are planner options recorded by VO, not CQ grammar.
+    assert!(syn::parse2::<cq::Program>(quote! {
+        struct Q;
+        ordering(seed = false, delta = 1, driver = DeltaFirst,
+            permutation = [1, 0], shared_demand = [R(0)])
+        relation R(a:i32,b:i32);
+        relation answer(a:i32);
+        answer(*x) :- R(x,y), R(y,x);
+    })
+    .is_err());
 }

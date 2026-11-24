@@ -1,7 +1,7 @@
 use cq_datalog_support::ensure;
-use cq_lang_datalog_round as rounds;
 use cq_lang_datalog_storage as storage;
-use syn::{GenericArgument, PathArguments, Type, ext::IdentExt};
+use storage::provider::{self, Token};
+use syn::{Type, ext::IdentExt};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Choice {
@@ -29,282 +29,108 @@ impl syn::parse::Parse for Choice {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Provider<'a> {
-    Map(&'a Type, &'a Type),
-    Layout(&'a Type, &'a Type),
-    Set(&'a Type),
-    Sharded(&'a Type),
-    Runs(&'a Type),
-    Other,
-}
-
-fn path_is(path: &syn::Path, names: &[&str]) -> bool {
-    path.segments.len() == names.len()
-        && path
-            .segments
-            .iter()
-            .zip(names)
-            .all(|(segment, name)| segment.ident == *name)
-}
-
-/// Inspect only the outer provider; sharded layouts retain their row payload type.
-/// Arbitrary aliases and nested Rust remain opaque.
-fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
-    let Type::Path(path) = ty else {
-        return Ok(Provider::Other);
-    };
-    if path.qself.is_some() {
-        return Ok(Provider::Other);
-    }
-    let path = &path.path;
-    let map = path_is(path, &["std", "collections", "HashMap"]);
-    let set = path_is(path, &["std", "collections", "HashSet"]);
-    let alias = path_is(path, &["cq_storage", "HashSet"]);
-    let sharded = path_is(path, &["cq_datalog_parallel_runtime", "ShardedSeen"]);
-    let runs = path_is(path, &["cq_datalog_parallel_runtime", "RunSeen"]);
-    let layout = path_is(path, &["cq_datalog_parallel_runtime", "ShardedLayout"]);
-    if !map && !set && !alias && !sharded && !layout && !runs {
-        return Ok(Provider::Other);
-    }
-    let malformed = || {
-        syn::Error::new_spanned(
-            ty,
-            "malformed hash provider: expected its row/key/value types and optional hasher",
-        )
-    };
-    let last = path.segments.last().expect("recognized nonempty path");
-    if path
-        .segments
-        .iter()
-        .take(path.segments.len() - 1)
-        .any(|s| !s.arguments.is_empty())
-    {
-        return Err(malformed());
-    }
-    let PathArguments::AngleBracketed(arguments) = &last.arguments else {
-        return Err(malformed());
-    };
-    let arity = if map || layout {
-        2..=3
-    } else if alias {
-        1..=1
-    } else {
-        1..=2
-    };
-    if !arity.contains(&arguments.args.len())
-        || !arguments
-            .args
-            .iter()
-            .all(|arg| matches!(arg, GenericArgument::Type(_)))
-    {
-        return Err(malformed());
-    }
-    let GenericArgument::Type(first) = &arguments.args[0] else {
-        unreachable!()
-    };
-    if map || layout {
-        let GenericArgument::Type(second) = &arguments.args[1] else {
-            unreachable!()
-        };
-        Ok(if layout {
-            Provider::Layout(first, second)
-        } else {
-            Provider::Map(first, second)
-        })
-    } else if sharded {
-        Ok(Provider::Sharded(first))
-    } else if runs {
-        Ok(Provider::Runs(first))
-    } else {
-        Ok(Provider::Set(first))
+impl Choice {
+    fn hasher(self) -> storage::Hasher {
+        match self {
+            Self::Fx => storage::Hasher::Fx,
+            Self::Keyed => storage::Hasher::Keyed,
+        }
     }
 }
 
-fn select(ty: &mut Type, choice: Choice) -> syn::Result<()> {
-    *ty = match (provider(ty)?, choice) {
-        (Provider::Map(key, value), Choice::Fx) => syn::parse_quote!(
-            ::std::collections::HashMap<#key, #value,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
-        (Provider::Map(key, value), Choice::Keyed) => syn::parse_quote!(
-            ::std::collections::HashMap<#key, #value, ::cq_storage::HashState>
-        ),
-        (Provider::Layout(key, value), Choice::Fx) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedLayout<#key, #value,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
-        (Provider::Layout(key, value), Choice::Keyed) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedLayout<#key, #value, ::cq_storage::HashState>
-        ),
-        (Provider::Set(row), Choice::Fx) => syn::parse_quote!(
-            ::std::collections::HashSet<#row,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
-        (Provider::Set(row), Choice::Keyed) => syn::parse_quote!(::cq_storage::HashSet<#row>),
-        (Provider::Sharded(row), Choice::Fx) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedSeen<#row,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
-        (Provider::Sharded(row), Choice::Keyed) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedSeen<#row>
-        ),
-        (Provider::Runs(row), Choice::Fx) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::RunSeen<#row,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
-        (Provider::Runs(row), Choice::Keyed) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::RunSeen<#row>
-        ),
-        (Provider::Other, _) => return Ok(()),
-    };
+/// Whether a token's instances take the selected hasher: hashed tokens with a
+/// spelling function. Verbatim (authored/device) tokens remain opaque.
+fn selects(tokens: &[Token], provider: &storage::Provider) -> syn::Result<bool> {
+    let declaration = provider::lookup(tokens, &provider.token)?;
+    Ok(declaration.hashed && declaration.spelling != provider::Spelling::Verbatim)
+}
+
+/// Record the selected hasher state and respell the instance from its schema.
+fn select(
+    tokens: &[Token],
+    provider: &mut storage::Provider,
+    hasher: &mut storage::Hasher,
+    (key, payload): (&Type, &Type),
+    choice: Choice,
+) -> syn::Result<()> {
+    if selects(tokens, provider)? {
+        *hasher = choice.hasher();
+        provider.ty = provider::spell(
+            provider::lookup(tokens, &provider.token)?,
+            key,
+            payload,
+            *hasher,
+        )?;
+    }
     Ok(())
+}
+
+fn layout_schema(program: &storage::Program, layout: &storage::Layout) -> (Type, Type) {
+    let declaration = program
+        .incremental
+        .strata
+        .source
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == layout.relation)
+        .expect("checked layout relation");
+    storage::layout_schema(declaration, &layout.columns, layout.key)
 }
 
 pub(crate) fn storage(source: &storage::Program, choice: Choice) -> syn::Result<storage::Program> {
     storage::contract::check(source)?;
     let mut target = source.clone();
     for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
-        select(&mut layout.provider, choice)?;
+        let (key, payload) = layout_schema(source, layout);
+        select(
+            &source.tokens,
+            &mut layout.provider,
+            &mut layout.hasher,
+            (&key, &payload),
+            choice,
+        )?;
     }
-    for (fields, declaration) in target
-        .providers
-        .iter_mut()
-        .zip(&source.incremental.strata.source.declarations)
-    {
-        if declaration.value.is_some() {
-            select(&mut fields.canonical_set, choice)?;
-        } else {
-            select(&mut fields.seen, choice)?;
-        }
+    let (key, payload) = storage::negative_schema();
+    for negative in &mut target.negations {
+        select(
+            &source.tokens,
+            &mut negative.provider,
+            &mut negative.hasher,
+            (&key, &payload),
+            choice,
+        )?;
     }
     check_storage(source, &target, choice)?;
     Ok(target)
 }
 
-pub(crate) fn round(source: &rounds::Program, choice: Choice) -> syn::Result<rounds::Program> {
-    rounds::contract::check(source)?;
-    let mut target = source.clone();
-    for stratum in &mut target.context.strata {
-        for key in &mut stratum.keys {
-            select(&mut key.provider, choice)?;
-        }
-    }
-    check_round(source, &target, choice)?;
-    Ok(target)
-}
-
-/// Independent relation on the original and selected provider: never invokes selection.
-fn check_provider(source: &Type, target: &Type, choice: Choice) -> syn::Result<()> {
-    let kind = provider(source)?;
-    let (names, data, hasher): (&[&str], (&Type, Option<&Type>), Option<Type>) =
-        match (&kind, choice) {
-            (Provider::Other, _) => {
-                return ensure(
-                    source == target,
-                    target,
-                    "hasher changed an opaque provider",
-                );
-            }
-            (Provider::Map(key, value), _) => (
-                &["std", "collections", "HashMap"],
-                (*key, Some(*value)),
-                Some(match choice {
-                    Choice::Fx => {
-                        syn::parse_quote!(
-                            ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                        )
-                    }
-                    Choice::Keyed => syn::parse_quote!(::cq_storage::HashState),
-                }),
-            ),
-            (Provider::Layout(key, value), _) => (
-                &["cq_datalog_parallel_runtime", "ShardedLayout"],
-                (*key, Some(*value)),
-                Some(match choice {
-                    Choice::Fx => {
-                        syn::parse_quote!(
-                            ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                        )
-                    }
-                    Choice::Keyed => syn::parse_quote!(::cq_storage::HashState),
-                }),
-            ),
-            (Provider::Set(row), Choice::Fx) => (
-                &["std", "collections", "HashSet"],
-                (*row, None),
-                Some(syn::parse_quote!(
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                )),
-            ),
-            (Provider::Set(row), Choice::Keyed) => (&["cq_storage", "HashSet"], (*row, None), None),
-            (Provider::Sharded(row), Choice::Fx) => (
-                &["cq_datalog_parallel_runtime", "ShardedSeen"],
-                (*row, None),
-                Some(syn::parse_quote!(
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                )),
-            ),
-            (Provider::Sharded(row), Choice::Keyed) => (
-                &["cq_datalog_parallel_runtime", "ShardedSeen"],
-                (*row, None),
-                None,
-            ),
-            (Provider::Runs(row), Choice::Fx) => (
-                &["cq_datalog_parallel_runtime", "RunSeen"],
-                (*row, None),
-                Some(syn::parse_quote!(
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                )),
-            ),
-            (Provider::Runs(row), Choice::Keyed) => (
-                &["cq_datalog_parallel_runtime", "RunSeen"],
-                (*row, None),
-                None,
-            ),
-        };
-    let Type::Path(path) = target else {
-        return Err(syn::Error::new_spanned(
-            target,
-            "hasher target is not a native hash provider",
-        ));
-    };
+/// Independent relation on the original and selected instance: the token is
+/// kept, a selecting token records the chosen hasher, any other instance is
+/// unchanged. The target contract checks the spelling of the recorded state.
+fn check_instance(
+    tokens: &[Token],
+    (source, source_hasher): (&storage::Provider, storage::Hasher),
+    (target, target_hasher): (&storage::Provider, storage::Hasher),
+    choice: Choice,
+) -> syn::Result<()> {
     ensure(
-        path.qself.is_none() && path.path.leading_colon.is_some() && path_is(&path.path, names),
-        target,
-        "hasher selected the wrong provider",
+        source.token == target.token,
+        &target.token,
+        "hasher changed a provider token",
     )?;
-    ensure(
-        path.path
-            .segments
-            .iter()
-            .take(names.len() - 1)
-            .all(|s| s.arguments.is_empty()),
-        target,
-        "hasher changed provider path arguments",
-    )?;
-    let PathArguments::AngleBracketed(arguments) = &path.path.segments.last().unwrap().arguments
-    else {
-        return Err(syn::Error::new_spanned(
-            target,
-            "hasher target is missing type arguments",
-        ));
-    };
-    let arity = 1 + usize::from(data.1.is_some()) + usize::from(hasher.is_some());
-    ensure(
-        arguments.args.len() == arity,
-        target,
-        "hasher changed provider arity",
-    )?;
-    let expected = std::iter::once(data.0).chain(data.1).chain(hasher.as_ref());
-    for (actual, expected) in arguments.args.iter().zip(expected) {
+    if selects(tokens, source)? {
         ensure(
-            matches!(actual, GenericArgument::Type(ty) if ty == expected),
-            target,
-            "hasher changed key/value types or selected the wrong hash state",
-        )?;
+            target_hasher == choice.hasher(),
+            &target.token,
+            "hasher selected the wrong hash state",
+        )
+    } else {
+        ensure(
+            source == target && source_hasher == target_hasher,
+            &target.token,
+            "hasher changed an opaque provider",
+        )
     }
-    Ok(())
 }
 
 pub(crate) fn check_storage(
@@ -315,9 +141,10 @@ pub(crate) fn check_storage(
     storage::check_rewrite(source, target)?;
     ensure(
         source.layouts.len() == target.layouts.len()
-            && source.delta_layouts.len() == target.delta_layouts.len(),
+            && source.delta_layouts.len() == target.delta_layouts.len()
+            && source.negations.len() == target.negations.len(),
         target,
-        "hasher changed layout coverage",
+        "hasher changed layout or negation key coverage",
     )?;
     let mut unchanged = target.clone();
     for (before, after) in source.layouts.iter().chain(&source.delta_layouts).zip(
@@ -326,62 +153,29 @@ pub(crate) fn check_storage(
             .iter_mut()
             .chain(&mut unchanged.delta_layouts),
     ) {
-        check_provider(&before.provider, &after.provider, choice)?;
+        check_instance(
+            &source.tokens,
+            (&before.provider, before.hasher),
+            (&after.provider, after.hasher),
+            choice,
+        )?;
         after.provider = before.provider.clone();
+        after.hasher = before.hasher;
     }
-    for ((before, after), declaration) in source
-        .providers
-        .iter()
-        .zip(&mut unchanged.providers)
-        .zip(&source.incremental.strata.source.declarations)
-    {
-        if declaration.value.is_some() {
-            check_provider(&before.canonical_set, &after.canonical_set, choice)?;
-            after.canonical_set = before.canonical_set.clone();
-        } else {
-            check_provider(&before.seen, &after.seen, choice)?;
-            after.seen = before.seen.clone();
-        }
+    for (before, after) in source.negations.iter().zip(&mut unchanged.negations) {
+        check_instance(
+            &source.tokens,
+            (&before.provider, before.hasher),
+            (&after.provider, after.hasher),
+            choice,
+        )?;
+        after.provider = before.provider.clone();
+        after.hasher = before.hasher;
     }
     ensure(
         source == &unchanged,
         target,
         "hasher changed non-hash storage decisions",
-    )
-}
-
-pub(crate) fn check_round(
-    source: &rounds::Program,
-    target: &rounds::Program,
-    choice: Choice,
-) -> syn::Result<()> {
-    rounds::check_rewrite(source, target)?;
-    ensure(
-        source.context.strata.len() == target.context.strata.len(),
-        target,
-        "hasher changed stratum coverage",
-    )?;
-    let mut unchanged = target.clone();
-    for (before, after) in source
-        .context
-        .strata
-        .iter()
-        .zip(&mut unchanged.context.strata)
-    {
-        ensure(
-            before.keys.len() == after.keys.len(),
-            target,
-            "hasher changed negation key coverage",
-        )?;
-        for (before, after) in before.keys.iter().zip(&mut after.keys) {
-            check_provider(&before.provider, &after.provider, choice)?;
-            after.provider = before.provider.clone();
-        }
-    }
-    ensure(
-        source == &unchanged,
-        target,
-        "hasher changed non-hash round decisions",
     )
 }
 

@@ -138,17 +138,21 @@ fn main() -> Result<()> {
         let timing = cq_gpu_runtime::take_last_timings()
             .ok_or("Sequence translator did not publish build/kernel/dedup/total timings")?;
         let download_started = Instant::now();
+        // DECODE P: download the final H05 answer before host-side source-key publication.
         let mut actual = resident
             .to_host()?
             .into_iter()
             .map(|(order, supplier, nation)| {
                 Ok((
+                    // DECODE P: invert the output order domain only after the GPU answer download.
                     orders
                         .decode(order)
                         .ok_or("generated order ID is outside its dictionary")?,
+                    // DECODE P: invert the output supplier domain only after the GPU answer download.
                     suppliers
                         .decode(supplier)
                         .ok_or("generated supplier ID is outside its dictionary")?,
+                    // DECODE P: invert the output nation domain only after the GPU answer download.
                     nations
                         .decode(nation)
                         .ok_or("generated nation ID is outside its dictionary")?,

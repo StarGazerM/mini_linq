@@ -6,11 +6,11 @@ use quote::quote;
 fn chain() -> ir::Program {
     syn::parse_quote! { physical {
         relation A(a:i64); relation B(a:i64,b:i64); relation C(b:i64,c:i64);
-        a = pipe rename A@0 {a -> x};
-        b = let rename B@1 {a -> x,b -> y};
+        a = pipe rename A {a -> x};
+        b = let rename B {a -> x,b -> y};
         p = pipe probe first [x] a,b;
-        c = let rename C@2 {b -> y,c -> z};
-        q = pipe canon probe first [y] p,c;
+        c = let rename C {b -> y,c -> z};
+        q = let canon probe first [y] p,c;
         return q as answer(x,y,z);
     }}
 }
@@ -56,20 +56,19 @@ fn hoisting_closes_dependencies_without_dropping_operators() {
 fn hoisting_refuses_an_opaque_dependency() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation R(a:i32);
-        r = pipe rename R@0 {a -> x};
+        r = pipe rename R {a -> x};
         guarded = pipe guard r if (opaque(x));
-        projected = pipe canon project guarded keep {x};
+        projected = let canon project guarded keep {x};
         return projected as answer(x);
     }};
-    let error = cq_rewrite_passes::hoist(&source, quote!(projected)).unwrap_err();
-    assert!(error.to_string().contains("opaque Rust dependency"));
+    assert!(cq_rewrite_passes::hoist(&source, quote!(projected)).is_err());
 }
 
 #[test]
-fn retained_prefix_preserves_answers_and_duplicates_until_canon() {
-    let a = [(1i64,), (2,), (1,)];
+fn retained_prefix_preserves_set_input_answers() {
+    let a = [(1i64,), (2,)];
     let b = [(1i64, 10i64), (1, 11), (2, 20), (3, 30)];
-    let c = [(10i64, 100i64), (11, 110), (20, 200), (10, 100)];
+    let c = [(10i64, 100i64), (11, 110), (20, 200)];
     macro_rules! run {
         ($($physical:tt)*) => {{
             let mut rows: Vec<_> = mini_linq::compile! {

@@ -17,7 +17,7 @@ pub fn check(scenario: Scenario) {
         relation S(y: i32);
         relation answer(c0: i32);
         answer(*difference) :- R(x, _), S(y), let difference: i32 = *x - *y,
-            if *x > *y;
+            where x > y;
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

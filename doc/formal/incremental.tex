@@ -6,7 +6,7 @@ sets and bags, insertions only, and totally ordered rounds. It does not
 parameterize the existing compiler by a general semiring. Signed changes,
 partially ordered time and recursive aggregates are outside this scope.
 
-\subsection{One call: collections, iterators and partiality}
+\subsection{One call: collections and iterators}
 For notation, let $\mathrm{Rel}_K(X)=X\to_{fin}K$, with
 $K\in\{\mathbb B,\mathbb N\}$. These are finite sets and finite bags,
 respectively. Each has a monad $M_K$: unit assigns weight one to a value;
@@ -17,26 +17,22 @@ bind and union. Write $\iota$ for the characteristic-bag embedding of a set
 and $\mathsf{canon}=\iota\circ\mathrm{supp}$. Canonicalization is idempotent;
 $\iota$ itself is not a homomorphism for overlapping unions.
 
-The written-order denotation remains exactly that of
-\S\ref{sec:denotation}: $\bot+M_{\mathbb B}$, with strict propagation of a
-panic from any reached valuation. A relational atom extends a valuation, a
-guard retains or discards it, and the head projects or maps it.
-Commutativity of the \emph{total} set/bag fragment does not establish
-commutativity of arbitrary partial computations: an empty earlier relation
-can prevent a later panic. Recognized comparisons and negated atoms still
-require their binders and pure value-based behavior; given those, they move
-like relational selections (CQ-GuardRecognize, CQ-Neg, C-Ready, E-Constraint,
-E-Neg). Their definedness justifies motion (Motion lemma,
-Section~\ref{sec:premises}); opaque guards keep the Rust chain.
+The written-order denotation is that of Section~\ref{sec:denotation}:
+$M_{\mathbb B}$ under the pure-total Rust premise. A relational atom extends
+a valuation, a Rust guard retains or discards it, and the head projects or
+maps it. Explicit \code{where} predicates have representation-based equality
+and order; no Rust expression is recognized as a relational predicate.
+All operations retain their free-variable bindings (CQ-Where, CQ-Neg,
+C-Ready, RL-Constraint, RL-Neg). The Motion lemma applies without a
+written-order Rust chain.
 
 An iterator supplies an ordered, demand-driven operational sequence, not a
 bag by definition. For a finite successful exhaustive traversal, forgetting
 order yields a bag and taking support yields a set. Push and pull are
-possible realizations of that traversal; arbitrary Rust iterators are not
-assumed to satisfy pure list-monad laws. Partial polling, effects, divergence
-and resource exhaustion stay outside the observation model, as before.
-Let $\mathsf{obs}$ take the support of a successful traversal and map an
-observed panic to $\bot$.
+possible realizations of that traversal. Embedded generators and all their
+polling are pure, total and finite by premise; Rust does not prove that premise.
+Effects, divergence and resource exhaustion remain outside the observation
+model. Let $\mathsf{obs}$ take the support of an exhaustive traversal.
 \begin{mathpar}
 \Rule{INC-Adequacy}{\text{host premises and checked lowering}\quad
  \text{exhaustive observation in the existing model}}
@@ -47,12 +43,11 @@ observed panic to $\bot$.
    =E_{\mathbb B}(\mathrm{supp}(b))
    =\mathrm{supp}(E_{\mathbb N}(\mathsf{canon}(b)))}
 \end{mathpar}
-Adequacy is refinement, not equality of panics: successful source results
-must agree; a target may remove a source panic. \textsc{INC-Supp} applies to
-positive bind, projection, union and value-based filtering. Extensions to
-partial code must separately discharge the existing extensionality and
-Before obligations. This is not a blanket rewrite through negation,
-first-nonempty fallback, aggregates or effectful consumers.
+Adequacy preserves the answer set under the premises; a panic violates the
+contract rather than supplying an alternative denotation.
+\textsc{INC-Supp} applies to positive bind, projection, union and value-based
+filtering. This is not a blanket rewrite through negation, first-nonempty
+fallback, aggregates or effectful consumers.
 
 A consumer may own the final canonical boundary only if its contract states
 that multiplicity is unobservable there. Canonicalizing $N$ removes repeated
@@ -166,11 +161,169 @@ set before it, and $\delta R_t$ the accepted fresh set.
 \end{mathpar}
 A mutable staging set can implement both candidate self-deduplication and
 membership against $R_{t-1}$, but readers of this round must continue to see
-the old committed version. This may fuse physical operations; it does not
-erase their distinct semantic obligations. Cost includes processing the
-candidate bag, not only the accepted delta. A lawful maintained index needs
-work proportional to its update/merge algorithm; no universal
-$O(|\delta R_t|)$ round bound follows from these equations.
+the old committed version. Both obligations are discharged by the index
+protocol below, never by a store outside the relation's recorded indices.
+Cost includes processing the candidate bag, not only the accepted delta; no
+universal $O(|\delta R_t|)$ round bound follows from these equations.
+(CPU Datalog realizes them in its canonical layout, below. CQ's canon is the
+build of its canonical index, an ordinary index of the result. A candidate's
+columns may be borrowed stored values or owned computed values, as each hole
+records (\textsc{DL-AnswerOwnership}); admission builds its owned key from either
+representation and forms the owned new row only for admitted candidates.)
+
+\paragraph{Admission is an anti-join against an ordinary index (P3d).}
+Let $O$ be an output relation (a CQ result or a Datalog IDB) and let its
+candidates arrive in batches $B_1,\ldots,B_n$. Distinct is the incremental
+anti-join
+\begin{mathpar}
+\Rule{ADM-Batch}{O_0=\emptyset\quad
+ F_k=\delta(B_k)\triangleright O_{k-1}\quad O_k=O_{k-1}\mathbin{\dot\cup}F_k}
+ {\delta\Big(\biguplus_k B_k\Big)=\mathop{\dot\bigcup}_k F_k=O_n}
+\end{mathpar}
+Every partition of the stream into batches yields the same set; a one-row
+batch needs no inner $\delta$, so row granularity streams, and one batch is
+the whole stream. A Datalog round is one batch per head starting from
+$R_{t-1}$, so \textsc{DL-InsertNew} is an instance of \textsc{ADM-Batch}.
+Supporting laws:
+\begin{mathpar}
+\Rule{ADM-Union}{}{\Big(\biguplus_h Q_h\Big)\triangleright A=\biguplus_h(Q_h\triangleright A)}
+
+\Rule{ADM-Commute}{}{\delta(X)\triangleright A=\delta(X\triangleright A)}
+
+\Rule{ADM-Partial}{}{\delta(X\uplus Y)=\delta(\delta X\uplus\delta Y)}
+
+\Rule{ADM-InPlan}{\text{every head variable }\bar x\text{ bound at VO level }k\quad
+ O\text{ read at its committed version}}
+ {Q\triangleright_{\bar x}O=Q\text{ with }\neg O(\bar x)\text{ placed at level }k}
+\end{mathpar}
+\textsc{ADM-InPlan} reads a committed version, like a delta occurrence: it is
+not recursion through negation, and $A\cup(Q\triangleright A)=A\cup Q$. Each
+producer of $O$ discharges $\triangleright O$ exactly once, in its plan or at
+admission; $\delta$ of the batch is always discharged at admission.
+
+CPU Datalog realizes \textsc{ADM-InPlan} per rule hole. Fork records
+$\mathit{known}\in\{\mathsf{admit},\mathsf{in\_plan}\}$; an in-plan hole
+names computed head terms by ordinary bindings and appends $\neg C(\bar x)$
+over the head's committed canonical layout $C$, columns in canonical order.
+Advice \code{known(at(level k))} pins the read after the $k$-th positive
+read, at or after the level $\ell$ binding the last head variable and at most
+the last positive read $p$, transported as CQ \code{known(C@i at k)}
+(\textsc{O-KnownAt}); \code{known(admit)} pins admission. Without advice the
+decision follows the recorded fan-out of the variant's reads
+(\textsc{DL-Fanout}): a read \emph{multiplies} when it introduces a variable
+(a wildcard is an enumerated fresh witness) and binds no recorded key of its
+relation, and otherwise only \emph{filters} (a membership test, or at most one
+row). The early anti-join saves the expansion of known heads only when a later
+read multiplies, and probes every intermediate row where later reads filter
+(the unconditional default $\ell<p$ measured DOOP xalan \code{mini}
+2.36$\times$ and batik \code{mini-par} 2.95$\times$ slower), so an unadvised
+hole is in plan iff some read after the written head-binding level $\ell$ is
+recorded $\mathsf{multiply}$ and its queue records a planning invocation;
+otherwise it is $\mathsf{admit}$. Automatic placement follows CQ's ordinary
+ready-negation schedule after its actual head bindings: reordering reads may
+change their level. Only explicit advice records a numeric placement in
+\code{Planning.known}; invocation serialization transports that pin.
+Keys come from source evidence
+\code{evidence from "provenance" \{ key R [c, ...]; \}}
+(\textsc{WF-DL-Evidence}: provenance, declared relation, distinct declared
+columns); evidence has no denotation, so a false key changes speed, never
+answers. Device storage records $\mathsf{admit}$ only.
+Sequence's \code{planning\_key} preserves this advice-only meaning when
+mapped from upstream evidence. It is not Sequence's separately authored
+\code{trusted\_key} semantic premise. Build-statistic references
+(\textsc{STR-BuildStats}, \textsc{BE-StatsRead}) bind immutable Physical
+build/layout/domain identities; publication across committed Datalog rounds
+requires a separate versioned maintenance record and is not inferred from a
+relation name by the P7.1 host contract.
+P7.2 adds CPU \textsc{RT-BuildStats} and \textsc{RT-RunFilter} laws, not a
+committed-round publication protocol. Borrowed views belong to their immutable
+index lifetime; attached sidecars publish only with the completed index.
+Merge invalidates unavailable global key/group metadata rather than summing
+overlapping segments or retaining stale values. Old snapshot borrows must
+continue to describe their own data. Binding these publications to full,
+delta and committed-round identities remains the separate P7.5 obligation.
+\begin{mathpar}
+\Rule{DL-Fanout}{r_j=R(\bar t)\ \text{the }j\text{-th positive read of the variant}\quad
+ B_j\text{ bound before }r_j}
+ {\mathit{fanout}_j=\mathsf{multiply}\iff \mathit{vars}(\bar t)\not\subseteq B_j
+  \wedge \neg\exists K\in\mathit{keys}(R).\ \bar t|_K\subseteq B_j\cup\mathit{closed}}
+
+\Rule{WF-DL-Evidence}{\mathit{prov}\ne\epsilon\quad R\ \text{declared}\quad
+ K\subseteq\mathit{cols}(R)\ \text{distinct, nonempty}}
+ {\mathsf{key}\ R\ [K]\ \text{well formed}}
+
+\Rule{FK-Known}{\ell\le k\le p\ \text{(advice } \mathit{at}(k))\ \vee\
+ (\text{no advice},\ \mathit{plan}\ \text{recorded},\
+ \exists j>\ell.\ \mathit{fanout}_j=\mathsf{multiply})}
+ {\mathit{known}(h)=\mathsf{in\_plan}\quad Q_h' = Q_h,\ \mathit{lets},\ \neg C(\bar x)}
+
+\Rule{DL-AdmitOnce}{\mathit{known}(h)=\mathsf{in\_plan}\iff \neg C\in Q_h\ \text{exactly once, last}}
+ {\textstyle N_t=\delta\big(\biguplus_{\mathsf{in\_plan}}Q_h \uplus
+  \biguplus_{\mathsf{admit}}(Q_h\triangleright C)\big)\triangleright\emptyset}
+\end{mathpar}
+Fork records $\mathit{fanout}$ per rule hole; correspondence checks the record
+against the variant's reads and recorded keys and the placement against the
+advice and that record, then erases exactly the suffix (complete head key,
+canonical committed layout, declared column types); Round checks
+\textsc{DL-AdmitOnce}
+and records the committed head read in the schedule before publication
+(\textsc{IX-Stable}). Printers consume the record: the serial printer omits
+the committed probe for in-plan holes; the parallel printer admits covered and
+checked candidates as two batches sharing one NEW. GPU Datalog follow-up.
+
+\paragraph{Index protocol.}
+The anti-join reads the \emph{canonical} index $V$ of $O$: one ordinary member
+of $O$'s index set, every member a complete column permutation, recorded by
+the index-selection pass (SRDatalog's \code{select\_indices}/\code{canonical\_index}).
+It is typed, recorded and maintained like every other member; no separate
+membership store, maintenance trait or printer branch exists. For CQ the
+whole stream is one batch: the canonical index is the result's rows record,
+built by a provider with the \code{Distinct} capability
+(\textsc{PL-Distinct}, \textsc{STR-Canon}), so \textsc{ADM-Batch} holds with
+$n=1$ and $O_0=\emptyset$. Readers between maintenance steps observe one
+represented relation:
+\begin{mathpar}
+\Rule{IX-Stable}{\text{no maintenance between two reads}}
+ {\text{both reads observe the same represented relation}}
+\end{mathpar}
+How a provider deduplicates (sorted array, hash insertion, radix sort) and
+when maintenance physically combines storage are provider choices; sorting is
+never a recorded strategy name. Readers of a Datalog round see the committed
+version: all maintenance of a round follows its last reader
+(\textsc{DL-PublishAfterReaders}).
+
+The explicit \code{HashMap<K,HashSet<V,T>,S>} layout indexes the payload
+within each group: complete-row membership is two exact hash probes,
+candidate enumeration is already distinct, and counting reads the bucket
+length. Its two hasher representations are independent. This remains an
+ordinary index layout and carries no canonical-only storage.
+
+For radix index runs, the inherent \code{RadixRun::merge} appends a grouped
+delta and uses stable merge-path partitions on adjacent key directories. It
+is a multiset union: no disjointness is required, and reads afterwards
+observe the old occurrences plus every delta occurrence. Runs retain
+chronological order, and payload groups at equal keys concatenate older
+before newer. After merging, adjacent run sizes satisfy $|L_i|\ge k|L_{i+1}|$
+for provider ratio $k\ge2$. Membership, counts and range offsets read only
+directories; lookup cursors visit every run without compaction.
+Contiguous legacy item reads may cache a merged view, invalidated by merge.
+\begin{mathpar}
+\Rule{IX-RunMerge}{\mathrm{reads}(\mathcal L)=V\quad k\ge2}
+ {\mathrm{reads}(\mathsf{merge}_k(\mathcal L,D))=V\uplus D\quad
+  \forall i.\ |L_i|\ge k|L_{i+1}|}
+\end{mathpar}
+The device radix runs obey the same publication law: the delta is grouped
+alone, adjacent newest runs merge by stable merge-path over key directories
+(older groups first) while $|L_i|<k|L_{i+1}|$, and merged items are gathered
+column by column through a source map. A failed merge leaves $\mathcal L$
+unchanged; retained snapshots keep their runs.
+\begin{mathpar}
+\Rule{GPU-RadixPublish}{\alpha(\mathcal L)=O\quad k\ge2\quad
+ |O|+|F|\le\max\mathsf{Offset}}
+ {\alpha(\mathsf{publish}_k(\mathcal L,F))=O\uplus F\quad
+  \forall i.\ |L_i|\ge k|L_{i+1}|\quad
+  \mathsf{lookup}(k')=\mathsf{lookup}_O(k')\mathbin{+\!\!+}\mathsf{lookup}_F(k')}
+\end{mathpar}
 
 \paragraph{Maintained device runs.}
 Let $V_L$ retain the complete row in the recorded permutation $L$.
@@ -198,10 +351,25 @@ cut $t+1$; stream ordering retains its buffers until all enqueued readers
 finish. No historical cut is promised after retirement. A leveled capacity
 ratio is explicit maintenance advice (default four), not a semantic premise;
 it cannot change admission, the multiset, or snapshot publication.
+The device Storage constructor resolves \code{ratio(n)} (omission means four)
+to a printable integer $\rho\ge2$. Every accepted/layout radix state receives
+that integer in its recorded parameters. The runtime checks the ratio bound,
+legal directory bits, positive merge tile and compiled block-width contract,
+then uses $\rho$, never a hidden constant, in the \textsc{GPU-RadixPublish}
+merge threshold. The former device-run equality boundary is not retained;
+only maintenance work and run counts may change, not represented rows.
+\begin{mathpar}
+\Rule{DL-DeviceRatio}{\rho=\mathrm{Storage.device.ratio}\ge2\quad
+ \rho\text{ passed to every device run constructor}}
+ {\mathrm{mergeTrailing}(A,N)\text{ merges while }
+  \lfloor|A_{\mathrm{last}}|/\rho\rfloor<|N|\quad
+  \textsc{STR-RunCompact}\text{ preserves the represented rows}}
+\end{mathpar}
 
 \subsection{Datalog and the fixpoint boundary}
-The external \texttt{features/datalog} workspace implements this boundary above
-the unmodified compiler. Its five language crates record and check source
+The external \texttt{features/datalog} consumer packages implement this boundary
+above the unmodified compiler, sharing its workspace only for build reuse.
+Their five language crates record and check source
 rules, dependency SCCs, delta relations, semi-naive variants, storage choices
 and explicit round programs. Separate stratify, incremental, storage and fork
 passes connect these languages through the stage protocol; a terminal printer
@@ -270,43 +438,49 @@ Thus the next union is $R^t\cup S\cup F(R^t)$, as required.
 \end{proof}
 
 \paragraph{Owned indexes, not a core incremental protocol.}
-The Datalog layer owns one canonical all-column set for each derived relation.
-After a round's CQ holes finish, successful \texttt{insert\_new} operations
-produce precisely the next delta, and those fresh tuples update every selected
-layout. Extensional layouts are built once per program. Each layout records a
+The Datalog layer records, for each relation, one canonical layout: an
+ordinary member of its full layouts whose key covers every column
+(\textsc{DL-Canonical}). The storage pass reuses the first such read layout,
+else appends the identity all-column layout; a layout keyed by every column is
+a payload-free key set by default. Admission realizes \textsc{DL-InsertNew}
+with the canonical provider's own operations: an anti-join with the committed
+canonical layout ($\neg\mathsf{contains}$) and insert-if-absent into the
+round's NEW version of that layout, which deduplicates the batch; each row
+passing both is pushed once into next. NEW is round-local. After a round's
+CQ holes finish, publication inserts those fresh tuples into every full
+layout, the canonical one included; there is no separate seen, accumulated or
+wrapper store and no publication step beyond layout maintenance. Extensional
+relations are loaded once per program by the same insert-if-absent into the
+canonical layout, newly admitted rows extending the other layouts.
+Each layout records a
 complete column permutation and a leading key prefix, chosen from join
 variables under delta-driven evaluation. Borrowed grouped map hosts expose
 their existing indexes through the public \texttt{Rows}/\texttt{IndexRead}
-interfaces. No compiler staging or maintained-storage extension is required.
+interfaces, and key-set hosts through \texttt{Rows}/\texttt{ExactMembership}.
+No compiler staging or maintained-storage extension is required.
 The caller's CQ pipeline is unchanged: if its chosen probe does not match a
 recorded layout, ordinary CQ fallback construction remains correct but may
 cost more work. Layout choice is therefore a checked Datalog decision, not a
 claim that every possible caller pipeline reuses every index.
 
 Datalog emits a CQ negated atom against a key set built once at the consuming
-stratum boundary, after its negative inputs are complete. E-Neg lowers that
+stratum boundary, after its negative inputs are complete. RL-Neg lowers that
 atom to the existing RA anti-join; an exact host membership read uses the
 borrowed key set without rebuilding it per call. Wildcards are omitted from
 the key. Negated atoms introduce no bindings and do not turn a negative
 dependency into a positive recursive edge.
 
-\paragraph{Partial Rust is a separate obligation.}
-Final-valuation coverage does not prove equality of panics: a guard may
-panic on a prefix that a later empty atom prevents from producing any answer.
-For partial code the required claim remains successful-source refinement,
-with written chains and Before facts preserved for each generated call.
-A multi-round proof must establish that every reached guard prefix is safe
-whenever the reference evaluation succeeds. Neither the total fixpoint proof
-nor a delta-renaming check alone supplies that argument. Interior mutation
-through shared references is also not ruled out by borrowing; the existing
-extensionality premise is still needed.
+\paragraph{Rust across rounds.}
+Every generated variant uses the same unchanged Rust expressions with the
+same logical free-variable bindings. Purity and totality apply to every
+admissible prefix across all rounds, not just the written reference's reached
+rows. Finite-valuation coverage and the fixpoint argument therefore do not
+need a separate partial-expression ordering condition. Borrowing does not
+prove extensionality or totality; these remain host premises.
 The executable Source, Incremental and Round references described in
-Section~\ref{sec:datalog-languages} retain native Rust evaluation of these
-written-order prefixes. The independent CQ integer-fragment evaluator cannot
-interpret arbitrary opaque Rust or substitute for this panic-sensitive reference.
-Successful-reference refinement checks compare output sets and reject new target
-panics on each exercised instance; they do not prove the multi-round obligation
-for all inputs or all partial Rust expressions.
+Section~\ref{sec:datalog-languages} evaluate native Rust; a panic violates
+the contract. The independent CQ evaluator cannot interpret arbitrary Rust
+and does not substitute for native expression evaluation.
 
 \subsection{Ownership, comparison and remaining obligations}
 \begin{center}

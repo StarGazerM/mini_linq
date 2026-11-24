@@ -66,7 +66,7 @@ pub fn run(facts: Facts) -> Results {
     RegDefUseLiveVarAtPriorUsed(*eaUsed,*blockUsed,*mvar) :- RegDefUseLiveVarAtBlockEnd(blk,blockUsed,mvar), RegDefUseUsedInBlock(blk,eaUsed,mvar,_), !RegDefUseDefinedInBlock(blk,mvar);
     RegDefUseLiveVarAtBlockEnd(*prevBlock,*blk,*mvar) :- BlockNext(prevBlock,prevBlockEnd,blk), RegDefUseLiveVarUsed(blk,mvar,_,_), !RegDefUseFlowDef(prevBlockEnd,mvar,blk,_);
     RegDefUseLiveVarAtBlockEnd(*prevBlock,*blockUsed,*mvar) :- RegDefUseLiveVarAtBlockEnd(blk,blockUsed,mvar), !RegDefUseRefInBlock(blk,mvar), BlockNext(prevBlock,_,blk);
-    RegRegArithOpDefs(*ea,*regDef,*eaDef1,*reg1,*eaDef2,*reg2,*mult,*offset) :- DefUsedForAddress(ea,regDef,_), ArchRegRegArithOp(ea,regDef,reg1,reg2,mult,offset), if reg1 != reg2, RegDefUseDefUsed(eaDef1,reg1,ea,_), if ea != eaDef1, RegDefUseDefUsed(eaDef2,reg2,ea,_), if ea != eaDef2;
+    RegRegArithOpDefs(*ea,*regDef,*eaDef1,*reg1,*eaDef2,*reg2,*mult,*offset) :- DefUsedForAddress(ea,regDef,_), ArchRegRegArithOp(ea,regDef,reg1,reg2,mult,offset), where reg1 != reg2, RegDefUseDefUsed(eaDef1,reg1,ea,_), where ea != eaDef1, RegDefUseDefUsed(eaDef2,reg2,ea,_), where ea != eaDef2;
     DefUsedForAddress(*ea,*reg,meta.pc_relative) :- DefUsedForAddressEDB(ea,reg,meta.pc_relative);
     DefUsedForAddress(*eaDef,*reg,*mtype) :- RegDefUseDefUsed(eaDef,reg,ea,_), RegUsedFor(ea,reg,mtype);
     DefUsedForAddress(*eaDef,*reg,*mtype) :- DefUsedForAddress(eaUsed,_,mtype), RegDefUseDefUsed(eaDef,reg,eaUsed,_);

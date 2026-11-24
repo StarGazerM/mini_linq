@@ -4,15 +4,30 @@ use gpu_device_columns::{Buffer, Pool};
 use std::{cell::RefCell, fmt::Debug, ops::RangeInclusive, rc::Rc, sync::Arc};
 
 mod sealed {
-    pub trait Sealed {}
+    pub trait Sealed: 'static {}
     impl Sealed for u64 {}
     impl Sealed for u128 {}
     impl<const L: usize> Sealed for [u64; L] {}
 }
 
+/// Select the arena's native lane order from recorded scalar widths.
+pub struct WordWidth<const LANES: usize, const SCALAR: bool>;
+pub trait NativeWord {
+    type Word: Word;
+}
+impl NativeWord for WordWidth<1, true> {
+    type Word = u64;
+}
+impl NativeWord for WordWidth<2, true> {
+    type Word = u128;
+}
+impl<const LANES: usize> NativeWord for WordWidth<LANES, false> {
+    type Word = [u64; LANES];
+}
+
 /// An unsigned packed key. Array words store their most significant lane first.
 /// Lane access numbers lanes from the least significant end for all word types.
-pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy {
+pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy + Send + Sync {
     const BITS: u32;
     const MS_FIRST: bool;
     fn zero() -> Self;
@@ -27,8 +42,12 @@ pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy {
             lane -= 1;
             let left = self.lane(lane);
             let right = other.lane(lane);
-            if left < right { return std::cmp::Ordering::Less; }
-            if left > right { return std::cmp::Ordering::Greater; }
+            if left < right {
+                return std::cmp::Ordering::Less;
+            }
+            if left > right {
+                return std::cmp::Ordering::Greater;
+            }
         }
         std::cmp::Ordering::Equal
     }
@@ -37,13 +56,19 @@ pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy {
     fn from_u128(value: u128) -> Self {
         let mut word = Self::zero();
         word.set_lane(0, value as u64);
-        if Self::BITS > 64 { word.set_lane(1, (value >> 64) as u64); }
+        if Self::BITS > 64 {
+            word.set_lane(1, (value >> 64) as u64);
+        }
         word
     }
     /// Return the low 128 bits, truncating wider keys.
     fn to_u128(self) -> u128 {
         self.lane(0) as u128
-            | if Self::BITS > 64 { (self.lane(1) as u128) << 64 } else { 0 }
+            | if Self::BITS > 64 {
+                (self.lane(1) as u128) << 64
+            } else {
+                0
+            }
     }
     #[inline(always)]
     fn extract(&self, shift: u32, bits: u32) -> u64 {
@@ -69,20 +94,32 @@ pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy {
 impl Word for u64 {
     const BITS: u32 = 64;
     const MS_FIRST: bool = false;
-    fn zero() -> Self { 0 }
+    fn zero() -> Self {
+        0
+    }
     #[inline(always)]
-    fn lane(&self, _lane: u32) -> u64 { *self }
+    fn lane(&self, _lane: u32) -> u64 {
+        *self
+    }
     #[inline(always)]
-    fn set_lane(&mut self, _lane: u32, value: u64) { *self = value; }
+    fn set_lane(&mut self, _lane: u32, value: u64) {
+        *self = value;
+    }
 }
 
 impl Word for u128 {
     const BITS: u32 = 128;
     const MS_FIRST: bool = false;
-    fn zero() -> Self { 0 }
+    fn zero() -> Self {
+        0
+    }
     #[inline(always)]
     fn lane(&self, lane: u32) -> u64 {
-        if lane == 0 { *self as u64 } else { (*self >> 64) as u64 }
+        if lane == 0 {
+            *self as u64
+        } else {
+            (*self >> 64) as u64
+        }
     }
     #[inline(always)]
     fn set_lane(&mut self, lane: u32, value: u64) {
@@ -97,11 +134,17 @@ impl<const L: usize> Word for [u64; L] {
         L as u32 * 64
     };
     const MS_FIRST: bool = true;
-    fn zero() -> Self { [0; L] }
+    fn zero() -> Self {
+        [0; L]
+    }
     #[inline(always)]
-    fn lane(&self, lane: u32) -> u64 { self[L - 1 - lane as usize] }
+    fn lane(&self, lane: u32) -> u64 {
+        self[L - 1 - lane as usize]
+    }
     #[inline(always)]
-    fn set_lane(&mut self, lane: u32, value: u64) { self[L - 1 - lane as usize] = value; }
+    fn set_lane(&mut self, lane: u32, value: u64) {
+        self[L - 1 - lane as usize] = value;
+    }
 }
 
 /// A tuple column's logical integer domain, not its packed storage type.
@@ -133,14 +176,26 @@ impl Column {
 
     /// Flip the sign bit for signed columns, preserving numeric order.
     pub fn encode(self, value: i128) -> Result<u64> {
-        Ok(Field { bits: self.bits(), signed: self.is_signed(), shift: 0 }.encode(value)? as u64)
+        Ok(Field {
+            bits: self.bits(),
+            signed: self.is_signed(),
+            shift: 0,
+        }
+        .encode(value)? as u64)
     }
 
+    // DECODE ?: public sign-ordinal inverse has no enforced caller read boundary.
     pub fn decode(self, encoded: u64) -> Result<i128> {
         if encoded as u128 > mask(self.bits()) {
             return Err("encoded value exceeds column width".into());
         }
-        Ok(Field { bits: self.bits(), signed: self.is_signed(), shift: 0 }.decode(encoded as u128))
+        // DECODE ?: Field inverse delegation inherits the public Column caller boundary.
+        Ok(Field {
+            bits: self.bits(),
+            signed: self.is_signed(),
+            shift: 0,
+        }
+        .decode(encoded as u128))
     }
 }
 
@@ -153,7 +208,11 @@ struct Field {
 
 impl Field {
     fn encode(self, value: i128) -> Result<u128> {
-        let sign = if self.signed { 1_i128 << (self.bits - 1) } else { 0 };
+        let sign = if self.signed {
+            1_i128 << (self.bits - 1)
+        } else {
+            0
+        };
         let minimum = -sign;
         let maximum = mask(self.bits) as i128 - sign;
         if value < minimum || value > maximum {
@@ -163,6 +222,8 @@ impl Field {
         Ok(((value as u128) & mask(self.bits)) ^ sign as u128)
     }
 
+    // DECODE ?: field sign-ordinal inverse serves publication and diagnostic data generators.
+    #[inline]
     fn decode(self, encoded: u128) -> i128 {
         if self.signed {
             encoded as i128 - (1_i128 << (self.bits - 1))
@@ -172,8 +233,30 @@ impl Field {
     }
 }
 
+/// One downloaded key at the final-answer boundary. Fields are inverted on
+/// demand, in this packing's most-significant-first order, with no per-row
+/// allocation.
+#[derive(Clone, Copy)]
+pub struct PackedRow<'a, W> {
+    word: W,
+    fields: &'a [Field],
+}
+
+impl<W: Word> PackedRow<'_, W> {
+    // DECODE P: PackedRow inverts one field of a downloaded key for final host answer rows.
+    #[inline(always)]
+    pub fn field(&self, index: usize) -> i128 {
+        let field = self.fields[index];
+        field.decode(self.word.extract(field.shift, field.bits) as u128)
+    }
+}
+
 fn mask(bits: u32) -> u128 {
-    if bits == 128 { u128::MAX } else { (1_u128 << bits) - 1 }
+    if bits == 128 {
+        u128::MAX
+    } else {
+        (1_u128 << bits) - 1
+    }
 }
 
 /// Formal rule DL-DevicePacking:
@@ -195,7 +278,18 @@ impl Packing {
 
     /// Construct native-width columns, retaining their signed numeric domains.
     pub fn with_columns(columns: &[Column]) -> Result<Self> {
-        Self::build(columns.iter().map(|column| (column.bits(), column.is_signed())))
+        Self::build(
+            columns
+                .iter()
+                .map(|column| (column.bits(), column.is_signed())),
+        )
+    }
+
+    /// Construct recorded runtime fields as `(bits, signed)` pairs.
+    /// Widths remain generic (`1..=64`); GPU key layouts enforce their
+    /// narrower key policy separately, without restricting payload packing.
+    pub fn with_fields(fields: &[(u32, bool)]) -> Result<Self> {
+        Self::build(fields.iter().copied())
     }
 
     pub(crate) fn build(columns: impl Iterator<Item = (u32, bool)>) -> Result<Self> {
@@ -205,9 +299,15 @@ impl Packing {
             if !(1..=64).contains(&width) {
                 return Err("packing requires 1..=64-bit columns".into());
             }
-            bits = bits.checked_add(width).filter(|&bits| bits <= u32::MAX - 63)
+            bits = bits
+                .checked_add(width)
+                .filter(|&bits| bits <= u32::MAX - 63)
                 .ok_or("packing bit width exceeds metadata domain")?;
-            fields.push(Field { bits: width, signed, shift: bits });
+            fields.push(Field {
+                bits: width,
+                signed,
+                shift: bits,
+            });
         }
         for field in &mut fields {
             field.shift = bits - field.shift;
@@ -231,7 +331,9 @@ impl Packing {
     /// Device field descriptors in this packing's most-significant-first order.
     pub fn packed_fields(&self) -> impl ExactSizeIterator<Item = crate::layout::PackedField> + '_ {
         self.fields.iter().map(|field| crate::layout::PackedField {
-            bits: field.bits, shift: field.shift, signed: field.signed as u32,
+            bits: field.bits,
+            shift: field.shift,
+            signed: field.signed as u32,
         })
     }
 
@@ -263,6 +365,7 @@ impl Packing {
         Ok(packed)
     }
 
+    // DECODE P: datalog output printer and layout diagnostic download unpack host answer rows.
     pub fn unpack<W: Word>(&self, packed: W) -> Result<Vec<i128>> {
         self.check_word::<W>()?;
         for lane in self.bits / 64..W::BITS / 64 {
@@ -271,9 +374,31 @@ impl Packing {
                 return Err("packed key contains bits outside its schema".into());
             }
         }
-        Ok(self.fields.iter().map(|field| {
-            field.decode(packed.extract(field.shift, field.bits) as u128)
-        }).collect())
+        Ok(self
+            .fields
+            .iter()
+            .map(|field| {
+                // DECODE P: per-field ordinal inversion implements host answer unpacking.
+                field.decode(packed.extract(field.shift, field.bits) as u128)
+            })
+            .collect())
+    }
+
+    /// `packed` as a row of this schema; [`Self::stray_bits`] validates it.
+    #[inline(always)]
+    pub(crate) fn row<W: Word>(&self, packed: W) -> PackedRow<'_, W> {
+        PackedRow {
+            word: packed,
+            fields: &self.fields,
+        }
+    }
+
+    /// Whether `packed`, or the bitwise OR of several keys, has a bit set
+    /// outside this schema.
+    pub(crate) fn stray_bits<W: Word>(&self, packed: &W) -> bool {
+        (self.bits / 64..W::BITS / 64).any(|lane| {
+            packed.lane(lane) & !(mask(self.bits.saturating_sub(lane * 64)) as u64) != 0
+        })
     }
 
     /// Inclusive bounds avoid an unrepresentable successor of the maximum key.
@@ -330,13 +455,33 @@ impl Packing {
         input: &Buffer<W>,
         rows: usize,
         order: &[usize],
+        block_threads: u32,
     ) -> Result<Buffer<W>> {
+        self.permute_device_on(input.pool(), input, rows, order, block_threads)
+    }
+
+    /// [`Self::permute_device`] on `pool`'s stream, which must share the
+    /// input's memory and be ordered after the input's initialization.
+    pub fn permute_device_on<W: Word>(
+        &self,
+        pool: &Arc<Pool>,
+        input: &Buffer<W>,
+        rows: usize,
+        order: &[usize],
+        block_threads: u32,
+    ) -> Result<Buffer<W>> {
+        if block_threads != 256 {
+            return Err("permutation kernel requires exactly 256 threads per block".into());
+        }
         self.check_word::<W>()?;
         self.check_order(order)?;
         if rows > input.len() {
             return Err("permutation rows exceed input capacity".into());
         }
-        let pool = input.pool();
+        if !pool.shares_memory(input.pool()) {
+            return Err("permutation pool does not share the input's memory".into());
+        }
+        crate::stats::trace_step(pool, "permute", rows, std::mem::size_of::<W>());
         let output = unsafe { Buffer::uninitialized(pool.clone(), rows)? };
         if rows == 0 {
             return Ok(output);
@@ -352,7 +497,14 @@ impl Packing {
         }
         let descriptors = Buffer::from_host_async(pool.clone(), &descriptors[..order.len() * 3])?;
         let module = module(pool)?;
-        let launch = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+        let initial = module.prepare_permute::<W>(LaunchConfig1D::new(1, block_threads, 0))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            initial.function(),
+            rows.div_ceil(block_threads as usize),
+            block_threads,
+            0,
+        )?;
+        let launch = LaunchConfig1D::new(grid, block_threads, 0);
         module.permute::<W>(
             pool.stream(),
             &module.prepare_permute::<W>(launch)?,
@@ -412,7 +564,9 @@ mod packing_kernels {
                 packed.insert(destination_shift, width, field);
                 column += 1;
             }
-            unsafe { *output.add(row as usize) = packed; }
+            unsafe {
+                *output.add(row as usize) = packed;
+            }
             row += stride;
         }
     }
@@ -430,9 +584,14 @@ mod tests {
     }
 
     fn tuple(packing: &Packing, state: &mut u64) -> Vec<i128> {
-        packing.fields.iter().map(|field| {
-            field.decode(random(state) as u128 & mask(field.bits))
-        }).collect()
+        packing
+            .fields
+            .iter()
+            .map(|field| {
+                // DECODE I: diagnostic random codes become values then are repacked; this reorganization is avoidable.
+                field.decode(random(state) as u128 & mask(field.bits))
+            })
+            .collect()
     }
 
     fn properties<W: Word>(packing: &Packing, state: &mut u64) {
@@ -445,20 +604,33 @@ mod tests {
             }
             let a = packing.pack::<W>(&left).unwrap();
             let b = packing.pack::<W>(&right).unwrap();
+            // DECODE P: diagnostic left tuple unpack exposes the round-trip answer.
             assert_eq!(packing.unpack(a).unwrap(), left);
+            // DECODE P: diagnostic right tuple unpack exposes the round-trip answer.
             assert_eq!(packing.unpack(b).unwrap(), right);
             assert_eq!(a.cmp(&b), left.cmp(&right));
             assert_eq!(a == b, left == right);
             let range = packing.prefix_range::<W>(&left[..prefix_len]).unwrap();
             assert!(range.contains(&a));
-            assert_eq!(range.contains(&b), left[..prefix_len] == right[..prefix_len]);
+            assert_eq!(
+                range.contains(&b),
+                left[..prefix_len] == right[..prefix_len]
+            );
         }
     }
 
     #[test]
     fn random_signed_unsigned_order_injectivity_and_prefixes() {
-        let columns = [Column::U8, Column::I8, Column::U16, Column::I16,
-            Column::U32, Column::I32, Column::U64, Column::I64];
+        let columns = [
+            Column::U8,
+            Column::I8,
+            Column::U16,
+            Column::I16,
+            Column::U32,
+            Column::I32,
+            Column::U64,
+            Column::I64,
+        ];
         let mut state = 0x17e6_98a2_0cd5_b341;
         for column in columns {
             properties::<u64>(&Packing::with_columns(&[column]).unwrap(), &mut state);
@@ -487,20 +659,32 @@ mod tests {
             let sign = 1_i128 << (column.bits() - 1);
             for value in [-sign, -1, 0, sign - 1] {
                 let encoded = column.encode(value).unwrap();
-                assert_eq!(encoded as u128, value as u128 & mask(column.bits()) ^ sign as u128);
+                assert_eq!(
+                    encoded as u128,
+                    value as u128 & mask(column.bits()) ^ sign as u128
+                );
+                // DECODE P: diagnostic signed boundary inverse exposes the numeric answer.
                 assert_eq!(column.decode(encoded).unwrap(), value);
             }
             assert_eq!(column.encode(-sign).unwrap(), 0);
-            assert_eq!(column.encode(sign - 1).unwrap() as u128, mask(column.bits()));
+            assert_eq!(
+                column.encode(sign - 1).unwrap() as u128,
+                mask(column.bits())
+            );
             assert!(column.encode(-sign - 1).is_err());
             assert!(column.encode(sign).is_err());
         }
         for column in [Column::U8, Column::U16, Column::U32, Column::U64] {
             let maximum = mask(column.bits()) as i128;
-            assert_eq!(column.decode(column.encode(maximum).unwrap()).unwrap(), maximum);
+            // DECODE P: diagnostic unsigned maximum inverse exposes the round-trip answer.
+            assert_eq!(
+                column.decode(column.encode(maximum).unwrap()).unwrap(),
+                maximum
+            );
             assert!(column.encode(-1).is_err());
             assert!(column.encode(maximum + 1).is_err());
         }
+        // DECODE P: diagnostic over-width decode checks answer rejection.
         assert!(Column::U8.decode(256).is_err());
     }
 
@@ -510,22 +694,30 @@ mod tests {
         assert_eq!(packing.prefix_range::<u128>(&[]).unwrap(), 0..=u128::MAX);
         let maximum = [u64::MAX as i128, i64::MAX as i128];
         assert_eq!(packing.pack::<u128>(&maximum).unwrap(), u128::MAX);
-        assert_eq!(packing.prefix_range::<u128>(&maximum).unwrap(), u128::MAX..=u128::MAX);
+        assert_eq!(
+            packing.prefix_range::<u128>(&maximum).unwrap(),
+            u128::MAX..=u128::MAX
+        );
         let prefix = packing.prefix_range::<u128>(&maximum[..1]).unwrap();
         assert_eq!(*prefix.start(), (u64::MAX as u128) << 64);
         assert_eq!(*prefix.end(), u128::MAX);
         let empty = Packing::new(&[]).unwrap();
         assert_eq!(empty.pack::<u64>(&[]).unwrap(), 0);
+        // DECODE P: diagnostic empty tuple inverse exposes the zero-column answer.
         assert_eq!(empty.unpack(0_u128).unwrap(), Vec::<i128>::new());
         assert_eq!(empty.prefix_range::<u128>(&[]).unwrap(), 0..=0);
     }
 
     #[test]
     fn permutations_retain_domains_and_prefix_membership() {
-        let packing = Packing::with_columns(&[Column::I16, Column::U64, Column::I8, Column::U32]).unwrap();
+        let packing =
+            Packing::with_columns(&[Column::I16, Column::U64, Column::I8, Column::U32]).unwrap();
         let order = [2, 0, 3, 1];
         let permuted = packing.permute(&order).unwrap();
-        assert_eq!(permuted, Packing::with_columns(&[Column::I8, Column::I16, Column::U32, Column::U64]).unwrap());
+        assert_eq!(
+            permuted,
+            Packing::with_columns(&[Column::I8, Column::I16, Column::U32, Column::U64]).unwrap()
+        );
         assert_eq!(permuted.permute(&[1, 3, 0, 2]).unwrap(), packing);
         let mut state = 0xb104_9dc8_6a17_521e;
         properties::<u128>(&permuted, &mut state);
@@ -533,9 +725,13 @@ mod tests {
             let original = tuple(&packing, &mut state);
             let values: Vec<_> = order.iter().map(|&index| original[index]).collect();
             let key = permuted.pack::<u128>(&values).unwrap();
+            // DECODE P: diagnostic permutation inverse exposes reconstructed host fields.
             assert_eq!(permuted.unpack(key).unwrap(), values);
             for prefix in 0..=values.len() {
-                assert!(permuted.prefix_range::<u128>(&values[..prefix]).unwrap().contains(&key));
+                assert!(permuted
+                    .prefix_range::<u128>(&values[..prefix])
+                    .unwrap()
+                    .contains(&key));
             }
         }
     }
@@ -547,12 +743,14 @@ mod tests {
         }
         let wide = Packing::new(&[64, 64]).unwrap();
         assert!(wide.pack::<u64>(&[0, 0]).is_err());
+        // DECODE P: diagnostic undersized word decode checks schema rejection.
         assert!(wide.unpack(0_u64).is_err());
         assert!(wide.prefix_range::<u64>(&[]).is_err());
         let packing = Packing::with_columns(&[Column::I8, Column::U8]).unwrap();
         assert!(packing.pack::<u64>(&[128, 0]).is_err());
         assert!(packing.pack::<u64>(&[0, -1]).is_err());
         assert!(packing.pack::<u64>(&[0]).is_err());
+        // DECODE P: diagnostic stray packed bits check answer rejection.
         assert!(packing.unpack(1_u64 << 16).is_err());
         assert!(packing.prefix_range::<u64>(&[0, 0, 0]).is_err());
         assert!(packing.prefix_range::<u64>(&[128]).is_err());
@@ -564,7 +762,12 @@ mod tests {
     #[test]
     fn arbitrary_lane_packing_matches_native_words() {
         let mut state = 0xa5c7_1e29_0b83_d641;
-        for widths in [&[64][..], &[1, 63, 64], &[64, 17, 64, 47], &[7, 64, 64, 64, 57]] {
+        for widths in [
+            &[64][..],
+            &[1, 63, 64],
+            &[64, 17, 64, 47],
+            &[7, 64, 64, 64, 57],
+        ] {
             let packing = Packing::new(widths).unwrap();
             properties::<[u64; 4]>(&packing, &mut state);
             if packing.bits() <= 192 {
@@ -574,29 +777,51 @@ mod tests {
                 for _ in 0..128 {
                     let row = tuple(&packing, &mut state);
                     let native = packing.pack::<u128>(&row).unwrap();
-                    assert_eq!(packing.pack::<[u64; 3]>(&row).unwrap(),
-                        [0, (native >> 64) as u64, native as u64]);
-                    assert_eq!(packing.pack::<[u64; 4]>(&row).unwrap(),
-                        [0, 0, (native >> 64) as u64, native as u64]);
-                    assert_eq!(packing.pack::<[u64; 2]>(&row).unwrap(),
-                        [(native >> 64) as u64, native as u64]);
+                    assert_eq!(
+                        packing.pack::<[u64; 3]>(&row).unwrap(),
+                        [0, (native >> 64) as u64, native as u64]
+                    );
+                    assert_eq!(
+                        packing.pack::<[u64; 4]>(&row).unwrap(),
+                        [0, 0, (native >> 64) as u64, native as u64]
+                    );
+                    assert_eq!(
+                        packing.pack::<[u64; 2]>(&row).unwrap(),
+                        [(native >> 64) as u64, native as u64]
+                    );
                     if packing.bits() <= 64 {
-                        assert_eq!(packing.pack::<[u64; 1]>(&row).unwrap(),
-                            [packing.pack::<u64>(&row).unwrap()]);
+                        assert_eq!(
+                            packing.pack::<[u64; 1]>(&row).unwrap(),
+                            [packing.pack::<u64>(&row).unwrap()]
+                        );
                     }
                 }
             }
         }
-        let signed = Packing::with_columns(&[Column::I64, Column::U8, Column::I64,
-            Column::U64, Column::I16]).unwrap();
+        let signed = Packing::with_columns(&[
+            Column::I64,
+            Column::U8,
+            Column::I64,
+            Column::U64,
+            Column::I16,
+        ])
+        .unwrap();
         properties::<[u64; 4]>(&signed, &mut state);
         let full = Packing::new(&[64; 4]).unwrap();
         assert_eq!(full.word_bits(), 256);
-        assert_eq!(full.prefix_range::<[u64; 4]>(&[]).unwrap(), [0; 4]..=[u64::MAX; 4]);
-        assert_eq!(full.pack::<[u64; 4]>(&[u64::MAX as i128; 4]).unwrap(), [u64::MAX; 4]);
+        assert_eq!(
+            full.prefix_range::<[u64; 4]>(&[]).unwrap(),
+            [0; 4]..=[u64::MAX; 4]
+        );
+        assert_eq!(
+            full.pack::<[u64; 4]>(&[u64::MAX as i128; 4]).unwrap(),
+            [u64::MAX; 4]
+        );
         assert!(full.pack::<[u64; 3]>(&[0; 4]).is_err());
         let narrow = Packing::new(&[64, 1]).unwrap();
+        // DECODE P: diagnostic excess high lane checks narrow-layout decode rejection.
         assert!(narrow.unpack([1_u64, 0, 0]).is_err());
+        // DECODE P: diagnostic excess low lane checks narrow-layout decode rejection.
         assert!(narrow.unpack([0_u64, 2, 0]).is_err());
 
         // Neither column count nor array length has the former 128-bit cap.
@@ -604,6 +829,12 @@ mod tests {
         let order = (0..257).rev().collect::<Vec<_>>();
         assert_eq!(many.permute(&order).unwrap(), many);
         properties::<[u64; 5]>(&many, &mut state);
-        assert_eq!(Packing::new(&[64; 33]).unwrap().pack::<[u64; 33]>(&[7; 33]).unwrap(), [7; 33]);
+        assert_eq!(
+            Packing::new(&[64; 33])
+                .unwrap()
+                .pack::<[u64; 33]>(&[7; 33])
+                .unwrap(),
+            [7; 33]
+        );
     }
 }

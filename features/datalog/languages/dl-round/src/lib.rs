@@ -36,15 +36,17 @@ pub use storage::incremental;
 use storage::{record, text::Text};
 use syn::{Expr, Ident};
 mod correspondence;
-pub use correspondence::{check_storage, scan_source, use_layouts, use_scan};
+pub mod evidence;
+mod planning;
+pub use correspondence::check_storage;
 pub mod schedule;
 pub use schedule::Schedule;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {
     pub declaration: RelationDecl,
     pub providers: storage::Providers,
-    pub all: Ident,
-    pub seen: Ident,
+    /// Round-local NEW version of the canonical layout, with its provider type.
+    pub next_canonical: Ident,
     pub next: Ident,
     pub delta: Option<Ident>,
     pub delta_host: Option<Ident>,
@@ -59,8 +61,10 @@ pub struct Layout {
     pub key: usize,
     pub name: Ident,
     pub host: Ident,
-    pub provider: syn::Type,
+    pub provider: storage::Provider,
+    pub hasher: storage::Hasher,
     pub maintenance: Ident,
+    pub protocol: storage::LayoutProtocol,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,7 +74,9 @@ pub struct KeySet {
     pub filters: Vec<(usize, Expr)>,
     pub equalities: Vec<(usize, usize)>,
     pub name: Ident,
-    pub provider: syn::Type,
+    /// Copied from the matching Storage `Negative`, over inferred row `_`.
+    pub provider: storage::Provider,
+    pub hasher: storage::Hasher,
     pub hole: usize,
 }
 
@@ -94,7 +100,146 @@ pub struct RuleHole {
     pub head: usize,
     pub hole: usize,
     pub scan: Option<ScanBinding>,
-    pub insertion: Ident,
+    /// Where this producer discharges the committed anti-join `▷R` (ADM-InPlan).
+    pub known: Admission,
+    /// Per positive read of the variant, in variant order: whether the read can
+    /// multiply rows (DL-Fanout). FK-Known's default consumes it.
+    pub fanout: Vec<Fanout>,
+}
+
+/// `filter`: the read introduces no variable (a membership test) or binds a
+/// recorded key of its relation, so it keeps or drops each incoming row.
+/// `multiply`: it introduces a variable (a wildcard is an enumerated fresh
+/// witness) through no bound recorded key, so one row may extend to many.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fanout {
+    Filter,
+    Multiply,
+}
+impl Text for Fanout {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "filter" => Ok(Self::Filter),
+            "multiply" => Ok(Self::Multiply),
+            _ => Err(syn::Error::new_spanned(name, "expected filter or multiply")),
+        }
+    }
+    fn text(&self) -> TokenStream {
+        match self {
+            Self::Filter => quote!(filter),
+            Self::Multiply => quote!(multiply),
+        }
+    }
+}
+
+/// Names bound by one body item, in the order the item binds them.
+fn item_bindings(item: &BodyItem, bound: &BTreeSet<String>) -> Vec<String> {
+    match item {
+        BodyItem::Positive { atom } => atom.variables().map(symbol_name).collect(),
+        BodyItem::Let(binding) => rust::bindings(&binding.pattern)
+            .iter()
+            .map(symbol_name)
+            .collect(),
+        BodyItem::For(binding) => rust::bindings(&binding.pattern)
+            .iter()
+            .map(symbol_name)
+            .collect(),
+        BodyItem::Block(block) => block.analyze(bound).interface.into_keys().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The level (count of positive reads, in written order) at which the rule's
+/// last head variable binds, and its positive read count. A computed head term
+/// binds once its free body variables have; `let`/`for`/block bindings bind at
+/// the current level.
+pub fn head_level(query: &cq::Query) -> (usize, usize) {
+    let mut level = std::collections::BTreeMap::new();
+    let mut bound = BTreeSet::new();
+    let mut reads = 0;
+    for item in &query.body {
+        if matches!(item, BodyItem::Positive { .. }) {
+            reads += 1;
+        }
+        for name in item_bindings(item, &bound) {
+            bound.insert(name.clone());
+            level.entry(name).or_insert(reads);
+        }
+    }
+    let last = query
+        .head
+        .args
+        .iter()
+        .flat_map(|argument| match rust::variable(argument) {
+            Some(variable) => std::iter::once(symbol_name(variable)).collect(),
+            None => rust::free_variables(argument).dependencies(&bound),
+        })
+        .filter_map(|name| level.get(&name).copied())
+        .max()
+        .unwrap_or(0);
+    (last, reads)
+}
+
+/// Formal rule DL-Fanout: classify each positive read of a variant query, in
+/// written order. `keys(R)` are R's recorded keys as column positions; a key
+/// is bound when each of its arguments is a bound variable or a closed term.
+pub fn fanout(query: &cq::Query, keys: &dyn Fn(&Ident) -> Vec<Vec<usize>>) -> Vec<Fanout> {
+    let mut bound = BTreeSet::new();
+    let mut reads = Vec::new();
+    for item in &query.body {
+        if let BodyItem::Positive { atom } = item {
+            let given = |argument: &Expr| match argument {
+                Expr::Infer(_) => false,
+                _ => rust::variable(argument).is_none_or(|v| bound.contains(&symbol_name(v))),
+            };
+            let introduces = !atom.args.iter().all(given);
+            let keyed = keys(&atom.relation)
+                .iter()
+                .any(|key| key.iter().all(|&column| given(&atom.args[column])));
+            reads.push(if introduces && !keyed {
+                Fanout::Multiply
+            } else {
+                Fanout::Filter
+            });
+        }
+        let names = item_bindings(item, &bound);
+        bound.extend(names);
+    }
+    reads
+}
+
+/// Whether a read after the written head-binding level `last` (at least the
+/// first read) is recorded `multiply`: the premise of FK-Known's default.
+pub fn fanout_follows(fanout: &[Fanout], last: usize) -> bool {
+    fanout
+        .get(last.max(1)..)
+        .is_some_and(|after| after.contains(&Fanout::Multiply))
+}
+
+/// `admit`: admission probes the committed canonical layout. `in_plan`: the
+/// hole's CQ ends with `!C(x̄)` over the head's committed canonical layout, so
+/// admission keeps only the round-local NEW insert-if-absent (DL-AdmitOnce).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    Admit,
+    InPlan,
+}
+impl Text for Admission {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "admit" => Ok(Self::Admit),
+            "in_plan" => Ok(Self::InPlan),
+            _ => Err(syn::Error::new_spanned(name, "expected admit or in_plan")),
+        }
+    }
+    fn text(&self) -> TokenStream {
+        match self {
+            Self::Admit => quote!(admit),
+            Self::InPlan => quote!(in_plan),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,6 +300,63 @@ pub struct Program {
     /// Recorded evaluation schedule; checked by WF-DL-Schedule, changes no value.
     pub schedule: Schedule,
 }
+/// CQ planning facts in original positive-occurrence numbering. Normalization
+/// only translates these identities to CQ clause selectors; it chooses nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Planning {
+    pub order: Vec<usize>,
+    pub authored: bool,
+    pub steps: Vec<PlanningStep>,
+    pub smallest: Vec<Vec<usize>>,
+    /// Explicit `Known::At` level pin only; automatic admission follows CQ readiness.
+    pub known: Option<usize>,
+    /// Ordering inputs handed to the hole's planning invocation as `ordering(...)`
+    /// (DL-PlanningOwner): Incremental delta occurrence (none for a seed), driver,
+    /// complete source-body permutation and optional stratum index demand.
+    pub delta: Option<usize>,
+    pub driver: incremental::DriverPolicy,
+    pub permutation: Vec<usize>,
+    pub shared_demand: Option<Vec<SharedDemand>>,
+}
+/// A per-stratum index demand `Relation(column, ...)`, recorded only; it ranks nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedDemand {
+    pub relation: Ident,
+    pub columns: Vec<usize>,
+}
+impl syn::parse::Parse for SharedDemand {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let relation = input.parse()?;
+        let columns;
+        syn::parenthesized!(columns in input);
+        let columns = columns
+            .parse_terminated(<syn::LitInt as syn::parse::Parse>::parse, syn::Token![,])?
+            .iter()
+            .map(syn::LitInt::base10_parse)
+            .collect::<syn::Result<_>>()?;
+        Ok(Self { relation, columns })
+    }
+}
+impl ToTokens for SharedDemand {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let relation = &self.relation;
+        let columns = self.columns.iter().copied().map(syn::Index::from);
+        tokens.extend(quote!(#relation(#(#columns),*)));
+    }
+}
+impl Text for SharedDemand {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse()
+    }
+    fn text(&self) -> TokenStream {
+        self.to_token_stream()
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanningStep {
+    pub occurrence: usize,
+    pub columns: Option<Vec<Ident>>,
+}
 #[derive(Clone, Debug)]
 pub struct Hole {
     pub cq: CqProgram,
@@ -163,6 +365,13 @@ pub struct Hole {
     pub facts: cq_stage::Context,
     /// Invocation that introduces this hole's facts through lower arguments.
     pub lower: usize,
+    /// Planning invocation owned by this hole; independent of pass spelling.
+    pub plan: Option<usize>,
+    pub planning: Option<Planning>,
+    /// Invocation owning the complete device input binding packet.
+    pub binding: Option<usize>,
+    /// How each answer column reaches the round printer (DL-AnswerOwnership).
+    pub answer: Vec<AnswerColumn>,
 }
 impl PartialEq for Hole {
     fn eq(&self, other: &Self) -> bool {
@@ -170,21 +379,124 @@ impl PartialEq for Hole {
             && self.interface == other.interface
             && self.facts == other.facts
             && self.lower == other.lower
+            && self.plan == other.plan
+            && self.planning == other.planning
+            && self.binding == other.binding
+            && self.answer == other.answer
             && self.pipeline.to_token_stream().to_string()
                 == other.pipeline.to_token_stream().to_string()
     }
 }
 impl Eq for Hole {}
 impl Hole {
-    /// Rename a certified scan input and its exact lowering argument packet.
-    pub fn rename_host_fact(&mut self, old: &Ident, new: &Ident) {
-        if self.facts.discharged_host_sets.remove(&symbol_name(old)) {
-            self.facts.discharged_host_sets.insert(symbol_name(new));
-            if let Some(lower) = self.pipeline.passes.get_mut(self.lower) {
-                lower.arguments = self.facts.to_token_stream();
+    /// Rename relational evidence after a checked scan-input substitution.
+    pub fn rename_host_evidence(&mut self, old: &Ident, new: &Ident) {
+        if let Some(evidence) = &mut self.cq.declared_evidence {
+            evidence.rename_relation(old, new);
+        }
+    }
+}
+
+/// Representation of one hole answer column at the host round boundary.
+/// A head variable defined by a positive atom is the stored column itself,
+/// which a host CQ terminal yields as `&T`; any other head term is a value the
+/// hole computes. Batch holes write values into their arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnswerColumn {
+    Borrowed,
+    Owned,
+}
+impl syn::parse::Parse for AnswerColumn {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "borrowed" => Ok(Self::Borrowed),
+            "owned" => Ok(Self::Owned),
+            _ => Err(syn::Error::new_spanned(name, "expected borrowed or owned")),
+        }
+    }
+}
+impl ToTokens for AnswerColumn {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::Borrowed => quote!(borrowed),
+            Self::Owned => quote!(owned),
+        });
+    }
+}
+impl Text for AnswerColumn {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse()
+    }
+    fn text(&self) -> TokenStream {
+        self.to_token_stream()
+    }
+}
+
+/// Head columns for which a borrow exists: on a host interface, a head
+/// variable whose defining binder is a positive atom occurrence of the body.
+/// CQ well-formedness forbids rebinding (IF-Environment), so a variable's first
+/// top-level binder in written order defines it; later atoms that mention it
+/// only join, and a generator- or `let`-defined value has no stored column.
+/// Batch holes write values, so none of their columns is borrowable.
+pub fn borrowable_columns(cq: &CqProgram, interface: HoleInterface) -> Vec<bool> {
+    let mut defined = BTreeSet::new();
+    let mut stored = BTreeSet::new();
+    for item in &cq.query.body {
+        let (names, from_atom): (Vec<String>, bool) = match item {
+            BodyItem::Positive { atom } => (atom.variables().map(symbol_name).collect(), true),
+            BodyItem::Let(binding) => (
+                rust::bindings(&binding.pattern)
+                    .iter()
+                    .map(symbol_name)
+                    .collect(),
+                false,
+            ),
+            BodyItem::For(binding) => (
+                rust::bindings(&binding.pattern)
+                    .iter()
+                    .map(symbol_name)
+                    .collect(),
+                false,
+            ),
+            BodyItem::Block(block) => (
+                block.analyze(&defined).interface.into_keys().collect(),
+                false,
+            ),
+            _ => continue,
+        };
+        for name in names {
+            if defined.insert(name.clone()) && from_atom {
+                stored.insert(name);
             }
         }
     }
+    cq.query
+        .head
+        .args
+        .iter()
+        .map(|argument| {
+            interface != HoleInterface::Batch
+                && rust::variable(argument).is_some_and(|v| stored.contains(&symbol_name(v)))
+        })
+        .collect()
+}
+
+/// Formal rule DL-AnswerOwnership: fork records each answer column's
+/// representation from the hole's CQ syntax and interface, never from Rust
+/// types: `borrowed` exactly where a borrow exists ([`borrowable_columns`]),
+/// `owned` elsewhere. The checker admits any sound record (WF-DL-Hole).
+pub fn answer_ownership(cq: &CqProgram, interface: HoleInterface) -> Vec<AnswerColumn> {
+    borrowable_columns(cq, interface)
+        .into_iter()
+        .map(|borrowable| {
+            if borrowable {
+                AnswerColumn::Borrowed
+            } else {
+                AnswerColumn::Owned
+            }
+        })
+        .collect()
 }
 
 /// The calling convention of an embedded CQ result.
@@ -335,6 +647,9 @@ pub struct Execution {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoundPolicy {
+    /// Formal rule DL-Timing: `phases` materializes candidates before admission
+    /// so evaluation and admission have separate clocks; `none` streams them.
+    /// This is a property of the timing variant, not a printer optimization.
     pub timing: Ident,
 }
 record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, terminals: TerminalRegistry, execution: Vec<Execution>, policy: RoundPolicy, schedule: Schedule });
@@ -343,8 +658,14 @@ record!(Hole {
     pipeline: cq_stage::Pipeline,
     interface: HoleInterface,
     facts: cq_stage::Context,
-    lower: usize
+    lower: usize,
+    plan: Option<usize>,
+    planning: Option<Planning>,
+    binding: Option<usize>,
+    answer: Vec<AnswerColumn>
 });
+record!(Planning { order: Vec<usize>, authored: bool, steps: Vec<PlanningStep>, smallest: Vec<Vec<usize>>, known: Option<usize>, delta: Option<usize>, driver: incremental::DriverPolicy, permutation: Vec<usize>, shared_demand: Option<Vec<SharedDemand>> });
+record!(PlanningStep { occurrence: usize, columns: Option<Vec<Ident>> });
 record!(Execution {
     hole: usize,
     occurrence: usize,
@@ -353,14 +674,14 @@ record!(Execution {
     self_dedup: Option<Ident>
 });
 record!(RoundPolicy { timing: Ident });
-record!(Relation { declaration: RelationDecl, providers: storage::Providers, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
-record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident });
-record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, equalities: Vec<(usize, usize)>, name: Ident, provider: syn::Type, hole: usize });
+record!(Relation { declaration: RelationDecl, providers: storage::Providers, next_canonical: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
+record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: storage::Provider, hasher: storage::Hasher, maintenance: Ident, protocol: storage::LayoutProtocol });
+record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, equalities: Vec<(usize, usize)>, name: Ident, provider: storage::Provider, hasher: storage::Hasher, hole: usize });
 record!(ScanBinding {
     source: InputSource,
     binding: Ident
 });
-record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, insertion: Ident });
+record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, known: Admission, fanout: Vec<Fanout> });
 record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, seeds: Vec<RuleHole>, steps: Vec<RuleHole>, phases: Vec<Ident>, publication: Vec<Publication>, termination: Vec<usize>, termination_test: Ident, observer: Ident, key_scope: Ident, loop_form: Ident });
 record!(Publication { relation: usize, operations: Vec<PublicationOp> });
 record!(PublicationOp { kind: Ident, layouts: Vec<usize> });
@@ -398,6 +719,11 @@ impl Text for InputSource {
 /// sole owner. Neither certificate permits arbitrary CQ or context edits.
 pub fn erase(program: &Program) -> syn::Result<Program> {
     let mut erased = program.clone();
+    // Names are reserved only against new execution bindings; without a
+    // certificate there is nothing to erase and nothing to compare them with.
+    if program.execution.is_empty() {
+        return Ok(erased);
+    }
     let mut used = BTreeSet::new();
     let mut names = BTreeSet::new();
     collect_names(program.storage.to_token_stream(), &mut names);
@@ -421,6 +747,9 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
                     .is_some_and(|h| h.cq.name == cq.name)
                 {
                     if let Some(scan) = &rule.scan {
+                        if let Some(evidence) = &mut cq.declared_evidence {
+                            evidence.rename_relation(&entry.binding, &scan.binding);
+                        }
                         for declaration in &mut cq.declarations {
                             if declaration.name == entry.binding {
                                 declaration.name = scan.binding.clone();
@@ -520,32 +849,45 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
             "execution certificate does not name its occurrence",
         )?;
         atom.relation = scan.binding.clone();
-        hole.rename_host_fact(&entry.binding, &scan.binding);
+        hole.rename_host_evidence(&entry.binding, &scan.binding);
     }
     erased.execution.clear();
     Ok(erased)
 }
-/// Formal rule WF-DL-Hole: the terminal assertion matches the hole interface.
+/// Formal rule WF-DL-Hole: the terminal assertion matches the hole interface,
+/// and the recorded answer ownership is sound: one record per head column,
+/// `borrowed` only where a borrow exists ([`borrowable_columns`]); `owned`
+/// (a clone) is always admitted.
 pub fn check_pipeline(hole: &Hole, terminals: &TerminalRegistry) -> syn::Result<()> {
     ensure(
         terminals.interface(&hole.pipeline)? == hole.interface,
         hole,
         "hole interface does not match its registered terminal interface",
     )?;
-    let reads: BTreeSet<_> = hole
-        .cq
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            BodyItem::Positive { atom } => Some(symbol_name(&atom.relation)),
-            _ => None,
-        })
-        .collect();
+    let borrowable = borrowable_columns(&hole.cq, hole.interface);
     ensure(
-        hole.facts.discharged_host_sets.is_subset(&reads),
+        hole.answer.len() == borrowable.len()
+            && hole
+                .answer
+                .iter()
+                .zip(&borrowable)
+                .all(|(column, &borrowable)| *column == AnswerColumn::Owned || borrowable),
         hole,
-        "discharged fact names must be actual positive hole inputs",
+        "hole answer ownership claims a borrow where no positive atom defines the column on a host interface",
+    )?;
+    ensure(
+        hole.plan
+            .is_none_or(|plan| plan < hole.lower && plan < hole.pipeline.passes.len()),
+        hole,
+        "hole planning invocation must precede lowering",
+    )?;
+    hole.invocation_pipeline()?;
+    ensure(
+        hole.binding.is_none_or(|binding| {
+            binding > hole.lower && binding < hole.pipeline.passes.len().saturating_sub(1)
+        }),
+        hole,
+        "hole binding invocation must follow lowering and precede the terminal",
     )?;
     let lower = hole
         .pipeline
@@ -588,13 +930,6 @@ fn check_execution(program: &Program) -> syn::Result<()> {
             program,
             "round requires evaluate/admit/publish, before-step observation, and component-local keys",
         )?;
-        for rule in stratum.seeds.iter().chain(&stratum.steps) {
-            ensure(
-                rule.insertion == "insert",
-                program,
-                "admission requires the provider's set insertion operation",
-            )?;
-        }
         let members: BTreeSet<_> = stratum.members.iter().copied().collect();
         let termination: BTreeSet<_> = stratum.termination.iter().copied().collect();
         ensure(
@@ -626,7 +961,6 @@ fn check_execution(program: &Program) -> syn::Result<()> {
                 .collect();
             let mut updated = BTreeSet::new();
             let mut rebuilt = BTreeSet::new();
-            let mut extended = false;
             let mut swapped = false;
             for operation in &publication.operations {
                 match symbol_name(&operation.kind).as_str() {
@@ -644,19 +978,11 @@ fn check_execution(program: &Program) -> syn::Result<()> {
                             )?;
                         }
                     }
-                    "all_extend" => {
-                        ensure(
-                            !extended && !swapped && operation.layouts.is_empty(),
-                            program,
-                            "all extension must occur once before delta replacement",
-                        )?;
-                        extended = true;
-                    }
                     "delta_swap" => {
                         ensure(
-                            extended && !swapped && updated == full && operation.layouts.is_empty(),
+                            !swapped && updated == full && operation.layouts.is_empty(),
                             program,
-                            "delta replacement requires complete full-layout maintenance and all extension",
+                            "delta replacement requires complete full-layout maintenance",
                         )?;
                         swapped = true;
                     }
@@ -683,9 +1009,9 @@ fn check_execution(program: &Program) -> syn::Result<()> {
                 }
             }
             ensure(
-                extended && swapped && updated == full && rebuilt == delta,
+                swapped && updated == full && rebuilt == delta,
                 program,
-                "publication must extend all, replace delta, and maintain every layout including empty runs",
+                "publication must maintain every layout, including the canonical one, and replace delta",
             )?;
         }
         ensure(
@@ -698,14 +1024,67 @@ fn check_execution(program: &Program) -> syn::Result<()> {
         let relation = context.relations.get(output.relation).ok_or_else(|| {
             syn::Error::new_spanned(output, "output must reference a declared relation")
         })?;
+        // Moving a canonical grouped map or set yields its owned all-column
+        // keys; bulk providers expose borrowed rows, which are cloned once.
+        let canonical = context.layouts.get(relation.providers.canonical);
         ensure(
-            if relation.declaration.value.is_some() {
-                output.conversion == "borrowed_cloned_into_iter"
-            } else {
-                output.conversion == "owned_into_iter"
-            },
+            canonical.is_some_and(|layout| {
+                if layout.protocol == storage::LayoutProtocol::Bulk {
+                    output.conversion == "borrowed_cloned_into_iter"
+                } else {
+                    output.conversion == "owned_into_iter"
+                }
+            }),
             output,
-            "output conversion must preserve ownership and return owned rows",
+            "output conversion must match its canonical layout and return owned rows",
+        )?;
+    }
+    Ok(())
+}
+/// Formal rule DL-AdmitOnce: every producer of `R` discharges `▷R` exactly once.
+/// An `in_plan` rule hole reads `R`'s committed canonical layout negatively
+/// exactly once, as its last clause (so admission omits the committed probe);
+/// an `admit` hole never reads it negatively (admission keeps the probe). Both
+/// remain admission-owned by `R`, whose round-local NEW insert-if-absent (the
+/// residual δ) runs in the `admit` phase for every candidate.
+fn check_admit_once(program: &Program) -> syn::Result<()> {
+    let context = &program.context;
+    for rule in context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+    {
+        let relation = context
+            .relations
+            .get(rule.head)
+            .ok_or_else(|| syn::Error::new_spanned(rule, "rule hole names no head relation"))?;
+        let canonical = context
+            .layouts
+            .get(relation.providers.canonical)
+            .ok_or_else(|| syn::Error::new_spanned(relation, "missing canonical layout"))?;
+        let hole = program
+            .holes
+            .get(rule.hole)
+            .ok_or_else(|| syn::Error::new_spanned(rule, "rule hole is missing"))?;
+        let body = &hole.cq.query.body;
+        let reads = body
+            .iter()
+            .filter(|item| {
+                matches!(item, BodyItem::Negation(negative) if negative.atom.relation == canonical.name)
+            })
+            .count();
+        let last = matches!(
+            body.iter().last(),
+            Some(BodyItem::Negation(negative)) if negative.atom.relation == canonical.name
+        );
+        ensure(
+            relation.admit.contains(&rule.hole)
+                && match rule.known {
+                    Admission::InPlan => reads == 1 && last,
+                    Admission::Admit => reads == 0,
+                },
+            rule,
+            "every producer must discharge the committed anti-join exactly once, in its plan or at admission",
         )?;
     }
     Ok(())
@@ -713,13 +1092,6 @@ fn check_execution(program: &Program) -> syn::Result<()> {
 /// Formal rule DL-Admit-Owner: every candidate has exactly one matching set consumer.
 fn check_facts(program: &Program) -> syn::Result<()> {
     let context = &program.context;
-    let certified = |kind: &str, index: usize| {
-        program
-            .storage
-            .certificates
-            .iter()
-            .any(|c| c.kind == kind && c.index == index)
-    };
     let mut owners = vec![0usize; program.holes.len()];
     for (index, relation) in context.relations.iter().enumerate() {
         let expected: BTreeSet<_> = context
@@ -754,48 +1126,6 @@ fn check_facts(program: &Program) -> syn::Result<()> {
             hole,
             "consumer canonical requires exactly one matching admission or key-set owner",
         )?;
-        let mut expected = BTreeSet::new();
-        for item in &hole.cq.query.body {
-            let BodyItem::Positive { atom } = item else {
-                continue;
-            };
-            let name = &atom.relation;
-            let relation_host = context.relations.iter().enumerate().any(|(i, r)| {
-                (&r.declaration.name == name && certified("all", i))
-                    || (r.delta.as_ref() == Some(name) && certified("delta", i))
-            });
-            let layout_host = context
-                .layouts
-                .iter()
-                .enumerate()
-                .any(|(i, l)| &l.name == name && certified("layout", i))
-                || context
-                    .delta_layouts
-                    .iter()
-                    .enumerate()
-                    .any(|(i, l)| &l.name == name && certified("delta_layout", i));
-            let scan_host = context
-                .strata
-                .iter()
-                .flat_map(|s| s.seeds.iter().chain(&s.steps))
-                .filter(|rule| rule.hole == index)
-                .filter_map(|rule| rule.scan.as_ref())
-                .any(|scan| {
-                    &scan.binding == name
-                        && match scan.source {
-                            InputSource::Delta(i) => certified("delta", i),
-                            InputSource::Layout(i) => certified("layout", i),
-                        }
-                });
-            if relation_host || layout_host || scan_host {
-                expected.insert(symbol_name(name));
-            }
-        }
-        ensure(
-            hole.facts.discharged_host_sets == expected,
-            hole,
-            "discharged inputs must exactly name the certified hosts actually read",
-        )?;
     }
     Ok(())
 }
@@ -823,8 +1153,10 @@ pub mod contract {
         let erased = erase(program)?;
         correspondence::check_storage_with_analysis(&program.storage, &erased, &analysis)?;
         check_facts(&erased)?;
+        check_admit_once(&erased)?;
         check_execution(program)?;
         schedule::check(program, &analysis)?;
+        evidence::check_iteration_scope(program)?;
         Ok(Analysis { storage: analysis })
     }
 }
@@ -854,26 +1186,20 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         before.observer = after.observer.clone();
         before.key_scope = after.key_scope.clone();
         before.loop_form = after.loop_form.clone();
-        for (before, after) in before
-            .seeds
-            .iter_mut()
-            .chain(&mut before.steps)
-            .zip(after.seeds.iter().chain(&after.steps))
-        {
-            before.insertion = after.insertion.clone();
-        }
-        for (before, after) in before.keys.iter_mut().zip(&after.keys) {
-            before.provider = after.provider.clone();
-        }
     }
     source.context.outputs = erased.context.outputs.clone();
     source.policy.timing = erased.policy.timing.clone();
     // The schedule records only admissible evaluation order (CK-DL-Schedule).
     source.schedule = erased.schedule.clone();
     for (before, after) in source.holes.iter_mut().zip(&erased.holes) {
+        // Planning facts stay fixed even when invocation ordinals move.
         before.pipeline = after.pipeline.clone();
         before.lower = after.lower;
+        before.plan = after.plan;
+        before.binding = after.binding;
         before.interface = after.interface;
+        // Answer ownership follows the interface and is rechecked by WF-DL-Hole.
+        before.answer = after.answer.clone();
     }
     ensure(
         source == erased,

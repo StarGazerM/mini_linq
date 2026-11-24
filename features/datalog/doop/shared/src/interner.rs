@@ -1,5 +1,19 @@
+//! DESIGN contract8-doop-interner
+//! Owns process-global Mutex first-sight codes; IStr Ord is code order, not string order (contract 8 §10).
+//! Sources: doc/STORAGE.md §10; Data Blocks §3.3 (local dictionaries require cross-domain translation).
+//! DO NOT parallelize assignment as a codec-local tweak: stable/dense codes govern joins, routing and merges.
+//! DO NOT claim lexical order or deterministic first-sight codes under concurrent interning.
+//! Publication-point assignment/remapping is a measured direction for Plan P4, not today's implementation.
+//! Query constant lookup must not be confused with inserting symbols at invocation preparation.
+
 use ahash::AHashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{
+    Arc, LazyLock, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
+
+/// Number of interned symbols, for code validation without the dictionary lock.
+static INTERNED: AtomicUsize = AtomicUsize::new(0);
 
 /// Process-global string identity, shared by both engines and all input columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -14,11 +28,26 @@ impl IStr {
     /// Restores a code from this process's dictionary.
     ///
     /// Panics if the code has never been interned.
+    // Code restoration retains IStr's identity representation; it does not resolve dictionary strings.
+    #[inline]
     pub fn from_code(code: u32) -> Self {
-        let exists = (code as usize)
-            < interner().lock().expect("string interner poisoned").strings.len();
-        assert!(exists, "symbol code {code} has never been interned");
+        assert!(
+            (code as usize) < INTERNED.load(Ordering::Acquire),
+            "symbol code {code} has never been interned"
+        );
         Self(code)
+    }
+}
+
+/// IStr's Ord is code order, so its code is a total injective
+/// order-preserving ordinal: one-column key sets record dense membership
+/// (STR-AdaptiveMembership), whose bitmap is indexed by this code.
+impl cq_storage::OrderKey for IStr {
+    type Ordinal = u64;
+
+    #[inline]
+    fn ordinal(&self) -> u64 {
+        u64::from(self.0)
     }
 }
 
@@ -42,10 +71,12 @@ pub fn sym(value: &str) -> IStr {
     // One allocation per distinct string, shared by both lookup directions.
     let value: Arc<str> = Arc::from(value);
     interner.strings.push(Arc::clone(&value));
+    INTERNED.store(interner.strings.len(), Ordering::Release);
     interner.ids.insert(value, id);
     id
 }
 
+// DECODE ?: res resolves dictionary strings for opaque descriptor computations and diagnostics; generic callers have no single boundary.
 pub fn res(value: IStr) -> Arc<str> {
     Arc::clone(&interner().lock().expect("string interner poisoned").strings[value.0 as usize])
 }
@@ -59,7 +90,9 @@ mod tests {
         let id = sym("void");
         assert_eq!(id, sym("void"));
         assert_ne!(id, sym("int"));
+        // DECODE P: global_identity_and_cat exposes the resolved symbol only to its diagnostic string assertion.
         assert_eq!(&*res(id), "void");
+        // DECODE R: this diagnostic format! reads resolved text to compute a new descriptor, not to reorganize unchanged codes.
         assert_eq!(sym(&format!("{}({})", res(id), "int")), sym("void(int)"));
         assert_eq!(IStr::from_code(id.code()), id);
     }
@@ -67,6 +100,7 @@ mod tests {
     #[test]
     fn unknown_code_does_not_poison_interner() {
         assert!(std::panic::catch_unwind(|| IStr::from_code(u32::MAX)).is_err());
+        // DECODE P: unknown_code_does_not_poison_interner publishes resolved text to its recovery assertion.
         assert_eq!(&*res(sym("still usable")), "still usable");
     }
 }

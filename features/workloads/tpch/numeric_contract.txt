@@ -15,15 +15,14 @@ numeric documentation explicitly states that fixed-point division uses
 approximate floating arithmetic; it does not return an exact decimal:
 https://duckdb.org/docs/current/sql/data_types/numeric#arithmetic-and-internal-representation
 
-The current distinct state requires Eq + Hash on output tuples
-(runtime/cq-storage/src/counters.rs, DistinctSet); f64 satisfies neither.
+Whole-stream canonicalization sorts output tuples and requires Ord
+(runtime/cq-storage/src/dedup.rs); f64 does not implement Ord.
 A minimal authored CQ with `let ratio: f64 = f64::from(*value) / 7.0` and
-head `rows(ratio)` fails generated Rust compilation with E0277 on Eq and Hash.
-The same bound exists on the ordinary hash distinct provider. This is a
-current output representation limitation, not a claim that Rust division,
-prefix LIKE, or compositional AVG is unavailable. A custom SQL-compatible
-floating answer provider/type could address representation, but would not
-turn canonical floating division into the required exact-decimal aggregate.
+head `rows(ratio)` therefore does not satisfy the generated call's trait
+bounds. This is an output representation limitation, not a claim that Rust
+division, prefix LIKE, or compositional AVG is unavailable. An authored
+SQL-compatible floating answer type could address representation, but would
+not turn floating division into the required exact-decimal aggregate.
 Converting the result to a chosen decimal precision would change the query.
 These two queries are therefore explicitly excluded under the current
 output interface and this benchmark's strict decimal correctness contract.

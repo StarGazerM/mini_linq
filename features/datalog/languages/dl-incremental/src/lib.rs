@@ -3,9 +3,9 @@
 //! Each variant selects one changing positive occurrence; every such occurrence
 //! is covered at least once. Repeated variants are admissible for set relations.
 //! Only `seminaive_covering` is supported; no naive or exact scheme is implied.
-//! An occurrence-order certificate may permute the first contiguous positive
-//! prefix. Delta positions always refer to source order; erasure restores that
-//! order before comparison and never crosses a Rust or negative clause.
+//! An occurrence-order certificate may permute clauses wherever their variables
+//! are bound. Delta positions refer to source order; erasure restores that
+//! order before comparison. Opaque total Rust imposes no written-order chain.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_datalog_strata as strata;
 use cq_syntax::symbol_name;
@@ -18,28 +18,147 @@ use syn::{
     Ident, Token,
     parse::{Parse, ParseStream},
 };
+
+/// Which occurrence a delta variant reads first; recorded upstream input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DriverPolicy {
+    #[default]
+    WrittenOrder,
+    DeltaFirst,
+}
+impl Parse for DriverPolicy {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "WrittenOrder" => Ok(Self::WrittenOrder),
+            "DeltaFirst" => Ok(Self::DeltaFirst),
+            _ => Err(syn::Error::new_spanned(name, "expected WrittenOrder or DeltaFirst")),
+        }
+    }
+}
+impl ToTokens for DriverPolicy {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::WrittenOrder => quote!(WrittenOrder),
+            Self::DeltaFirst => quote!(DeltaFirst),
+        });
+    }
+}
 pub mod kw {
     syn::custom_keyword!(incremental);
     syn::custom_keyword!(scheme);
     syn::custom_keyword!(seminaive_covering);
+    syn::custom_keyword!(driver);
     syn::custom_keyword!(delta);
     syn::custom_keyword!(variant);
     syn::custom_keyword!(seed);
     syn::custom_keyword!(order);
+    syn::custom_keyword!(authored);
+    syn::custom_keyword!(steps);
+    syn::custom_keyword!(smallest);
+    syn::custom_keyword!(known);
+    syn::custom_keyword!(admit);
+    syn::custom_keyword!(at);
+    syn::custom_keyword!(level);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub strata: strata::Program,
     pub variants: Vec<Variant>,
     pub deltas: Vec<Delta>,
+    /// Upstream driver policy, recorded even when rule advice overrides it.
+    pub driver: DriverPolicy,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Variant {
     pub rule: usize,
     pub delta: Option<usize>,
-    /// Source-body positions in execution order; only the first positive prefix may move.
+    /// Source-body positions in execution order; variable dependencies must hold.
     pub order: Vec<usize>,
+    /// The order is authored advice, not a driver policy: the hole's CQ plan
+    /// keeps it as an explicit atom order instead of choosing its own.
+    pub authored: bool,
+    /// Explicit CQ steps, referring to original rule-body occurrences.
+    pub steps: Vec<AdviceStep>,
+    /// Exact Physical intersection sites, in original occurrence numbering.
+    pub smallest: Vec<Vec<usize>>,
+    /// Authored admission placement advice for this version (FK-Known in Fork).
+    pub known: Option<Known>,
     pub query: Query,
+}
+
+/// Authored ADM-InPlan advice: `known(admit)` pins admission-time discharge of
+/// the committed anti-join; `known(at(level k))` pins it in the hole plan,
+/// immediately after the k-th positive read (1-based).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Known {
+    Admit,
+    At(usize),
+}
+impl Parse for Known {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::admit) {
+            input.parse::<kw::admit>()?;
+            return Ok(Self::Admit);
+        }
+        input.parse::<kw::at>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        content.parse::<kw::level>()?;
+        let level = number(&content)?;
+        if !content.is_empty() {
+            return Err(content.error("expected at(level k)"));
+        }
+        if level == 0 {
+            return Err(input.error("known(at(level k)) counts positive reads from 1"));
+        }
+        Ok(Self::At(level))
+    }
+}
+impl ToTokens for Known {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::Admit => quote!(admit),
+            Self::At(level) => {
+                let level = syn::Index::from(*level);
+                quote!(at(level #level))
+            }
+        });
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdviceStep {
+    pub occurrence: usize,
+    pub columns: Option<Vec<Ident>>,
+}
+impl Parse for AdviceStep {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let occurrence = number(input)?;
+        let columns = if input.peek(syn::token::Paren) {
+            let columns;
+            syn::parenthesized!(columns in input);
+            Some(
+                columns
+                    .parse_terminated(Ident::parse, Token![,])?
+                    .into_iter()
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        Ok(Self {
+            occurrence,
+            columns,
+        })
+    }
+}
+impl ToTokens for AdviceStep {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let occurrence = syn::Index::from(self.occurrence);
+        let columns = self.columns.as_ref().map(|columns| quote!((#(#columns),*)));
+        tokens.extend(quote!(#occurrence #columns));
+    }
 }
 /// A fresh delta relation inheriting the named IDB's ordered columns.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +178,14 @@ impl Parse for Program {
         body.parse::<kw::scheme>()?;
         body.parse::<kw::seminaive_covering>()?;
         body.parse::<Token![;]>()?;
+        let driver = if body.peek(kw::driver) {
+            body.parse::<kw::driver>()?;
+            let driver = body.parse()?;
+            body.parse::<Token![;]>()?;
+            driver
+        } else {
+            DriverPolicy::WrittenOrder
+        };
         let mut deltas = Vec::new();
         while body.peek(kw::delta) {
             body.parse::<kw::delta>()?;
@@ -83,10 +210,56 @@ impl Parse for Program {
                 body.parse::<kw::order>()?;
                 let positions;
                 syn::bracketed!(positions in body);
-                positions.parse_terminated(syn::LitInt::parse, Token![,])?
-                    .iter().map(syn::LitInt::base10_parse).collect::<syn::Result<Vec<_>>>()?
+                positions
+                    .parse_terminated(syn::LitInt::parse, Token![,])?
+                    .iter()
+                    .map(syn::LitInt::base10_parse)
+                    .collect::<syn::Result<Vec<_>>>()?
             } else {
-                (0..strata.source.rules.get(rule).map_or(0, |query| query.body.len())).collect()
+                (0..strata
+                    .source
+                    .rules
+                    .get(rule)
+                    .map_or(0, |query| query.body.len()))
+                    .collect()
+            };
+            let authored = body.peek(kw::authored);
+            if authored {
+                body.parse::<kw::authored>()?;
+            }
+            let steps = if body.peek(kw::steps) {
+                body.parse::<kw::steps>()?;
+                let steps;
+                syn::bracketed!(steps in body);
+                steps
+                    .parse_terminated(AdviceStep::parse, Token![,])?
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut smallest = Vec::new();
+            while body.peek(kw::smallest) {
+                body.parse::<kw::smallest>()?;
+                let site;
+                syn::parenthesized!(site in body);
+                smallest.push(
+                    site.parse_terminated(number, Token![,])?
+                        .into_iter()
+                        .collect(),
+                );
+            }
+            let known = if body.peek(kw::known) {
+                body.parse::<kw::known>()?;
+                let known;
+                syn::parenthesized!(known in body);
+                let parsed = known.parse()?;
+                if !known.is_empty() {
+                    return Err(known.error("expected known(admit) or known(at(level k))"));
+                }
+                Some(parsed)
+            } else {
+                None
             };
             let query;
             syn::braced!(query in body);
@@ -94,6 +267,10 @@ impl Parse for Program {
                 rule,
                 delta,
                 order,
+                authored,
+                steps,
+                smallest,
+                known,
                 query: query.parse()?,
             });
             if !query.is_empty() {
@@ -104,6 +281,7 @@ impl Parse for Program {
             strata,
             variants,
             deltas,
+            driver,
         })
     }
 }
@@ -112,6 +290,7 @@ impl ToTokens for Program {
         let strata = &self.strata;
         let variants = &self.variants;
         let deltas = &self.deltas;
+        let driver = self.driver;
         let variants = variants.iter().map(|v| {
             let rule = syn::LitInt::new(&v.rule.to_string(), proc_macro2::Span::call_site());
             let query = &v.query;
@@ -122,31 +301,39 @@ impl ToTokens for Program {
                     quote!(delta #p)
                 })
                 .unwrap_or(quote!(seed));
-            let order = v.order.iter().map(|position|
-                syn::LitInt::new(&position.to_string(), proc_macro2::Span::call_site()));
-            quote!(variant #rule #kind order [#(#order),*] { #query })
+            let order = v.order.iter().map(|position| {
+                syn::LitInt::new(&position.to_string(), proc_macro2::Span::call_site())
+            });
+            let authored = v.authored.then(|| quote!(authored));
+            let steps = (!v.steps.is_empty()).then(|| {
+                let steps = &v.steps;
+                quote!(steps [#(#steps),*])
+            });
+            let smallest = v.smallest.iter().map(|site| {
+                let site = site.iter().map(|&i| syn::Index::from(i));
+                quote!(smallest(#(#site),*))
+            });
+            let known = v.known.map(|known| quote!(known(#known)));
+            quote!(variant #rule #kind order [#(#order),*] #authored #steps #(#smallest)* #known { #query })
         });
         let deltas = deltas.iter().map(|d| {
             let Delta { relation, name } = d;
             quote!(delta #relation = #name;)
         });
         tokens.extend(
-            quote!(#strata incremental { scheme seminaive_covering; #(#deltas)* #(#variants)* }),
+            quote!(#strata incremental { scheme seminaive_covering; driver #driver; #(#deltas)* #(#variants)* }),
         );
     }
 }
-/// Check a supplied permutation, without replaying the order-selection heuristic.
+/// Check the permutation; `QueryChecker` separately checks its body's dependencies.
 pub fn variant_order<'a>(query: &Query, order: &'a [usize]) -> syn::Result<&'a [usize]> {
     let length = query.body.len();
-    ensure(order.len() == length && order.iter().copied().collect::<BTreeSet<_>>()
-        == (0..length).collect(), query, "variant order must cover every source occurrence exactly once")?;
-    let first = query.body.iter().position(|item| matches!(item, BodyItem::Positive { .. })).unwrap_or(length);
-    let end = first + query.body.iter().skip(first)
-        .take_while(|item| matches!(item, BodyItem::Positive { .. })).count();
-    ensure(order.iter().enumerate().all(|(position, &source)| {
-        if (first..end).contains(&position) { (first..end).contains(&source) }
-        else { position == source }
-    }), query, "variant order must preserve Before constraints outside the first positive prefix")?;
+    ensure(
+        order.len() == length
+            && order.iter().copied().collect::<BTreeSet<_>>() == (0..length).collect(),
+        query,
+        "variant order must cover every source occurrence exactly once",
+    )?;
     Ok(order)
 }
 /// Formal rule DL-Delta: check variant erasure and coverage of changing positions.
@@ -177,14 +364,62 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         // Check complete declared schemas and CQ scope independently of erasure.
         checker.check(&v.query)?;
         let order = variant_order(&p.rules[v.rule], &v.order)?;
-        ensure(v.query.body.len() == order.len(), &v.query, "variant changed body coverage")?;
+        // Formal rule DL-StepAdvice: advice is occurrence metadata, never a
+        // replacement for the checked semi-naive cover or its erased query.
+        ensure(
+            v.authored || (v.steps.is_empty() && v.smallest.is_empty()),
+            p,
+            "step advice requires an authored variant",
+        )?;
+        for occurrence in v
+            .steps
+            .iter()
+            .map(|step| step.occurrence)
+            .chain(v.smallest.iter().flatten().copied())
+        {
+            ensure(
+                matches!(
+                    p.rules[v.rule].body.get(occurrence),
+                    Some(BodyItem::Positive { .. })
+                ),
+                p,
+                "step advice names no source positive occurrence",
+            )?;
+        }
+        for site in &v.smallest {
+            ensure(
+                site.len() >= 2 && site.iter().collect::<BTreeSet<_>>().len() == site.len(),
+                p,
+                "smallest requires distinct positive occurrences",
+            )?;
+        }
+        if let Some(Known::At(level)) = v.known {
+            let reads = p.rules[v.rule]
+                .body
+                .iter()
+                .filter(|item| matches!(item, BodyItem::Positive { .. }))
+                .count();
+            ensure(
+                (1..=reads).contains(&level),
+                p,
+                "known(at(level k)) names no positive read of the rule",
+            )?;
+        }
+        ensure(
+            v.query.body.len() == order.len(),
+            &v.query,
+            "variant changed body coverage",
+        )?;
         let mut erased = v.query.clone();
         if let Some(i) = v.delta {
             let original = &p.rules[v.rule].body[i];
             let BodyItem::Positive { atom: original } = original else {
                 unreachable!()
             };
-            let position = order.iter().position(|&position| position == i).expect("complete order");
+            let position = order
+                .iter()
+                .position(|&position| position == i)
+                .expect("complete order");
             let Some(BodyItem::Positive { atom }) = erased.body.iter_mut().nth(position) else {
                 return Err(syn::Error::new_spanned(p, "missing delta atom"));
             };

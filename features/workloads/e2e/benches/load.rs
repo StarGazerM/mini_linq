@@ -2,7 +2,7 @@
 //! Both formats produce the same owned tuple vector, with 2048-row batches.
 use std::{hint::black_box, path::Path, time::Instant};
 
-mini_linq::relation_loaders! {
+cq_load::relation_loaders! {
     relation Lineitem(orderkey: i64, linenumber: i32, price: cq_load::Decimal,
                       shipdate: cq_load::Date, comment: String);
 }

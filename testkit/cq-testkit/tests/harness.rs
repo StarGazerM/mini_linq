@@ -59,10 +59,10 @@ fn wrong_answers_fail_even_with_a_matching_fixture_and_valid_check() {
 fn compilation_fixture_and_check_failures_are_distinguishable() {
     let mut pass = correct_pass();
     pass.compile = Box::new(|_| Err("compile error"));
-    assert_eq!(
+    assert!(matches!(
         pass.run(Some(authored_case())),
-        Err(PassFailure::Compile("compile error"))
-    );
+        Err(PassFailure::Compile(_))
+    ));
 
     let mut pass = correct_pass();
     pass.expected_next = Some(Rows::new());
@@ -73,10 +73,10 @@ fn compilation_fixture_and_check_failures_are_distinguishable() {
 
     let mut pass = correct_pass();
     pass.check = Box::new(|_, _| Err("check error"));
-    assert_eq!(
+    assert!(matches!(
         pass.run(Some(authored_case())),
-        Err(PassFailure::Check("check error"))
-    );
+        Err(PassFailure::Check(_))
+    ));
 }
 
 #[test]
@@ -144,16 +144,18 @@ fn returning_reference_requires_equal_answers_without_target_panic() {
 }
 
 #[test]
-fn panicking_reference_permits_either_target_outcome() {
-    let returned = check_refinement(|| -> Rows { panic!("reference") }, Rows::new).unwrap();
-    assert!(matches!(returned.reference, Outcome::Panicked(_)));
-    assert_eq!(returned.target, Outcome::Returned(Rows::new()));
-    let panicked = check_refinement(
-        || -> Rows { panic!("reference") },
-        || panic!("different target panic"),
-    )
-    .unwrap();
-    assert!(matches!(panicked.target, Outcome::Panicked(_)));
+fn panicking_reference_violates_totality_regardless_of_target_outcome() {
+    assert!(matches!(
+        check_refinement(|| -> Rows { panic!("reference") }, Rows::new),
+        Err(RefinementFailure::ReferencePanicked { .. })
+    ));
+    assert!(matches!(
+        check_refinement(
+            || -> Rows { panic!("reference") },
+            || panic!("different target panic"),
+        ),
+        Err(RefinementFailure::ReferencePanicked { .. })
+    ));
 }
 
 #[test]

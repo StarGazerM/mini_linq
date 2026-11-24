@@ -10,9 +10,9 @@
 //! Relations use set union, EDBs are canonicalized once, and lower components
 //! remain frozen while an upper component evaluates its immutable snapshot.
 //!
-//! Pure partial Rust, lawful Eq/Hash/Clone, finite generators and termination
-//! are caller premises, just as for the compiler. Panic denotes bottom, observed
-//! by [`check_refinement`]; divergence is not approximated with a round limit.
+//! Pure total Rust, lawful Eq/Hash/Clone, finite generators and termination
+//! are caller premises, just as for the compiler. [`check_refinement`] rejects
+//! a panic in either execution; divergence is not approximated with a round limit.
 //! Only unwinding panics are observable. Observers are operational diagnostics,
 //! not part of the returned relation denotation, and are not invoked here.
 
@@ -29,8 +29,8 @@ pub use cq_testkit::harness::{
 /// was admitted. It must not mutate EDBs or other strata. Generated callbacks
 /// enforce this discipline without copying the database each round.
 ///
-/// A panic in initialization or any rule propagates as semantic bottom so that
-/// `check_refinement(|| eval_source(...), target)` observes it exactly once.
+/// A panic in initialization or any rule propagates so that
+/// `check_refinement(|| eval_source(...), target)` reports the violated premise.
 pub fn eval_source<S>(
     initialize: impl FnOnce() -> S,
     strata: usize,
@@ -102,7 +102,7 @@ mod tests {
         );
         assert_eq!(result, BTreeSet::from([0, 1, 2, 3, 4]));
         assert!(check_refinement(|| result.clone(), || panic!("target")).is_err());
-        assert!(check_refinement(|| panic!("reference"), || result).is_ok());
+        assert!(check_refinement(|| panic!("reference"), || result).is_err());
         assert!(check_refinement(|| 1, || 2).is_err());
     }
 }

@@ -23,8 +23,9 @@ fn main() {
     }
     for scenario in SCENARIOS {
         let cq = scenario.parse_cq().unwrap();
-        let structures = scenario.parse_structures().unwrap();
-        cq_testkit::structures::contract::check(&structures).unwrap();
+        let physical = scenario.parse_physical().unwrap();
+        let structures = scenario.parse_structures(&physical).unwrap();
+        cq_testkit::structures::contract::check(&physical, &structures).unwrap();
         for host in ["slice", "hash", "ordered"] {
             emit(
                 &mut code,
@@ -33,7 +34,7 @@ fn main() {
                 host,
                 &cq,
                 scenario.cq,
-                Some(structures.to_token_stream().to_string()),
+                Some(format!("{} {}", physical.to_token_stream(), structures.to_token_stream())),
             );
         }
     }
@@ -94,7 +95,7 @@ fn emit(
     } else {
         (
             format!(
-                "mini_linq::compile! {{ pipeline {{ {advice} print = own_push::push; }} {cq_text} }}"
+                "mini_linq::compile! {{ pipeline {{ {advice} print_input = structures; print = own_push::push; }} {cq_text} }}"
             ),
             format!("mini_linq::compile! {{ pipeline {{ {advice} }} {cq_text} }}"),
         )

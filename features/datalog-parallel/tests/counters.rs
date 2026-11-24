@@ -53,14 +53,15 @@ fn parallel_negative_keys_are_shared_native_membership_hosts() {
         .build()
         .unwrap();
     pool.install(|| {
-        let domain: Vec<_> = (0..2048_i32).map(|id| (id, format!("key-{id}"))).collect();
+        // Non-Copy keys: the shared membership hosts borrow them.
+        let domain: Vec<_> = (0..2048_i32).map(|id| (id, vec![i64::from(id)])).collect();
         let blocked: Vec<_> = (0..2048_i32)
             .map(|id| {
-                let left = format!("key-{id}");
+                let left = vec![i64::from(id)];
                 let right = if id % 3 == 0 {
                     left.clone()
                 } else {
-                    format!("other-{id}")
+                    vec![i64::from(id), 1]
                 };
                 (left, right)
             })
@@ -73,8 +74,8 @@ fn parallel_negative_keys_are_shared_native_membership_hosts() {
                 print = cq_datalog_parallel::print_rounds;
             }
             struct NegativeParallel;
-            relation Domain(id:i32,key:String) = (&domain);
-            relation Blocked(left:String,right:String) = (&blocked);
+            relation Domain(id:i32,key:Vec<i64>) = (&domain);
+            relation Blocked(left:Vec<i64>,right:Vec<i64>) = (&blocked);
             relation Allowed(id:i32);
             output Allowed;
             Allowed(*id) :- Domain(id,key), !Blocked(key,key);

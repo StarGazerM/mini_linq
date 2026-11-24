@@ -1,11 +1,33 @@
+mod support;
+
 use std::sync::Arc;
 
-use cq_gpu_sequence_runtime::canon::{
-    packed_columns, PackedCanon, PackedColumnsAdapter, PackedField, WideCanon,
-};
+use cq_gpu_sequence_runtime::canon::{packed_columns, PackedColumnsAdapter, PackedField};
 use cq_gpu_sequence_runtime::{
-    Bounds, Buffer, Codec, ColumnDescriptor, EncodedColumn, KeyDescriptor, PayloadDescriptor,
-    PayloadKind, Pool, RangeBuilder, RangeDescriptor, RangeSelection, RangeWorkspace, Result,
+    Bounds, Buffer, Codec, ColumnDescriptor, EncodedColumn, Geometry, KeyDescriptor,
+    PayloadDescriptor, PayloadKind, Pool, RangeBuilder, RangeDescriptor, RangeSelection,
+    RangeWorkspace, Result, UploadBounds, UploadCodec, UploadColumn,
+};
+use gpu_datalog_runtime::{
+    radix_run::{EncodedRow, PackedRow},
+    RadixLayout, RadixRunParams,
+};
+use support::AUX;
+
+const SET_PARAMS: RadixRunParams = RadixRunParams {
+    ratio: 4,
+    radix_bits: 0,
+    merge_tile_rows: 1024,
+    block_threads: 256,
+};
+
+const MEASURE: UploadColumn = UploadColumn {
+    codec: UploadCodec::For,
+    bounds: UploadBounds::Measure,
+};
+const SCALAR: UploadColumn = UploadColumn {
+    codec: UploadCodec::For,
+    bounds: UploadBounds::Scalar,
 };
 
 fn column(pool: &Arc<Pool>, values: &[u32]) -> Result<ColumnDescriptor> {
@@ -21,13 +43,17 @@ fn column(pool: &Arc<Pool>, values: &[u32]) -> Result<ColumnDescriptor> {
 fn query_scope_releases_each_hook_once_on_return_and_unwind() {
     use cq_gpu_sequence_runtime::{register_query_cleanup, QueryScope};
     thread_local! { static RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-    fn release() { RELEASED.with(|count| count.set(count.get() + 1)); }
+    fn release() {
+        RELEASED.with(|count| count.set(count.get() + 1));
+    }
     for unwind in [false, true] {
         let result = std::panic::catch_unwind(|| {
             let _scope = QueryScope::new();
             register_query_cleanup(release);
             register_query_cleanup(release);
-            if unwind { panic!("exercise query cleanup"); }
+            if unwind {
+                panic!("exercise query cleanup");
+            }
         });
         assert_eq!(result.is_err(), unwind);
     }
@@ -38,51 +64,150 @@ fn query_scope_releases_each_hook_once_on_return_and_unwind() {
 fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()> {
     use cq_gpu_sequence_runtime::upload_numeric_columns;
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
-    let values = upload_numeric_columns::<(i64, u32, bool), _>(pool.clone(), |columns| {
-        columns[0].extend([i64::MIN, 7, 7]);
-        columns[1].extend([u32::MAX as i64, 3, 3]);
-        columns[2].extend([0, 1, 1]);
-        Ok(())
-    })?;
-    assert_eq!(values.to_host()?, [(i64::MIN, u32::MAX, false), (7, 3, true), (7, 3, true)]);
+    #[cfg(feature = "publication-counters")]
+    let readbacks = gpu_device_columns::publication_bounds_readbacks();
+    let values = upload_numeric_columns::<(i64, u32, bool), _>(
+        pool.clone(),
+        |columns| {
+            columns[0].extend([i64::MIN, 7, 7]);
+            columns[1].extend([u32::MAX as i64, 3, 3]);
+            columns[2].extend([0, 1, 1]);
+            Ok(())
+        },
+        &[MEASURE; 3],
+        AUX.bounds,
+    )?;
+    assert_eq!(
+        values.storage().bounds,
+        [
+            Bounds::Inclusive { min: i64::MIN, max: 7 },
+            Bounds::Inclusive { min: 3, max: u32::MAX as i64 },
+            Bounds::Inclusive { min: 0, max: 1 },
+        ]
+    );
+    // DECODE P: diagnostic typed numeric upload round trip publishes logical host values for exact assertions.
+    assert_eq!(
+        values.to_host()?,
+        [(i64::MIN, u32::MAX, false), (7, 3, true), (7, 3, true)]
+    );
     // Reusing capacity must not reuse old rows, even when the new input is empty.
-    assert!(upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()))?.to_host()?.is_empty());
-    let changed = upload_numeric_columns::<(i64,), _>(pool.clone(), |columns| {
-        columns[0].push(-9);
-        Ok(())
-    })?;
+    let empty =
+        upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()), &[MEASURE], AUX.bounds)?;
+    assert_eq!(empty.storage().bounds, [Bounds::Empty]);
+    // DECODE P: diagnostic empty reused upload publishes logical host values for exact assertions.
+    assert!(empty.to_host()?.is_empty());
+    let changed = upload_numeric_columns::<(i64,), _>(
+        pool.clone(),
+        |columns| {
+            columns[0].push(-9);
+            Ok(())
+        },
+        &[MEASURE],
+        AUX.bounds,
+    )?;
+    // DECODE P: diagnostic changed reused upload publishes logical host values for exact assertions.
     assert_eq!(changed.to_host()?, [(-9,)]);
-    let large = upload_numeric_columns::<(i64,), _>(pool.clone(), |columns| {
-        columns[0].resize(300_003, 1);
-        columns[0][200_001] = i64::MIN;
-        columns[0][300_002] = i64::MAX;
-        Ok(())
-    })?;
-    assert_eq!(large.storage().columns[0].bounds(), Bounds::Inclusive { min: i64::MIN, max: i64::MAX });
+    let large = upload_numeric_columns::<(i64,), _>(
+        pool.clone(),
+        |columns| {
+            columns[0].resize(300_003, 1);
+            columns[0][200_001] = i64::MIN;
+            columns[0][300_002] = i64::MAX;
+            Ok(())
+        },
+        &[MEASURE],
+        AUX.bounds,
+    )?;
+    assert_eq!(
+        large.storage().columns[0].bounds(),
+        Bounds::Inclusive {
+            min: i64::MIN,
+            max: i64::MAX
+        }
+    );
+    // DECODE P: diagnostic large signed maximum publishes logical host values for exact assertions.
     assert_eq!(large.to_host()?[300_002], (i64::MAX,));
-    assert!(upload_numeric_columns::<(), _>(pool.clone(), |_| Ok(())).is_err());
-    assert!(upload_numeric_columns::<(i64, i64), _>(pool, |columns| {
+    // Scalar bounds remain a proven enclosure; publication does not remeasure them.
+    let scalar = upload_numeric_columns::<(i32, u8), _>(
+        pool.clone(),
+        |columns| {
+            columns[0].extend([-4, 9]);
+            columns[1].extend([1, 2]);
+            Ok(())
+        },
+        &[SCALAR, MEASURE],
+        AUX.bounds,
+    )?;
+    assert_eq!(
+        scalar.storage().bounds,
+        [
+            Bounds::Inclusive {
+                min: i32::MIN as i64,
+                max: i32::MAX as i64
+            },
+            Bounds::Inclusive { min: 1, max: 2 }
+        ]
+    );
+    // DECODE P: diagnostic scalar-bounded upload publishes logical host values for exact assertions.
+    assert_eq!(scalar.to_host()?, [(-4, 1), (9, 2)]);
+    // u64 lanes have no i64 scalar range; the record must measure them.
+    assert!(upload_numeric_columns::<(u64,), _>(
+        pool.clone(),
+        |columns| {
+            columns[0].push(1);
+            Ok(())
+        },
+        &[SCALAR],
+        AUX.bounds,
+    )
+    .is_err());
+    assert!(upload_numeric_columns::<(), _>(pool.clone(), |_| Ok(()), &[], AUX.bounds).is_err());
+    assert!(upload_numeric_columns::<(i64, i64), _>(
+        pool.clone(),
+        |columns| {
+            columns[0].push(1);
+            Ok(())
+        },
+        &[MEASURE; 2],
+        AUX.bounds,
+    )
+    .is_err());
+    // One record per column, and only the supported reduction geometry.
+    let fill = |columns: &mut [Vec<i64>]| -> Result<()> {
         columns[0].push(1);
         Ok(())
-    }).is_err());
+    };
+    assert!(upload_numeric_columns::<(i64,), _>(pool.clone(), fill, &[], AUX.bounds).is_err());
+    let wide = Geometry {
+        block_threads: 512,
+        ..AUX.bounds
+    };
+    assert!(upload_numeric_columns::<(i64,), _>(pool, fill, &[MEASURE], wide).is_err());
+    #[cfg(feature = "publication-counters")]
+    assert_eq!(gpu_device_columns::publication_bounds_readbacks(), readbacks);
     Ok(())
 }
 
 #[test]
 fn packed_canon_selects_lanes_from_recorded_heading() -> Result<()> {
-    assert_eq!(PackedCanon::MAX_PACKED_BITS, 128);
     for bits in [0, 1, 63, 64] {
-        assert_eq!(PackedCanon::key_lanes(bits)?, 1);
+        assert_eq!(
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)?,
+            1
+        );
     }
     for bits in [65, 80, 127, 128] {
-        assert_eq!(PackedCanon::key_lanes(bits)?, 2);
+        assert_eq!(
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)?,
+            2
+        );
     }
-    assert!(PackedCanon::key_lanes(129).is_err());
-    let heading = [
-        PackedField { shift: 0, bits: 40, base: 0 },
-        PackedField { shift: 40, bits: 40, base: 0 },
-    ];
-    assert_eq!(PackedCanon::field_lanes(&heading)?, 2);
+    for bits in [129, 160, 192] {
+        assert_eq!(
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)?,
+            3
+        );
+    }
     Ok(())
 }
 
@@ -90,49 +215,128 @@ fn packed_canon_selects_lanes_from_recorded_heading() -> Result<()> {
 fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
     let rows = [(7i64, 1i64 << 35), (7, 3), (7, 1 << 35), (9, 3)];
-    let lanes = rows.iter().flat_map(|&(a, b)| {
-        let key = (a as u128) | ((b as u128) << 40);
-        [key as u64, (key >> 64) as u64]
-    }).collect::<Vec<_>>();
+    let lanes = rows
+        .iter()
+        .flat_map(|&(a, b)| {
+            let key = (a as u128) | ((b as u128) << 40);
+            [key as u64, (key >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
     let input = Buffer::from_host(pool.clone(), &lanes)?;
     let fields = [
-        PackedField { shift: 0, bits: 40, base: 0 },
-        PackedField { shift: 40, bits: 40, base: 0 },
+        PackedField {
+            shift: 0,
+            bits: 40,
+            base: 0,
+        },
+        PackedField {
+            shift: 40,
+            bits: 40,
+            base: 0,
+        },
     ];
-    let mut canon = PackedCanon::new(&pool, rows.len())?;
-    let keys = unsafe { canon.canonicalize(&input, rows.len(), 80)? };
+    let mut adapter = PackedColumnsAdapter::new(pool.clone(), fields.len(), AUX.canon)?;
+    let keys = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool,
+            &input,
+            rows.len(),
+            80,
+            SET_PARAMS,
+        )?
+    };
     assert_eq!(keys.lanes(), 2);
     assert_eq!(keys.capacity(), rows.len());
     assert_eq!(keys.logical_count()?, 3);
     let source = unsafe {
-        ColumnDescriptor::from_packed(keys.keys().clone(), 3, 2, fields[1],
-            Bounds::Inclusive { min: 0, max: (1i64 << 40) - 1 })?
+        ColumnDescriptor::from_packed(
+            keys.keys().clone(),
+            3,
+            2,
+            fields[1],
+            Bounds::Inclusive {
+                min: 0,
+                max: (1i64 << 40) - 1,
+            },
+        )?
     };
     let constant = unsafe {
-        ColumnDescriptor::from_packed(keys.keys().clone(), 3, 2,
-            PackedField { shift: 80, bits: 0, base: 0 }, Bounds::singleton(0))?
+        ColumnDescriptor::from_packed(
+            keys.keys().clone(),
+            3,
+            2,
+            PackedField {
+                shift: 80,
+                bits: 0,
+                base: 0,
+            },
+            Bounds::singleton(0),
+        )?
     };
-    let gathered = RangeBuilder::new(&pool)?.build(&RangeDescriptor {
-        key: vec![KeyDescriptor { column: constant, domain_size: 1 }],
+    let gathered = RangeBuilder::new(&pool, &AUX)?.build(&RangeDescriptor {
+        directory_entries: 2,
+        key: vec![KeyDescriptor {
+            column: constant,
+            domain_size: 1,
+        }],
         selection: None,
-        payload: vec![PayloadDescriptor { column: source, kind: PayloadKind::I64 }],
+        payload: vec![PayloadDescriptor {
+            column: source,
+            kind: PayloadKind::I64,
+        }],
     })?;
+    // DECODE P: diagnostic gathered wide payload publishes logical host values for exact assertions.
     assert_eq!(gathered.payload()[0].to_host()?, [3, 3, 1i64 << 35]);
+    assert_eq!(
+        gathered.payload()[0].bounds(),
+        Bounds::Inclusive { min: 0, max: (1i64 << 40) - 1 }
+    );
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
-    let output = keys.into_columns::<(i64, i64)>(&fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic canonical tuple adapter reconstructs packed fields solely for the following host oracle.
+    let output = adapter.unpack_columns::<(i64, i64)>(keys, &fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic canonical packed tuples publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(7, 3), (9, 3), (7, 1 << 35)]);
-    let output = packed_columns::<(i64, i64)>(input, rows.len(), &fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic noncanonical tuple adapter reconstructs packed fields solely for the following host oracle.
+    let output = packed_columns::<(i64, i64)>(
+        input,
+        rows.len(),
+        &fields,
+        dictionary.clone(),
+        vec![],
+        AUX.canon,
+    )?;
+    // DECODE P: diagnostic noncanonical packed tuples publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, rows);
 
     // Both lanes participate in equality, including the most significant bit.
-    let input = Buffer::from_host(pool.clone(), &[0u64, 0, 0, 1u64 << 63, 0, 0, u64::MAX, u64::MAX])?;
-    let keys = unsafe { canon.canonicalize(&input, 4, 128)? };
+    let input = Buffer::from_host(
+        pool.clone(),
+        &[0u64, 0, 0, 1u64 << 63, 0, 0, u64::MAX, u64::MAX],
+    )?;
+    let keys = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool, &input, 4, 128, SET_PARAMS,
+        )?
+    };
     let fields = [
-        PackedField { shift: 0, bits: 64, base: i64::MIN },
-        PackedField { shift: 64, bits: 64, base: i64::MIN },
+        PackedField {
+            shift: 0,
+            bits: 64,
+            base: i64::MIN,
+        },
+        PackedField {
+            shift: 64,
+            bits: 64,
+            base: i64::MIN,
+        },
     ];
-    let output = keys.into_columns::<(i64, i64)>(&fields, dictionary, vec![])?;
-    assert_eq!(output.to_host()?, [(i64::MIN, i64::MIN), (i64::MIN, 0), (i64::MAX, i64::MAX)]);
+    // DECODE P: diagnostic signed-boundary adapter reconstructs packed fields solely for the following host oracle.
+    let output = adapter.unpack_columns::<(i64, i64)>(keys, &fields, dictionary, vec![])?;
+    // DECODE P: diagnostic full-width signed tuple boundaries publishes logical host values for exact assertions.
+    assert_eq!(
+        output.to_host()?,
+        [(i64::MIN, i64::MIN), (i64::MIN, 0), (i64::MAX, i64::MAX)]
+    );
     Ok(())
 }
 
@@ -165,22 +369,37 @@ fn wide_canon_deduplicates_three_lane_keys_with_stable_order() -> Result<()> {
             base: i64::MIN,
         },
     ];
-    assert_eq!(WideCanon::field_lanes(&fields)?, 3);
-    let mut canon = WideCanon::new(&pool, rows.len())?;
+    let mut adapter = PackedColumnsAdapter::new(pool.clone(), fields.len(), AUX.canon)?;
     for _ in 0..2 {
-        let keys = unsafe { canon.canonicalize(&input, rows.len(), 192)? };
+        let keys = unsafe {
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+                &pool,
+                &input,
+                rows.len(),
+                192,
+                SET_PARAMS,
+            )?
+        };
         assert_eq!(keys.logical_count()?, 4);
         assert_eq!(keys.lanes(), 3);
-        let output = keys.into_columns::<(i64, i64, i64)>(
+        // DECODE P: diagnostic three-lane adapter reconstructs packed fields solely for the following host oracle.
+        let output = adapter.unpack_columns::<(i64, i64, i64)>(
+            keys,
             &fields,
             Arc::new(cq_gpu_runtime::Dictionary::default()),
             vec![],
         )?;
         let expected = [[7, 3, 1], [8, 3, 1], [7, 4, 1], [7, 3, 9]]
+            // DECODE P: diagnostic expected three-lane answer restores each recorded signed frame base.
             .map(|[a, b, c]| (i64::MIN + a, i64::MIN + b, i64::MIN + c));
+        // DECODE P: diagnostic three-lane packed tuples publishes logical host values for exact assertions.
         assert_eq!(output.to_host()?, expected);
     }
-    let empty = unsafe { canon.canonicalize(&input, 0, 192)? };
+    let empty = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool, &input, 0, 192, SET_PARAMS,
+        )?
+    };
     assert_eq!(empty.logical_count()?, 0);
     Ok(())
 }
@@ -197,6 +416,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         end: 14,
     };
     let descriptor = RangeDescriptor {
+        directory_entries: 4,
         key: vec![
             KeyDescriptor {
                 column: outer,
@@ -214,30 +434,46 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         }],
     };
     let builder =
-        RangeBuilder::new(&pool).map_err(|error| format!("range program load: {error}"))?;
+        RangeBuilder::new(&pool, &AUX).map_err(|error| format!("range program load: {error}"))?;
     let selected = builder
         .build(&descriptor)
         .map_err(|error| format!("range build: {error}"))?;
     assert_eq!(selected.len(), 3);
+    // DECODE P: diagnostic selected directory offsets publishes logical host values for exact assertions.
     assert_eq!(selected.offsets().to_host()?, [0, 2, 3, 3]);
+    // DECODE P: diagnostic selected payload values publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [11, 13, 12]);
+    assert_eq!(selected.offsets().bounds(), Bounds::Inclusive { min: 0, max: 3 });
+    // Filtering removes both source extrema, but preserves their enclosure.
+    assert_eq!(selected.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
 
-    let positions = cq_gpu_sequence_runtime::select(pool.clone(), &selection)?;
+    let positions = cq_gpu_sequence_runtime::select(pool.clone(), &selection, AUX.selection)?;
     assert_eq!(positions.len(), 3);
+    let mut narrow = AUX;
+    narrow.selection.block_threads = 128;
+    assert!(cq_gpu_sequence_runtime::select(pool.clone(), &selection, narrow.selection).is_err());
+    assert!(RangeBuilder::new(&pool, &narrow).is_err());
 
     let mut empty = descriptor.clone();
     empty.selection.as_mut().unwrap().start = 20;
     empty.selection.as_mut().unwrap().end = 30;
     let empty = builder.build(&empty)?;
     assert!(empty.is_empty());
+    // DECODE P: diagnostic empty selected directory publishes logical host values for exact assertions.
     assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0]);
+    // DECODE P: diagnostic empty selected payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
+    assert_eq!(empty.offsets().bounds(), Bounds::singleton(0));
+    assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
 
     let keys = Buffer::from_host(pool.clone(), &[7u64, 2, 7, 1, 2])?;
-    let mut canon =
-        PackedCanon::new(&pool, 5).map_err(|error| format!("canon program load: {error}"))?;
+    let mut adapter = PackedColumnsAdapter::new(pool.clone(), 1, AUX.canon)?;
     // Keys are initialized, in the advertised three-bit range, on this stream.
-    let unique = unsafe { canon.canonicalize(&keys, 5, 3)? };
+    let unique = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool, &keys, 5, 3, SET_PARAMS,
+        )?
+    };
     assert_eq!(unique.logical_count()?, 3);
     let fields = [PackedField {
         shift: 0,
@@ -245,9 +481,13 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         base: 0,
     }];
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
-    let output = unique.into_columns::<(u32,)>(&fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic canonical scalar adapter reconstructs packed fields solely for the following host oracle.
+    let output = adapter.unpack_columns::<(u32,)>(unique, &fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic canonical scalar keys publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(1,), (2,), (7,)]);
-    let output = packed_columns::<(u32,)>(keys, 5, &fields, dictionary, vec![])?;
+    // DECODE P: diagnostic noncanonical scalar adapter reconstructs packed fields solely for the following host oracle.
+    let output = packed_columns::<(u32,)>(keys, 5, &fields, dictionary, vec![], AUX.canon)?;
+    // DECODE P: diagnostic noncanonical scalar keys publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(7,), (2,), (7,), (1,), (2,)]);
 
     // Setup-time metadata can be reused without changing retained publications.
@@ -256,16 +496,25 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     let mut changed = descriptor.clone();
     changed.selection.as_mut().unwrap().end = 12;
     let newer = builder.build_with_workspace(&changed, &mut workspace)?;
+    // DECODE P: diagnostic retained workspace payload publishes logical host values for exact assertions.
     assert_eq!(retained.payload()[0].to_host()?, [11, 13, 12]);
+    // DECODE P: diagnostic new workspace payload publishes logical host values for exact assertions.
     assert_eq!(newer.payload()[0].to_host()?, [11]);
+    // DECODE P: diagnostic retained workspace directory publishes logical host values for exact assertions.
     assert_eq!(retained.offsets().to_host()?, [0, 2, 3, 3]);
+    // DECODE P: diagnostic new workspace directory publishes logical host values for exact assertions.
     assert_eq!(newer.offsets().to_host()?, [0, 1, 1, 1]);
+    assert_eq!(retained.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
+    assert_eq!(newer.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
+    assert_eq!(newer.offsets().bounds(), Bounds::Inclusive { min: 0, max: 1 });
     drop((retained, newer));
     let reused = builder.build_with_workspace(&descriptor, &mut workspace)?;
+    // DECODE P: diagnostic reused workspace payload publishes logical host values for exact assertions.
     assert_eq!(reused.payload()[0].to_host()?, [11, 13, 12]);
 
-    let mut adapter = PackedColumnsAdapter::new(pool.clone(), 1)?;
+    let mut adapter = PackedColumnsAdapter::new(pool.clone(), 1, AUX.canon)?;
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
+    // DECODE P: diagnostic first retained adapter reconstructs packed fields solely for the following host oracle.
     let first = adapter.packed_columns::<(u32,)>(
         Buffer::from_host_async(pool.clone(), &[3u64, 1])?,
         2,
@@ -273,6 +522,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         dictionary.clone(),
         vec![],
     )?;
+    // DECODE P: diagnostic second retained adapter reconstructs packed fields solely for the following host oracle.
     let second = adapter.packed_columns::<(u32,)>(
         Buffer::from_host_async(pool.clone(), &[4u64])?,
         1,
@@ -280,9 +530,12 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         dictionary.clone(),
         vec![],
     )?;
+    // DECODE P: diagnostic first retained adapter output publishes logical host values for exact assertions.
     assert_eq!(first.to_host()?, [(3,), (1,)]);
+    // DECODE P: diagnostic second retained adapter output publishes logical host values for exact assertions.
     assert_eq!(second.to_host()?, [(4,)]);
     drop((first, second));
+    // DECODE P: diagnostic empty reused adapter reconstructs packed fields solely for the following host oracle.
     let empty = adapter.packed_columns::<(u32,)>(
         Buffer::from_host_async(pool.clone(), &[] as &[u64])?,
         0,
@@ -290,6 +543,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         dictionary,
         vec![],
     )?;
+    // DECODE P: diagnostic empty reused adapter output publishes logical host values for exact assertions.
     assert!(empty.to_host()?.is_empty());
 
     let upload = Buffer::from_host_async(pool.clone(), &[1u32, 2])?;
@@ -315,7 +569,7 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
     let mut expected: Vec<_> = keys.iter().copied().zip(values.iter().copied()).collect();
     expected.sort_by_key(|&(key, _)| key);
     let expected: Vec<_> = expected.into_iter().map(|(_, value)| value).collect();
-    let builder = RangeBuilder::new(&pool)?;
+    let builder = RangeBuilder::new(&pool, &AUX)?;
     for codec in [Codec::Plain, Codec::For, Codec::Delta] {
         let payload = unsafe {
             ColumnDescriptor::new(
@@ -324,6 +578,7 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
             )?
         };
         let mut descriptor = RangeDescriptor {
+            directory_entries: 5,
             key: vec![KeyDescriptor {
                 column: column(&pool, &keys)?,
                 domain_size: 4,
@@ -335,7 +590,10 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
             }],
         };
         let result = builder.build(&descriptor)?;
+        // DECODE P: diagnostic codec-sweep gathered payload publishes logical host values for exact assertions.
         assert_eq!(result.payload()[0].to_host()?, expected);
+        assert_eq!(result.payload()[0].bounds(), payload.bounds());
+        // DECODE P: diagnostic codec-sweep gathered directory publishes logical host values for exact assertions.
         assert_eq!(result.offsets().to_host()?, [0, 684, 1368, 2051, 2051]);
         descriptor.selection = Some(RangeSelection {
             column: payload,
@@ -343,8 +601,12 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
             end: 1,
         });
         let empty = builder.build(&descriptor)?;
+        // DECODE P: diagnostic codec-sweep empty payload publishes logical host values for exact assertions.
         assert!(empty.payload()[0].to_host()?.is_empty());
+        // DECODE P: diagnostic codec-sweep empty directory publishes logical host values for exact assertions.
         assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0, 0]);
+        assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
+        assert_eq!(empty.offsets().bounds(), Bounds::singleton(0));
     }
     Ok(())
 }
@@ -382,6 +644,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     };
     drop(rows);
     let mut descriptor = RangeDescriptor {
+        directory_entries: 4,
         key: vec![KeyDescriptor {
             column: key,
             domain_size: 3,
@@ -392,9 +655,10 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
             kind: PayloadKind::I64,
         }],
     };
-    let builder = RangeBuilder::new(&pool)?;
+    let builder = RangeBuilder::new(&pool, &AUX)?;
     let retained = builder.build(&descriptor)?;
     assert_eq!(
+        // DECODE P: diagnostic signed extrema retained payload publishes logical host values for exact assertions.
         retained.payload()[0].to_host()?,
         [i64::MIN, 4_294_967_297, i64::MAX, -4_294_967_297]
     );
@@ -404,12 +668,28 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
         end: 0,
     });
     let negative = builder.build(&descriptor)?;
+    // DECODE P: diagnostic negative-only directory publishes logical host values for exact assertions.
     assert_eq!(negative.offsets().to_host()?, [0, 1, 2, 2]);
+    // DECODE P: diagnostic negative-only payload publishes logical host values for exact assertions.
     assert_eq!(negative.payload()[0].to_host()?, [i64::MIN, -4_294_967_297]);
+    assert_eq!(negative.payload()[0].bounds(), retained.payload()[0].bounds());
     assert_eq!(
-        cq_gpu_sequence_runtime::select(pool.clone(), descriptor.selection.as_ref().unwrap())?
-            .len(),
+        negative.payload()[0].bounds(),
+        Bounds::Inclusive { min: i64::MIN, max: i64::MAX }
+    );
+    let selection = descriptor.selection.as_ref().unwrap();
+    assert_eq!(
+        cq_gpu_sequence_runtime::select(pool.clone(), selection, AUX.selection)?.len(),
         2
+    );
+    let mut measured = selection.column.clone();
+    measured.measure_bounds(AUX.bounds)?;
+    assert_eq!(
+        measured.bounds(),
+        Bounds::Inclusive {
+            min: i64::MIN,
+            max: i64::MAX
+        }
     );
 
     let keys = Arc::new(Buffer::from_host(
@@ -447,6 +727,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     };
     drop(keys);
     let packed = builder.build(&RangeDescriptor {
+        directory_entries: 3,
         key: vec![KeyDescriptor {
             column: key,
             domain_size: 2,
@@ -457,8 +738,10 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
             kind: PayloadKind::I64,
         }],
     })?;
+    // DECODE P: diagnostic packed-source directory publishes logical host values for exact assertions.
     assert_eq!(packed.offsets().to_host()?, [0, 4, 4]);
     assert_eq!(
+        // DECODE P: diagnostic packed-source signed payload publishes logical host values for exact assertions.
         packed.payload()[0].to_host()?,
         [i64::MIN, i64::MAX, i64::MIN + 1, 0]
     );
@@ -504,6 +787,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     };
     drop(keys);
     let shifted = builder.build(&RangeDescriptor {
+        directory_entries: 4,
         key: vec![KeyDescriptor {
             column: key,
             domain_size: 3,
@@ -514,8 +798,10 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
             kind: PayloadKind::I64,
         }],
     })?;
+    // DECODE P: diagnostic shifted packed-source directory publishes logical host values for exact assertions.
     assert_eq!(shifted.offsets().to_host()?, [0, 2, 4, 4]);
     assert_eq!(
+        // DECODE P: diagnostic shifted packed-source payload publishes logical host values for exact assertions.
         shifted.payload()[0].to_host()?,
         [-base - 1, base + 1, base, 0]
     );
@@ -527,6 +813,7 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
     let values = column(&pool, &[7, 2, 7, 4])?;
     let mut descriptor = RangeDescriptor {
+        directory_entries: 0,
         key: vec![],
         selection: None,
         payload: vec![PayloadDescriptor {
@@ -534,22 +821,109 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
             kind: PayloadKind::U32,
         }],
     };
-    let builder = RangeBuilder::new(&pool)?;
+    let builder = RangeBuilder::new(&pool, &AUX)?;
     let mut workspace = RangeWorkspace::new(pool.clone(), &descriptor)?;
     let complete = builder.build_with_workspace(&descriptor, &mut workspace)?;
     assert_eq!(complete.len(), 4);
     assert_eq!(complete.domain_size(), 0);
+    // DECODE P: diagnostic keyless complete empty directory publishes logical host values for exact assertions.
     assert!(complete.offsets().to_host()?.is_empty());
+    // DECODE P: diagnostic keyless complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
-    descriptor.selection = Some(RangeSelection { column: values, start: 4, end: 8 });
+    assert_eq!(complete.offsets().bounds(), Bounds::Empty);
+    assert_eq!(complete.payload()[0].bounds(), Bounds::Inclusive { min: 2, max: 7 });
+    descriptor.selection = Some(RangeSelection {
+        column: values,
+        start: 4,
+        end: 8,
+    });
     let selected = builder.build_with_workspace(&descriptor, &mut workspace)?;
+    // DECODE P: diagnostic keyless selected payload publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [7, 7, 4]);
+    assert_eq!(selected.payload()[0].bounds(), Bounds::Inclusive { min: 2, max: 7 });
     descriptor.selection.as_mut().unwrap().start = 9;
     descriptor.selection.as_mut().unwrap().end = 10;
     let empty = builder.build_with_workspace(&descriptor, &mut workspace)?;
     assert!(empty.is_empty());
+    // DECODE P: diagnostic keyless empty directory publishes logical host values for exact assertions.
     assert!(empty.offsets().to_host()?.is_empty());
+    // DECODE P: diagnostic keyless empty payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
+    assert_eq!(empty.offsets().bounds(), Bounds::Empty);
+    assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
+    // DECODE P: diagnostic keyless retained complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
+    Ok(())
+}
+
+#[cfg(feature = "publication-counters")]
+#[test]
+fn h02_shaped_ranges_reuse_bounds_without_publication_readbacks() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let key = column(&pool, &[1, 0, 1, 0, 1])?;
+    let sources = (0..6)
+        .map(|slot| {
+            let base = 10 + slot * 10;
+            column(&pool, &[base, base + 1, base + 2, base + 3, base + 4])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let builder = RangeBuilder::new(&pool, &AUX)?;
+    let initial_readbacks = gpu_device_columns::publication_bounds_readbacks();
+    // Match h02's eight providers, including its two key-only directories.
+    for (provider, payload_count) in [1, 1, 2, 2, 0, 0, 2, 6].into_iter().enumerate() {
+        let mut descriptor = RangeDescriptor {
+            directory_entries: 4,
+            key: vec![KeyDescriptor { column: key.clone(), domain_size: 3 }],
+            selection: None,
+            payload: sources[..payload_count]
+                .iter()
+                .enumerate()
+                .map(|(slot, column)| PayloadDescriptor {
+                    column: column.clone(),
+                    kind: [PayloadKind::U32, PayloadKind::I32, PayloadKind::I64][slot % 3],
+                })
+                .collect(),
+        };
+        let mut workspace = RangeWorkspace::new(pool.clone(), &descriptor)?;
+        for (selection, order, offsets) in [
+            (None, vec![1usize, 3, 0, 2, 4], [0i64, 2, 5, 5]),
+            (Some((11, 14)), vec![1, 3, 2], [0, 2, 3, 3]),
+            (Some((20, 30)), vec![], [0, 0, 0, 0]),
+        ] {
+            descriptor.selection = selection.map(|(start, end)| RangeSelection {
+                column: sources[0].clone(),
+                start,
+                end,
+            });
+            let before = gpu_device_columns::publication_bounds_readbacks();
+            let range = builder.build_with_workspace(&descriptor, &mut workspace)?;
+            assert_eq!(
+                gpu_device_columns::publication_bounds_readbacks(),
+                before,
+                "provider {provider} with {payload_count} payloads must reuse known bounds"
+            );
+            assert_eq!(range.len(), order.len());
+            assert_eq!(range.payload().len(), payload_count);
+            assert_eq!(
+                range.offsets().bounds(),
+                Bounds::Inclusive { min: 0, max: order.len() as i64 }
+            );
+            // DECODE P: diagnostic h02-shaped directory publishes offsets to its host oracle.
+            assert_eq!(range.offsets().to_host()?, offsets);
+            for (slot, payload) in range.payload().iter().enumerate() {
+                assert_eq!(
+                    payload.bounds(),
+                    if order.is_empty() { Bounds::Empty } else { sources[slot].bounds() }
+                );
+                let expected = order.iter()
+                    .map(|&row| 10 + slot as i64 * 10 + row as i64)
+                    .collect::<Vec<_>>();
+                // DECODE P: diagnostic h02-shaped payload publishes selected rows to its host oracle.
+                assert_eq!(payload.to_host()?, expected);
+                assert_eq!(gpu_device_columns::publication_bounds_readbacks(), before);
+            }
+        }
+    }
+    assert_eq!(gpu_device_columns::publication_bounds_readbacks(), initial_readbacks);
     Ok(())
 }

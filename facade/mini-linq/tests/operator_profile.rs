@@ -3,15 +3,15 @@ use cq_storage::counters;
 
 #[test]
 fn counts_filter_join_dedup_and_final_answer() {
-    let l = [(1_i32,), (1,), (2,), (3,)];
+    let l = [(1_i32, 0_i32), (1, 1), (2, 0), (3, 0)];
     let r = [(1_i32, 10_i32), (1, 11), (2, 20), (9, 90)];
     counters::reset();
     let rows: Vec<_> = mini_linq::compile! {
         pipeline { plan = mini_linq::passes::plan(no_reduce); }
         struct ProfileJoin;
-        relation L(a:i32) = (l);
+        relation L(a:i32,witness:i32) = (l);
         relation R(a:i32,b:i32) = (r);
-        answer(a,b) :- L(a), R(a,b), if *b < 20;
+        answer(a,b) :- L(a,_), R(a,b), where b < 20;
     }
     .collect();
     assert_eq!(
@@ -57,7 +57,7 @@ fn generated_profile_handle_does_not_capture_rust_names() {
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {}
         struct Hygiene; relation R(a:i32) = (data);
-        answer(a) :- R(a), if *a > __cq_profile && *a <= __cq_profile_0;
+        answer(a) :- R(a), where a > __cq_profile && a <= __cq_profile_0;
     }
     .map(|(a,)| *a)
     .collect();
@@ -108,7 +108,7 @@ fn positional_projects_count_their_input_rows() {
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {select = mini_linq::passes::select(positional(R));}
         struct ProjectProfile; relation R(x:i64,y:i64)=(data);
-        answer(x,y) :- R(x,y), if *x >= 2;
+        answer(x,y) :- R(x,y), where x >= 2;
     }
     .collect();
     assert_eq!(rows.len(), 3);

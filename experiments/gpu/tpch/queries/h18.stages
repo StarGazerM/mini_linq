@@ -1,0 +1,43 @@
+program h18 {
+    domain CustomerName = dictionary(customer.c_name);
+    input Lineitem(l_orderkey: i64, l_linenumber: i64, l_quantity: Decimal) = table(lineitem);
+    input Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date, o_totalprice: Decimal)
+        = table(orders);
+    input Customer(c_custkey: i64, c_name: StringCode in CustomerName) = table(customer);
+    stage s0 {
+        inputs { Lineitem = Lineitem; }
+        captures [];
+        evidence {}
+        cq {
+            struct Quantities;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_quantity: Decimal);
+            relation answer(order_key: i64, sum_quantity: i64);
+            answer(order_key, sum(quantity_units)) :-
+                Lineitem(order_key, line_number, quantity),
+                let quantity_units: i64 = quantity.scaled();
+        }
+    }
+    publish Quantity = s0 owned;
+    stage s1 {
+        inputs { Quantity = Quantity; Orders = Orders; Customer = Customer; }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Quantity(order_key: i64, sum_quantity: i64);
+            relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date, o_totalprice: Decimal);
+            relation Customer(c_custkey: i64, c_name: StringCode);
+            relation answer(customer_name: StringCode, customer_key: i64, order_key: i64,
+                order_date: Date, total_price: i64, sum_quantity: i64);
+            answer(customer_name, customer_key, order_key, order_date, price_units, sum_quantity) :-
+                Quantity(order_key, sum_quantity), where sum_quantity > 30000,
+                Orders(order_key, customer_key, order_date, total_price),
+                Customer(customer_key, customer_name),
+                let price_units: i64 = total_price.scaled();
+        }
+    }
+    terminal {
+        from s1 project [column(0), column(1), column(2), column(3), column(4), column(5)]
+            dictionaries [0 = CustomerName];
+    }
+}

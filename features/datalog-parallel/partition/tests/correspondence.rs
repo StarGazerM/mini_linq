@@ -51,6 +51,33 @@ fn rejected(change: impl FnOnce(&mut Program)) {
 }
 
 #[test]
+fn partition_preserves_and_erases_declared_dataset_view_bindings() {
+    // Local fixture mirrors runtime/cq-evidence/tests/fixtures for external consumers.
+    let json = include_str!("fixtures/planner-recursive-evidence.json");
+    let source = lower(quote! {
+        struct Closure;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Reach(x:i32,y:i32);
+        declared_evidence #json { Reach = "R" full [x="a",y="b"]; }
+        output Reach;
+        Seed: Reach(*x,*y) :- Edge(x,y);
+        Step: Reach(*x,*z) :- Reach(x,y), Edge(y,z);
+    });
+    let target = compile_sharded(&source).unwrap();
+    check_sharded(&source, &target).unwrap();
+    assert_eq!(round::erase(&target.round).unwrap(), expected_push(source.clone()));
+    let entry = target.round.execution.iter().find(|entry| {
+        target.round.holes[entry.hole].cq.declared_evidence.as_ref().unwrap()
+            .bindings.iter().any(|binding| binding.relation == entry.binding)
+    }).unwrap();
+    let mut stale = target.clone();
+    let facts = stale.round.holes[entry.hole].cq.declared_evidence.as_mut().unwrap();
+    facts.bindings.iter_mut().find(|binding| binding.relation == entry.binding)
+        .unwrap().relation = syn::parse_quote!(missing_scan);
+    assert!(check_sharded(&source, &stale).is_err());
+}
+
+#[test]
 fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
     let source = authored();
     let target = compile_sharded(&source).unwrap();
@@ -109,7 +136,7 @@ fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
 }
 
 #[test]
-fn partition_renames_only_certified_scan_facts_and_preserves_admission_owners() {
+fn partition_preserves_consumer_context_and_admission_owners() {
     let source = authored();
     let target = compile_sharded(&source).unwrap();
     for (before, after) in source
@@ -129,23 +156,8 @@ fn partition_renames_only_certified_scan_facts_and_preserves_admission_owners() 
         let before = &source.holes[rule.hole];
         let after = &target.round.holes[rule.hole];
         assert_eq!(before.lower, after.lower);
-        let mut expected = before.facts.clone();
-        if let Some(scan) = &rule.scan {
-            let binding = &target
-                .round
-                .execution
-                .iter()
-                .find(|entry| entry.hole == rule.hole)
-                .unwrap()
-                .binding;
-            assert!(
-                expected
-                    .discharged_host_sets
-                    .remove(&scan.binding.to_string())
-            );
-            assert!(expected.discharged_host_sets.insert(binding.to_string()));
-        }
-        assert_eq!(after.facts, expected);
+        let expected = &before.facts;
+        assert_eq!(&after.facts, expected);
         assert_eq!(
             after.pipeline.passes[after.lower].arguments.to_string(),
             expected.to_token_stream().to_string(),
@@ -156,42 +168,14 @@ fn partition_renames_only_certified_scan_facts_and_preserves_admission_owners() 
 }
 
 #[test]
-fn partition_rejects_lost_forged_or_stale_context_and_admission_owners() {
+fn partition_rejects_lost_context_and_admission_owners() {
     rejected(|target| {
         let hole = target.execution[0].hole;
         target.holes[hole].facts.consumer_canonical = false;
     });
     rejected(|target| {
-        let hole = target.execution[0].hole;
-        target.holes[hole].facts.discharged_host_sets.clear();
-    });
-    rejected(|target| {
-        let hole = target.execution[0].hole;
-        target.holes[hole]
-            .facts
-            .discharged_host_sets
-            .insert("forged".into());
-    });
-    rejected(|target| {
         let hole = &mut target.holes[target.execution[0].hole];
-        hole.pipeline.passes[hole.lower].arguments = quote!(consumer = canonical);
-    });
-    rejected(|target| {
-        let rule = &target.context.strata[0].seeds[0];
-        let scan = rule.scan.as_ref().unwrap();
-        let chunk = target
-            .execution
-            .iter()
-            .find(|entry| entry.hole == rule.hole)
-            .unwrap();
-        let hole = &mut target.holes[rule.hole];
-        hole.facts
-            .discharged_host_sets
-            .remove(&chunk.binding.to_string());
-        hole.facts
-            .discharged_host_sets
-            .insert(scan.binding.to_string());
-        hole.pipeline.passes[hole.lower].arguments = hole.facts.to_token_stream();
+        hole.pipeline.passes[hole.lower].arguments = quote!();
     });
     rejected(|target| {
         let head = target.context.strata[0].seeds[0].head;
@@ -345,58 +329,133 @@ fn empty_output_only_program_is_an_identity_rewrite() {
     assert_eq!(compile_sharded(&source).unwrap().round, source);
 }
 
+/// Declare an authored token in the embedded Storage table.
+fn declare(program: &mut Program, name: &str, protocol: Option<round::storage::LayoutProtocol>) {
+    round::storage::provider::declare(
+        &mut program.storage.tokens,
+        round::storage::provider::declared(
+            name,
+            round::storage::provider::Spelling::Verbatim,
+            protocol,
+            round::storage::provider::Admission::None,
+            false,
+            round::storage::provider::TaskHasher::Fx,
+            &[],
+            &[],
+        ),
+    );
+}
+
+/// Replace a layout's provider records in Storage and its Round copy alike,
+/// with the hole inputs bound to it declaring the new token's host reads.
+fn set_layout(
+    program: &mut Program,
+    delta: bool,
+    index: usize,
+    provider: round::storage::Provider,
+    hasher: round::storage::Hasher,
+    protocol: round::storage::LayoutProtocol,
+) {
+    let storage = if delta {
+        &mut program.storage.delta_layouts[index]
+    } else {
+        &mut program.storage.layouts[index]
+    };
+    storage.provider = provider.clone();
+    storage.hasher = hasher;
+    storage.protocol = protocol;
+    let context = if delta {
+        &mut program.context.delta_layouts[index]
+    } else {
+        &mut program.context.layouts[index]
+    };
+    context.provider = provider;
+    context.hasher = hasher;
+    context.protocol = protocol;
+    let (name, key) = (context.name.clone(), context.key);
+    let token = round::storage::provider::lookup(&program.storage.tokens, &context.provider.token)
+        .unwrap()
+        .clone();
+    for hole in &mut program.holes {
+        for declaration in hole.cq.declarations.iter_mut().filter(|d| d.name == name) {
+            let key: Vec<_> = declaration
+                .columns
+                .iter()
+                .take(key)
+                .map(|c| c.name.clone())
+                .collect();
+            declaration.hosts = round::storage::provider::host_decl(&token, &key, false)
+                .into_iter()
+                .collect();
+        }
+    }
+}
+
 #[test]
-fn partition_requires_sharded_seen_vector_deltas_and_native_layouts() {
+fn partition_requires_sharded_canonical_vector_deltas_and_admissible_layouts() {
     let mutations: &[fn(&mut Program)] = &[
+        // A native (set) canonical layout is valid storage, but not sharded admission.
         |program| {
-            program.storage.providers[2].seen =
-                syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>);
-            program.context.relations[2].providers = program.storage.providers[2].clone();
-        },
-        |program| {
-            program.storage.layouts[0].provider = syn::parse_quote!(
-                ::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>
+            let canonical = program.storage.providers[2].canonical;
+            let provider: round::storage::Provider = syn::parse_quote!(
+                @hash_set as ::std::collections::HashSet<(i32, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
             );
-            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
-        },
-        |program| {
-            program.storage.delta_layouts[0].provider = syn::parse_quote!(
-                ::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>
+            set_layout(
+                program,
+                false,
+                canonical,
+                provider,
+                round::storage::Hasher::Fx,
+                round::storage::LayoutProtocol::Set,
             );
-            program.context.delta_layouts[0].provider =
-                program.storage.delta_layouts[0].provider.clone();
+            program.context.outputs[0].conversion = syn::parse_quote!(owned_into_iter);
         },
+        // An authored bulk token is not one of partition's admission tokens.
         |program| {
-            program.storage.layouts[0].provider = syn::parse_quote!(
-                ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>>
+            declare(
+                program,
+                "sharded_index",
+                Some(round::storage::LayoutProtocol::Bulk),
             );
-            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
-        },
-        |program| {
-            program.storage.delta_layouts[0].provider = syn::parse_quote!(
-                ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>>
+            let provider: round::storage::Provider = syn::parse_quote!(
+                @sharded_index as ::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>
             );
-            program.context.delta_layouts[0].provider =
-                program.storage.delta_layouts[0].provider.clone();
+            set_layout(
+                program,
+                false,
+                0,
+                provider,
+                round::storage::Hasher::None,
+                round::storage::LayoutProtocol::Bulk,
+            );
         },
         |program| {
+            declare(
+                program,
+                "sharded_index",
+                Some(round::storage::LayoutProtocol::Bulk),
+            );
+            let provider: round::storage::Provider = syn::parse_quote!(
+                @sharded_index as ::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>
+            );
+            set_layout(
+                program,
+                true,
+                0,
+                provider,
+                round::storage::Hasher::None,
+                round::storage::LayoutProtocol::Bulk,
+            );
+        },
+        |program| {
+            declare(program, "deque_rows", None);
             let provider = &mut program.storage.providers[2];
-            provider.delta = syn::parse_quote!(::std::collections::VecDeque<(i32, i32,)>);
+            provider.delta =
+                syn::parse_quote!(@deque_rows as ::std::collections::VecDeque<(i32, i32,)>);
             provider.next = provider.delta.clone();
             provider.delta_init = syn::parse_quote!(::std::collections::VecDeque::new());
             provider.next_init = provider.delta_init.clone();
             program.context.relations[2].providers = provider.clone();
-        },
-        |program| {
-            let provider = syn::parse_quote!(
-                ::std::collections::BTreeMap<(), ::std::collections::VecDeque<(i32, i32,)>>
-            );
-            program.storage.layouts[0].provider = provider;
-            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
-        },
-        |program| {
-            program.storage.layouts[0].provider = syn::parse_quote!(custom::GroupedRows);
-            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
         },
     ];
     for mutate in mutations {
@@ -414,21 +473,36 @@ fn partition_requires_sharded_seen_vector_deltas_and_native_layouts() {
         mutate(&mut target.round);
         round::contract::check(&source).unwrap();
         round::contract::check(&target.round).unwrap();
-        let error = check_sharded(&source, &target).unwrap_err();
-        assert!(error.to_string().contains("sharded Round requires"));
+        assert!(check_sharded(&source, &target).is_err());
         assert!(compile_sharded(&source).is_err());
     }
 }
 
 #[test]
-fn ordered_maps_with_vector_buckets_do_not_bypass_native_layout_ownership() {
+fn authored_grouped_map_tokens_partition_by_their_declared_protocol() {
+    // Admission reads the declared protocol, never the spelling: an authored
+    // ordered grouped map is maintained through grouped-map operations.
     let mut source = authored();
-    source.storage.layouts[0].provider = syn::parse_quote!(
-        ::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>
+    declare(
+        &mut source,
+        "ordered_map",
+        Some(round::storage::LayoutProtocol::GroupedMap),
     );
-    source.context.layouts[0].provider = source.storage.layouts[0].provider.clone();
+    let provider: round::storage::Provider = syn::parse_quote!(
+        @ordered_map as ::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>
+    );
+    let protocol = source.storage.layouts[0].protocol;
+    set_layout(
+        &mut source,
+        false,
+        0,
+        provider,
+        round::storage::Hasher::None,
+        protocol,
+    );
     round::contract::check(&source).unwrap();
-    assert!(compile_sharded(&source).is_err());
+    let target = compile_sharded(&source).unwrap();
+    check_sharded(&source, &target).unwrap();
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use cq_testkit::harness::{Outcome, check_refinement};
+use cq_testkit::harness::{RefinementFailure, check_refinement};
 use std::collections::BTreeSet;
 
 fn set<T: Ord>(rows: impl IntoIterator<Item = T>) -> BTreeSet<T> {
@@ -105,7 +105,7 @@ fn refutable_bindings_feed_recursive_heads_and_later_guards() {
         relation Reach(x:i32);
         output Reach;
         Reach(x) :- Seed(o), if let Some(x) = *o;
-        Reach(y) :- Reach(x), if let Some(y) = x.checked_add(1), if y <= 4;
+        Reach(y) :- Reach(x), if let Some(y) = x.checked_add(1), where y <= 4;
     };
     ascent::ascent! {
         struct Reference;
@@ -130,7 +130,7 @@ fn partial_option(value: i32) -> Option<i32> {
 }
 
 #[test]
-fn expression_panics_follow_bottom_refinement_not_match_failure() {
+fn expression_panics_violate_totality_instead_of_causing_match_failure() {
     for input in [vec![], vec![(1_i32,), (-1,)], vec![(0,)]] {
         let observation = check_refinement(
             || {
@@ -156,11 +156,14 @@ fn expression_panics_follow_bottom_refinement_not_match_failure() {
                     Result(y) :- Input(x), if let Some(y) = partial_option(*x);
                 })
             },
-        )
-        .unwrap();
+        );
         if input == [(0,)] {
-            assert!(matches!(observation.reference, Outcome::Panicked(_)));
-            assert!(matches!(observation.target, Outcome::Panicked(_)));
+            assert!(matches!(
+                observation,
+                Err(RefinementFailure::ReferencePanicked { .. })
+            ));
+        } else {
+            observation.unwrap();
         }
     }
 }

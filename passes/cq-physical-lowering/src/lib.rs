@@ -1,10 +1,9 @@
 //! IX → Physical: choose operators and retention using plan reads only.
 //! Unfiltered host renames are reusable pipe reads. Literal occurrences build
 //! filtered retained rows or keyed storage from a base scan.
-//! Meaning is bottom + Set. Opaque partial Rust bind/guard nodes retain their
-//! ancestry chain; relational steps may move earlier, never later across them.
-//! I/O, mutation and evaluation counts are outside the denotation.
-//! Canonicality follows from plan operators, checked host_set facts, and canon boundaries.
+//! Opaque, total Rust bind/guard expressions retain their recorded placement.
+//! Lowering chooses representations without reinterpreting Rust syntax.
+//! Canonicality follows from plan operators, the input-set contract, and canon boundaries.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -18,10 +17,8 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Actual anti operators prove disjointness; origin flags and literals prove nothing.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,6 +48,7 @@ pub fn context(arguments: proc_macro2::TokenStream) -> syn::Result<physical::Con
 }
 
 /// Lower under explicit facts established by the invoking compiler.
+/// Formal rule PH-Lower: Preserve RA erasure and recorded IX demands under the supplied context facts.
 pub fn compile_with(
     source: &ix::Program,
     arguments: proc_macro2::TokenStream,
@@ -70,8 +68,6 @@ pub fn compile_with(
     let (operators, reads) = operators(source, &info, &operations)?;
     let mut modes = modes(&operations, &reads);
     fuse_modes(&operations, &operators, &reads, &mut modes);
-    let disjoint = ix::ra::disjoint_unions(&source.ra)?;
-    let unique = canonical(&info, &operations, &returned, &disjoint, &packet.host_sets);
     let group_inputs: BTreeSet<_> = operations
         .iter()
         .filter_map(|(_, op)| match op {
@@ -83,7 +79,8 @@ pub fn compile_with(
         .iter()
         .zip(modes)
         .zip(operators)
-        .map(|(((name, _op), mode), operator)| physical::Definition {
+        .map(|(((name, _), mode), operator)| {
+            physical::Definition {
             name: name.clone(),
             eq_token: Default::default(),
             mode: if matches!(mode, physical::Mode::Let(_))
@@ -93,33 +90,73 @@ pub fn compile_with(
             } else {
                 mode
             },
-            canon: ((group_inputs.contains(&symbol_name(name)) && !unique.contains(&symbol_name(name)))
-                || (name == &returned && (!consumer_canonical || reads[&symbol_name(name)].count > 1) && !unique.contains(&symbol_name(name)) && !disjoint.contains(&symbol_name(name)))
-                || matches!(_op, Op::Union(union) if !disjoint.contains(&symbol_name(name)) && union.origin.as_ref().is_none_or(|o| !o.interface.is_empty())))
-                .then(Default::default),
+            canon: None,
             operator,
             semi_token: Default::default(),
+            }
         })
         .collect();
-    let target = physical::Program {
+    let mut target = physical::Program {
         physical_token: Default::default(),
         brace: Default::default(),
         program: physical::Body {
             declarations: source.ra.plan.declarations.clone(),
-            host_sets: packet.host_sets,
+            captures: source.ra.plan.captures.clone(),
             consumer_canonical: packet.consumer_canonical,
             definitions,
             return_token: Default::default(),
-            return_canon: (!consumer_canonical
-                && !unique.contains(&symbol_name(&returned))
-                && disjoint.contains(&symbol_name(&returned)))
-            .then(Default::default),
+            return_canon: None,
+            return_dedup: None,
             returned,
             as_token: Default::default(),
             head: source.ra.plan.output.head.clone(),
             return_semi: Default::default(),
         },
     };
+    let headings = info.iter().map(|(name, row)| {
+        (name.clone(), row.heading.iter().cloned().collect())
+    }).collect();
+    let disjoint = physical::disjoint_unions(&target, &headings);
+    let mut boundaries = Vec::with_capacity(target.program.definitions.len());
+    let unique = physical::uniqueness(&target, &headings, &disjoint, |definition, inherited| {
+        let name = symbol_name(&definition.name);
+        let canon = inherited.is_none()
+            && (group_inputs.contains(&name)
+                || (definition.name == target.program.returned
+                    && (!consumer_canonical || reads[&name].count > 1)
+                    && !disjoint.contains(&name))
+                || matches!(&definition.operator, physical::Operator::Union(union)
+                    if !disjoint.contains(&name)
+                        && union.origin.as_ref().is_none_or(|origin| !origin.interface.is_empty())));
+        boundaries.push(canon);
+        canon
+    });
+    for (definition, canon) in target.program.definitions.iter_mut().zip(boundaries) {
+        if canon {
+            let name = symbol_name(&definition.name);
+            // PH-Canon: a canon result is stored in its canonical index.
+            definition.canon = Some(Default::default());
+            definition.mode = if info[&name].heading.is_empty() {
+                physical::Mode::Exists(Default::default())
+            } else {
+                physical::Mode::Let(Default::default())
+            };
+        }
+    }
+    target.program.return_canon = (!consumer_canonical
+        && !unique.contains_key(&symbol_name(&target.program.returned))
+        && disjoint.contains(&symbol_name(&target.program.returned)))
+    .then(Default::default);
+    // Formal rule PH-HeadDedup: record the dedup obligation of computed
+    // answers that may collapse, unless the return is already canonicalized;
+    // a consumer canonical boundary owns answer identity.
+    target.program.return_dedup = (!consumer_canonical
+        && target.program.return_canon.is_none()
+        && physical::head_collapses(
+            &target.program,
+            info[&symbol_name(&target.program.returned)].bindings.keys(),
+        ))
+    .then(Default::default);
     physical::contract::check(&target)?;
     check(source, &target)?;
     Ok(target)
@@ -130,12 +167,13 @@ fn operators(
     info: &ix::ra::Analysis,
     operations: &[(Ident, Op)],
 ) -> syn::Result<(Vec<physical::Operator>, BTreeMap<String, Reads>)> {
+    let requirements = ix::read_requirements(source, info)?;
     let mut reads: BTreeMap<String, Reads> = operations
         .iter()
         .map(|(id, _)| (symbol_name(id), Reads::default()))
         .collect();
     let mut operators = Vec::new();
-    for (_, op) in operations {
+    for (name, op) in operations {
         let operator = match op {
             Op::Union(union) => {
                 for operand in &union.operands {
@@ -184,7 +222,18 @@ fn operators(
                 };
                 let lh = &info[&symbol_name(left)];
                 let rh = &info[&symbol_name(right)];
-                let columns: Vec<String> = lh.heading.intersection(&rh.heading).cloned().collect();
+                let requirement = &requirements[&symbol_name(name)].requirement;
+                let mut ordinals = requirement.columns.iter().peekable();
+                let columns: Vec<String> = rh
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ordinal, column)| {
+                        ordinals
+                            .next_if(|recorded| recorded.index as usize == ordinal)
+                            .map(|_| column.clone())
+                    })
+                    .collect();
                 scan(&mut reads, left);
                 let keyed = physical::Keyed {
                     choice: Some(if matches!(op, Op::Semijoin(_)) {
@@ -208,12 +257,18 @@ fn operators(
             }
             Op::Select(s) => {
                 scan(&mut reads, &s.input);
-                if s.condition.point_columns().is_some() {
-                    physical::Operator::Point(Default::default(), s.clone())
-                } else if s.condition.range_bounds().is_some() {
-                    physical::Operator::Range(Default::default(), s.clone())
-                } else {
-                    physical::Operator::Select(s.clone())
+                match requirements
+                    .get(&symbol_name(name))
+                    .map(|index| &index.requirement.supply)
+                {
+                    Some(ix::Supply::Const(_)) => {
+                        physical::Operator::Point(Default::default(), s.clone())
+                    }
+                    Some(ix::Supply::Range(_)) => {
+                        physical::Operator::Range(Default::default(), s.clone())
+                    }
+                    None => physical::Operator::Select(s.clone()),
+                    Some(ix::Supply::Stream(_)) => unreachable!("checked selection supply"),
                 }
             }
             Op::Bind(b) => {
@@ -321,69 +376,6 @@ fn fuse_modes(
     }
 }
 
-fn canonical(
-    info: &ix::ra::Analysis,
-    operations: &[(Ident, Op)],
-    returned: &Ident,
-    disjoint: &BTreeSet<String>,
-    host_sets: &[physical::HostSet],
-) -> BTreeSet<String> {
-    let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut inherited = BTreeSet::new();
-    for (name, op) in operations {
-        let name = symbol_name(name);
-        let heading: Vec<_> = info[&name].heading.iter().cloned().collect();
-        let key = match op {
-            Op::Union(union) => {
-                if !disjoint.contains(&name)
-                    && union
-                        .origin
-                        .as_ref()
-                        .is_none_or(|o| !o.interface.is_empty())
-                {
-                    Some(heading.clone())
-                } else {
-                    None
-                }
-            }
-            Op::Anti(anti) => unique.get(&symbol_name(&anti.left)).cloned(),
-            Op::Unit(_) => Some(Vec::new()),
-            Op::Rename(rename) => host_sets
-                .iter()
-                .any(|fact| symbol_name(&fact.relation) == symbol_name(&rename.relation))
-                .then(|| heading.clone()),
-            Op::NaturalJoin(j) => match (
-                unique.get(&symbol_name(&j.left)),
-                unique.get(&symbol_name(&j.right)),
-            ) {
-                (Some(l), Some(r)) => {
-                    let mut key: Vec<_> = l.iter().chain(r).cloned().collect();
-                    key.sort();
-                    key.dedup();
-                    Some(key)
-                }
-                _ => None,
-            },
-            Op::Semijoin(j) => unique.get(&symbol_name(&j.left)).cloned(),
-            Op::Select(s) => unique.get(&symbol_name(&s.input)).cloned(),
-            Op::Bind(b) if b.for_token.is_none() => unique.get(&symbol_name(&b.input)).cloned(),
-            Op::Bind(_) => None,
-            Op::Guard(g) => unique.get(&symbol_name(&g.input)).cloned(),
-            Op::Project(p) => unique
-                .get(&symbol_name(&p.input))
-                .filter(|key| key.iter().all(|c| heading.contains(c)))
-                .cloned(),
-            Op::Group(group) => Some(group.keys.iter().map(symbol_name).collect()),
-        };
-        if let Some(key) = key {
-            inherited.insert(name.clone());
-            unique.insert(name, key);
-        } else if name == symbol_name(returned) {
-            unique.insert(name, heading);
-        }
-    }
-    inherited
-}
 
 fn scan(reads: &mut BTreeMap<String, Reads>, operand: &Ident) {
     reads
@@ -409,6 +401,7 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
         relational_brace: Default::default(),
         plan: ra::Plan {
             declarations: target.program.declarations.clone(),
+            captures: target.program.captures.clone(),
             definitions: target
                 .program
                 .definitions

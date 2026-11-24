@@ -1,4 +1,4 @@
-//! Joining triangle kernel: elimination coarse planner (224 configurations).
+//! Joining triangle kernel: elimination coarse planner (112 configurations).
 #![recursion_limit = "512"]
 #[macro_use]
 mod support;

@@ -1,0 +1,3670 @@
+{
+  "stage": "P5 independent salvage; no join machinery",
+  "baseline_revision": "1270d38b",
+  "historical_evidence": {
+    "path": "experiments/storage-bench/results/p5-joins-q06.json",
+    "sha256": "c6e67d3eb3b9a1248230e8a3dd0087926ad3f26f856ee1a4c0f67ef4f8543b35",
+    "current_measurement": false,
+    "git_blob": "7bb33299b7faad6e7da0a6c53c917e0bd1e4bdf5"
+  },
+  "protocol": {
+    "process_pairs": 5,
+    "warmups_per_process": 5,
+    "timed_samples_per_process": 1,
+    "workers": 24,
+    "sample_lock": "flock timing-gate then exclusive timing lock, released after each fresh process",
+    "query_time": "resident query only; excludes loading and exact-answer comparison",
+    "confidence_interval": "paired bootstrap geometric mean ratio, resampling five process pairs"
+  },
+  "harness": {
+    "worker_source": "use std::{error::Error, path::Path, time::Instant};\n\nfn usage() -> libc::rusage {\n    let mut usage = std::mem::MaybeUninit::uninit();\n    assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) }, 0);\n    unsafe { usage.assume_init() }\n}\n\nfn main() -> Result<(), Box<dyn Error>> {\n    let args: Vec<_> = std::env::args().skip(1).collect();\n    assert_eq!(args.len(), 4, \"DATA CONFIG METRICS ORACLE\");\n    assert!(!cfg!(debug_assertions));\n    assert!(query::CONFIGS.contains(&args[1].as_str()));\n    let witness: serde_json::Value = serde_json::from_slice(&std::fs::read(&args[3])?)?;\n    let expected: std::collections::BTreeSet<Vec<String>> = serde_json::from_value(witness[\"rows\"].clone())?;\n    let decimals = serde_json::from_value(witness[\"decimal_columns\"].clone())?;\n    let load_start = Instant::now();\n    let data = query::load(Path::new(&args[0]), &args[1])?;\n    let load_ms = load_start.elapsed().as_secs_f64() * 1000.;\n    for _ in 0..5 {\n        let answers = query::run(std::hint::black_box(&data), &args[1]);\n        assert_eq!(comparison::normalize_set(query::canonical(&answers), &decimals), expected);\n    }\n    let mut samples = Vec::new();\n    for sample in 0..1 {\n        let before = usage();\n        let start = Instant::now();\n        let answer = query::run(std::hint::black_box(&data), &args[1]);\n        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.;\n        let after = usage();\n        std::hint::black_box(&answer);\n        assert_eq!(comparison::normalize_set(query::canonical(&answer), &decimals), expected);\n        samples.push(serde_json::json!({\"sample\":sample,\"elapsed_ms\":elapsed_ms,\n            \"minor_faults\":after.ru_minflt-before.ru_minflt,\"major_faults\":after.ru_majflt-before.ru_majflt,\n            \"peak_rss_kib\":after.ru_maxrss,\"exact\":true}));\n    }\n    let mut times: Vec<_> = samples.iter().map(|v| v[\"elapsed_ms\"].as_f64().unwrap()).collect();\n    times.sort_by(f64::total_cmp);\n    let process = usage();\n    std::fs::write(&args[2], serde_json::to_vec_pretty(&serde_json::json!({\n        \"query\":query::NAME,\"config\":args[1],\"load_ms\":load_ms,\"warmups\":5,\"samples\":samples,\n        \"median_ms\":times[times.len()/2],\"answer\":expected,\"all_exact\":true,\n        \"process_minor_faults\":process.ru_minflt,\"process_major_faults\":process.ru_majflt,\n        \"process_peak_rss_kib\":process.ru_maxrss\n    }))?)?;\n    Ok(())\n}\n",
+    "campaign_source": "#!/usr/bin/env python3\nimport argparse, hashlib, json, math, os, random, statistics, subprocess\nfrom pathlib import Path\n\nSTATE = Path(__file__).resolve().parent\nDATA = Path('/data/mini_linq/features/workloads/target/bench/data/tpch-1/tpch_q06')\nORACLE = Path('/data/mini_linq/features/workloads/target/bench/verification/sf-1/tpch_q06/default/oracle.json')\nCONFIGS = ['default', 'blocks-plain', 'blocks-bytes', 'par', 'blocks-plain-par', 'blocks-bytes-par']\nCOMPARISONS = [(f'branch-vs-main/{c}', ('baseline', c), ('candidate', c)) for c in CONFIGS]\nfor variant in ['baseline', 'candidate']:\n    for suffix, row in [('', 'default'), ('-par', 'par')]:\n        for family in ['plain', 'bytes']:\n            COMPARISONS.append((f'{variant}/{family}{suffix}-vs-row', (variant, row), (variant, f'blocks-{family}{suffix}')))\n\ndef bootstrap(pairs):\n    logs = [math.log(p['right']['median_ms'] / p['left']['median_ms']) for p in pairs]\n    rng = random.Random(2119)\n    draws = sorted(math.exp(statistics.mean(rng.choices(logs, k=len(logs)))) for _ in range(20000))\n    return {'geomean_ratio': math.exp(statistics.mean(logs)), 'ci95': [draws[499], draws[19499]]}\n\ndef sample(side, path):\n    variant, config = side\n    binary = STATE / (variant + '-build') / 'release/p5-q06'\n    command = ['flock', '/tmp/mini_linq-timing-gate.lock', 'flock', '-x', '/tmp/mini_linq-timing.lock', 'timeout', '100', str(binary), str(DATA), config, str(path), str(ORACLE)]\n    subprocess.run(command, env=dict(os.environ, RAYON_NUM_THREADS='24'), check=True)\n    result = json.loads(path.read_text())\n    assert result['all_exact'] and len(result['samples']) == 1 and result['warmups'] == 5\n    return result\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument('comparison', type=int)\n    args = parser.parse_args()\n    label, left, right = COMPARISONS[args.comparison]\n    directory = STATE / 'samples' / str(args.comparison)\n    directory.mkdir(parents=True, exist_ok=True)\n    pairs = []\n    for pair in range(5):\n        values = {}\n        order = [('left', left), ('right', right)]\n        if pair % 2: order.reverse()\n        for name, side in order:\n            values[name] = sample(side, directory / f'{pair}-{name}.json')\n        pairs.append(dict(pair=pair, order=[name for name, _ in order], **values))\n    result = dict(comparison=label, left=left, right=right, pairs=pairs, **bootstrap(pairs))\n    for side in ['left', 'right']:\n        result[side + '_resident_median_ms'] = statistics.median(p[side]['median_ms'] for p in pairs)\n        result[side + '_load_median_ms'] = statistics.median(p[side]['load_ms'] for p in pairs)\n    (directory / 'comparison.json').write_text(json.dumps(result, indent=2) + '\\n')\n    print(json.dumps({k:v for k,v in result.items() if k != 'pairs'}))\n\nif __name__ == '__main__': main()\n",
+    "files": {
+      "baseline": {
+        "Cargo.toml": "4679aeae372a9aae077ffc574dde15dc359fa5e5f3c55dc00ec1746d66923299",
+        "Cargo.lock": "cb3ab5482fd2633bfcb12ea0e5d0c4dd7adf4a856bf936b491dba2b40b9491db",
+        "src/main.rs": "741714b72dc76803e373e082c0e9d3498b6bcead4d451b03c336f2b8a9d2fba9"
+      },
+      "candidate": {
+        "Cargo.toml": "229e725f41b1e3eb74c2f634a71e0e5e49df8ae114b932a086fc5d64efcf5824",
+        "Cargo.lock": "cb3ab5482fd2633bfcb12ea0e5d0c4dd7adf4a856bf936b491dba2b40b9491db",
+        "src/main.rs": "8d0ad111a9be14a8547ba09c74f23484bbae2de9e3b754e59758d74072b735f3"
+      }
+    }
+  },
+  "measurements": [
+    {
+      "comparison": "branch-vs-main/default",
+      "left": [
+        "baseline",
+        "default"
+      ],
+      "right": [
+        "candidate",
+        "default"
+      ],
+      "pairs": [
+        {
+          "pair": 0,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 564.295334,
+            "median_ms": 22.774199,
+            "process_major_faults": 0,
+            "process_minor_faults": 73339,
+            "process_peak_rss_kib": 296360,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 22.774199,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296360,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 556.918031,
+            "median_ms": 23.353008000000003,
+            "process_major_faults": 0,
+            "process_minor_faults": 73341,
+            "process_peak_rss_kib": 296360,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 23.353008000000003,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296360,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 1,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 562.345058,
+            "median_ms": 23.393425999999998,
+            "process_major_faults": 0,
+            "process_minor_faults": 73341,
+            "process_peak_rss_kib": 296356,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 23.393425999999998,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296356,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 566.761608,
+            "median_ms": 22.812433,
+            "process_major_faults": 0,
+            "process_minor_faults": 73342,
+            "process_peak_rss_kib": 296552,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 22.812433,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296552,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 2,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 562.0599010000001,
+            "median_ms": 22.80109,
+            "process_major_faults": 0,
+            "process_minor_faults": 73340,
+            "process_peak_rss_kib": 296360,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 22.80109,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296360,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 564.944057,
+            "median_ms": 23.383607,
+            "process_major_faults": 0,
+            "process_minor_faults": 73340,
+            "process_peak_rss_kib": 296360,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 23.383607,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296360,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 3,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 560.695919,
+            "median_ms": 23.137455000000003,
+            "process_major_faults": 0,
+            "process_minor_faults": 73340,
+            "process_peak_rss_kib": 296380,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 23.137455000000003,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296380,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 568.173253,
+            "median_ms": 22.745894999999997,
+            "process_major_faults": 0,
+            "process_minor_faults": 73340,
+            "process_peak_rss_kib": 296360,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 22.745894999999997,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296360,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 4,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 556.9098759999999,
+            "median_ms": 22.711128000000002,
+            "process_major_faults": 0,
+            "process_minor_faults": 73340,
+            "process_peak_rss_kib": 296356,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 22.711128000000002,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296356,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "default",
+            "load_ms": 557.9253309999999,
+            "median_ms": 23.208421,
+            "process_major_faults": 0,
+            "process_minor_faults": 73342,
+            "process_peak_rss_kib": 296360,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 23.208421,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296360,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        }
+      ],
+      "geomean_ratio": 1.0231032309126875,
+      "ci95": [
+        1.019811936611806,
+        1.0254894350927237
+      ],
+      "left_resident_median_ms": 22.774199,
+      "left_load_median_ms": 564.295334,
+      "right_resident_median_ms": 23.353008000000003,
+      "right_load_median_ms": 560.695919
+    },
+    {
+      "comparison": "branch-vs-main/blocks-plain",
+      "left": [
+        "baseline",
+        "blocks-plain"
+      ],
+      "right": [
+        "candidate",
+        "blocks-plain"
+      ],
+      "pairs": [
+        {
+          "pair": 0,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 673.574814,
+            "median_ms": 38.201865,
+            "process_major_faults": 0,
+            "process_minor_faults": 68881,
+            "process_peak_rss_kib": 272660,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.201865,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272660,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 664.65198,
+            "median_ms": 38.590709000000004,
+            "process_major_faults": 0,
+            "process_minor_faults": 68882,
+            "process_peak_rss_kib": 272368,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.590709000000004,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272368,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 1,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 663.6053459999999,
+            "median_ms": 38.756136,
+            "process_major_faults": 0,
+            "process_minor_faults": 68882,
+            "process_peak_rss_kib": 272656,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.756136,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272656,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 670.755654,
+            "median_ms": 38.084329,
+            "process_major_faults": 0,
+            "process_minor_faults": 68880,
+            "process_peak_rss_kib": 272472,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.084329,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272472,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 2,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 669.288392,
+            "median_ms": 38.978522,
+            "process_major_faults": 0,
+            "process_minor_faults": 68883,
+            "process_peak_rss_kib": 272468,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.978522,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272468,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 657.0683819999999,
+            "median_ms": 38.066916,
+            "process_major_faults": 0,
+            "process_minor_faults": 68879,
+            "process_peak_rss_kib": 272464,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.066916,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272464,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 3,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 659.787361,
+            "median_ms": 38.466691999999995,
+            "process_major_faults": 0,
+            "process_minor_faults": 68883,
+            "process_peak_rss_kib": 272660,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.466691999999995,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272660,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 669.517361,
+            "median_ms": 38.520294,
+            "process_major_faults": 0,
+            "process_minor_faults": 68883,
+            "process_peak_rss_kib": 272552,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.520294,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272552,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 4,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 666.836014,
+            "median_ms": 37.569733,
+            "process_major_faults": 0,
+            "process_minor_faults": 68882,
+            "process_peak_rss_kib": 272468,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 37.569733,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272468,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain",
+            "load_ms": 657.533423,
+            "median_ms": 38.63778,
+            "process_major_faults": 0,
+            "process_minor_faults": 68882,
+            "process_peak_rss_kib": 272656,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 38.63778,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 272656,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        }
+      ],
+      "geomean_ratio": 1.006136251360363,
+      "ci95": [
+        0.9899030735230329,
+        1.0204387128762151
+      ],
+      "left_resident_median_ms": 38.201865,
+      "left_load_median_ms": 669.517361,
+      "right_resident_median_ms": 38.590709000000004,
+      "right_load_median_ms": 659.787361
+    },
+    {
+      "comparison": "branch-vs-main/blocks-bytes",
+      "left": [
+        "baseline",
+        "blocks-bytes"
+      ],
+      "right": [
+        "candidate",
+        "blocks-bytes"
+      ],
+      "pairs": [
+        {
+          "pair": 0,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 639.2572909999999,
+            "median_ms": 23.377776,
+            "process_major_faults": 0,
+            "process_minor_faults": 46609,
+            "process_peak_rss_kib": 184856,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 23.377776,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184856,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 630.96709,
+            "median_ms": 26.236201,
+            "process_major_faults": 0,
+            "process_minor_faults": 46611,
+            "process_peak_rss_kib": 184860,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 26.236201,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184860,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 1,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 655.7758970000001,
+            "median_ms": 29.112852,
+            "process_major_faults": 0,
+            "process_minor_faults": 46613,
+            "process_peak_rss_kib": 184860,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 29.112852,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184860,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 637.507178,
+            "median_ms": 25.426821,
+            "process_major_faults": 0,
+            "process_minor_faults": 46610,
+            "process_peak_rss_kib": 184860,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 25.426821,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184860,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 2,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 637.440521,
+            "median_ms": 23.017325000000003,
+            "process_major_faults": 0,
+            "process_minor_faults": 46611,
+            "process_peak_rss_kib": 184876,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 23.017325000000003,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184876,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 628.6953570000001,
+            "median_ms": 32.018719000000004,
+            "process_major_faults": 0,
+            "process_minor_faults": 46663,
+            "process_peak_rss_kib": 184856,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 32.018719000000004,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 33,
+                "peak_rss_kib": 184856,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 3,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 652.552151,
+            "median_ms": 31.132692,
+            "process_major_faults": 0,
+            "process_minor_faults": 46608,
+            "process_peak_rss_kib": 184856,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 31.132692,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184856,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 644.108735,
+            "median_ms": 24.900413,
+            "process_major_faults": 0,
+            "process_minor_faults": 46608,
+            "process_peak_rss_kib": 184860,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 24.900413,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184860,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 4,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 638.4071730000001,
+            "median_ms": 24.568406,
+            "process_major_faults": 0,
+            "process_minor_faults": 46609,
+            "process_peak_rss_kib": 184832,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 24.568406,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184832,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes",
+            "load_ms": 629.549634,
+            "median_ms": 24.634021999999998,
+            "process_major_faults": 0,
+            "process_minor_faults": 46612,
+            "process_peak_rss_kib": 184856,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 24.634021999999998,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 184856,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        }
+      ],
+      "geomean_ratio": 1.1751183366740867,
+      "ci95": [
+        1.0728079710582374,
+        1.2868458800459346
+      ],
+      "left_resident_median_ms": 24.568406,
+      "left_load_median_ms": 638.4071730000001,
+      "right_resident_median_ms": 29.112852,
+      "right_load_median_ms": 630.96709
+    },
+    {
+      "comparison": "branch-vs-main/par",
+      "left": [
+        "baseline",
+        "par"
+      ],
+      "right": [
+        "candidate",
+        "par"
+      ],
+      "pairs": [
+        {
+          "pair": 0,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 562.905773,
+            "median_ms": 10.085821,
+            "process_major_faults": 0,
+            "process_minor_faults": 80653,
+            "process_peak_rss_kib": 315724,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.085821,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 39,
+                "peak_rss_kib": 315724,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 566.294495,
+            "median_ms": 10.587784,
+            "process_major_faults": 0,
+            "process_minor_faults": 81033,
+            "process_peak_rss_kib": 317232,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.587784,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 175,
+                "peak_rss_kib": 317232,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 1,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 569.534792,
+            "median_ms": 9.594541,
+            "process_major_faults": 0,
+            "process_minor_faults": 81434,
+            "process_peak_rss_kib": 318884,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 9.594541,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 111,
+                "peak_rss_kib": 318884,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 565.108823,
+            "median_ms": 11.807349,
+            "process_major_faults": 0,
+            "process_minor_faults": 81183,
+            "process_peak_rss_kib": 317780,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 11.807349,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 1099,
+                "peak_rss_kib": 317780,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 2,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 559.97037,
+            "median_ms": 10.146057,
+            "process_major_faults": 0,
+            "process_minor_faults": 82662,
+            "process_peak_rss_kib": 323952,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.146057,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 33,
+                "peak_rss_kib": 323952,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 561.214112,
+            "median_ms": 11.292864,
+            "process_major_faults": 0,
+            "process_minor_faults": 82431,
+            "process_peak_rss_kib": 322612,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 11.292864,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 1075,
+                "peak_rss_kib": 322612,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 3,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 564.5063799999999,
+            "median_ms": 9.860189,
+            "process_major_faults": 0,
+            "process_minor_faults": 79798,
+            "process_peak_rss_kib": 312232,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 9.860189,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 47,
+                "peak_rss_kib": 312232,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 560.9032470000001,
+            "median_ms": 9.539795,
+            "process_major_faults": 0,
+            "process_minor_faults": 82395,
+            "process_peak_rss_kib": 322328,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 9.539795,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 144,
+                "peak_rss_kib": 322328,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 4,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 568.296421,
+            "median_ms": 9.665296,
+            "process_major_faults": 0,
+            "process_minor_faults": 79891,
+            "process_peak_rss_kib": 312436,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 9.665296,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 53,
+                "peak_rss_kib": 312436,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "par",
+            "load_ms": 577.858568,
+            "median_ms": 9.862924,
+            "process_major_faults": 0,
+            "process_minor_faults": 82187,
+            "process_peak_rss_kib": 321584,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 9.862924,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 43,
+                "peak_rss_kib": 321584,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        }
+      ],
+      "geomean_ratio": 1.0002805607901526,
+      "ci95": [
+        0.8951585220018938,
+        1.0777832381350545
+      ],
+      "left_resident_median_ms": 10.085821,
+      "left_load_median_ms": 562.905773,
+      "right_resident_median_ms": 9.862924,
+      "right_load_median_ms": 566.294495
+    },
+    {
+      "comparison": "branch-vs-main/blocks-plain-par",
+      "left": [
+        "baseline",
+        "blocks-plain-par"
+      ],
+      "right": [
+        "candidate",
+        "blocks-plain-par"
+      ],
+      "pairs": [
+        {
+          "pair": 0,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 673.828721,
+            "median_ms": 10.220289000000001,
+            "process_major_faults": 0,
+            "process_minor_faults": 77823,
+            "process_peak_rss_kib": 297732,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.220289000000001,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 22,
+                "peak_rss_kib": 297732,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 661.654589,
+            "median_ms": 10.17896,
+            "process_major_faults": 0,
+            "process_minor_faults": 78703,
+            "process_peak_rss_kib": 302028,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.17896,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 72,
+                "peak_rss_kib": 302028,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 1,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 656.621026,
+            "median_ms": 12.909892,
+            "process_major_faults": 0,
+            "process_minor_faults": 78327,
+            "process_peak_rss_kib": 300384,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 12.909892,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 993,
+                "peak_rss_kib": 300384,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 668.423145,
+            "median_ms": 13.2796,
+            "process_major_faults": 0,
+            "process_minor_faults": 77335,
+            "process_peak_rss_kib": 296260,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 13.2796,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 30,
+                "peak_rss_kib": 296260,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 2,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 668.974732,
+            "median_ms": 10.937924,
+            "process_major_faults": 0,
+            "process_minor_faults": 77130,
+            "process_peak_rss_kib": 296436,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.937924,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 0,
+                "peak_rss_kib": 296436,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 661.610394,
+            "median_ms": 11.255051,
+            "process_major_faults": 0,
+            "process_minor_faults": 76341,
+            "process_peak_rss_kib": 292564,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 11.255051,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 20,
+                "peak_rss_kib": 292564,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 3,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 658.97703,
+            "median_ms": 10.139574999999999,
+            "process_major_faults": 0,
+            "process_minor_faults": 77416,
+            "process_peak_rss_kib": 296244,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.139574999999999,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 486,
+                "peak_rss_kib": 296244,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 700.73173,
+            "median_ms": 11.073113000000001,
+            "process_major_faults": 0,
+            "process_minor_faults": 78291,
+            "process_peak_rss_kib": 300308,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 11.073113000000001,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 495,
+                "peak_rss_kib": 300308,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 4,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 668.033439,
+            "median_ms": 13.982816999999999,
+            "process_major_faults": 0,
+            "process_minor_faults": 77904,
+            "process_peak_rss_kib": 298656,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 13.982816999999999,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 1034,
+                "peak_rss_kib": 298656,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-plain-par",
+            "load_ms": 664.675016,
+            "median_ms": 13.382256,
+            "process_major_faults": 0,
+            "process_minor_faults": 78395,
+            "process_peak_rss_kib": 300372,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 13.382256,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 1020,
+                "peak_rss_kib": 300372,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        }
+      ],
+      "geomean_ratio": 0.9732289484847348,
+      "ci95": [
+        0.9394744861742886,
+        1.0058716910485312
+      ],
+      "left_resident_median_ms": 11.073113000000001,
+      "left_load_median_ms": 668.974732,
+      "right_resident_median_ms": 11.255051,
+      "right_load_median_ms": 661.610394
+    },
+    {
+      "comparison": "branch-vs-main/blocks-bytes-par",
+      "left": [
+        "baseline",
+        "blocks-bytes-par"
+      ],
+      "right": [
+        "candidate",
+        "blocks-bytes-par"
+      ],
+      "pairs": [
+        {
+          "pair": 0,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 661.10737,
+            "median_ms": 8.7747,
+            "process_major_faults": 0,
+            "process_minor_faults": 54582,
+            "process_peak_rss_kib": 205996,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 8.7747,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 11,
+                "peak_rss_kib": 205996,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 650.001194,
+            "median_ms": 11.757565,
+            "process_major_faults": 0,
+            "process_minor_faults": 56442,
+            "process_peak_rss_kib": 213748,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 11.757565,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 1001,
+                "peak_rss_kib": 213748,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 1,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 649.014894,
+            "median_ms": 8.08592,
+            "process_major_faults": 0,
+            "process_minor_faults": 54435,
+            "process_peak_rss_kib": 206580,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 8.08592,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 35,
+                "peak_rss_kib": 206580,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 642.655632,
+            "median_ms": 8.326231,
+            "process_major_faults": 0,
+            "process_minor_faults": 56016,
+            "process_peak_rss_kib": 212700,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 8.326231,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 75,
+                "peak_rss_kib": 212700,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 2,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 647.082653,
+            "median_ms": 7.6791409999999996,
+            "process_major_faults": 0,
+            "process_minor_faults": 55591,
+            "process_peak_rss_kib": 210084,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 7.6791409999999996,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 61,
+                "peak_rss_kib": 210084,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 646.008826,
+            "median_ms": 7.023605,
+            "process_major_faults": 0,
+            "process_minor_faults": 55765,
+            "process_peak_rss_kib": 212728,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 7.023605,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 26,
+                "peak_rss_kib": 212728,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 3,
+          "order": [
+            "right",
+            "left"
+          ],
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 648.556436,
+            "median_ms": 12.098507,
+            "process_major_faults": 0,
+            "process_minor_faults": 56020,
+            "process_peak_rss_kib": 212628,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 12.098507,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 1034,
+                "peak_rss_kib": 212628,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 660.34488,
+            "median_ms": 7.351173,
+            "process_major_faults": 0,
+            "process_minor_faults": 54884,
+            "process_peak_rss_kib": 208424,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 7.351173,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 84,
+                "peak_rss_kib": 208424,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        },
+        {
+          "pair": 4,
+          "order": [
+            "left",
+            "right"
+          ],
+          "left": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 654.1161880000001,
+            "median_ms": 7.573509,
+            "process_major_faults": 0,
+            "process_minor_faults": 54492,
+            "process_peak_rss_kib": 207184,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 7.573509,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 61,
+                "peak_rss_kib": 207184,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          },
+          "right": {
+            "all_exact": true,
+            "answer": [
+              [
+                "123141078.2283"
+              ]
+            ],
+            "config": "blocks-bytes-par",
+            "load_ms": 633.2659040000001,
+            "median_ms": 10.151427,
+            "process_major_faults": 0,
+            "process_minor_faults": 56452,
+            "process_peak_rss_kib": 215252,
+            "query": "tpch_q06",
+            "samples": [
+              {
+                "elapsed_ms": 10.151427,
+                "exact": true,
+                "major_faults": 0,
+                "minor_faults": 1029,
+                "peak_rss_kib": 215252,
+                "sample": 0
+              }
+            ],
+            "warmups": 5
+          }
+        }
+      ],
+      "geomean_ratio": 1.2129523045801067,
+      "ci95": [
+        0.999195913901018,
+        1.4549868121207672
+      ],
+      "left_resident_median_ms": 7.6791409999999996,
+      "left_load_median_ms": 654.1161880000001,
+      "right_resident_median_ms": 10.151427,
+      "right_load_median_ms": 648.556436
+    }
+  ],
+  "gates": [
+    {
+      "gate": "runtime lib+scan+scan_format",
+      "passed_tests": 133,
+      "elapsed_seconds": 22.29
+    },
+    {
+      "gate": "Structures encoded_contract+structures_language",
+      "passed_tests": 90,
+      "elapsed_seconds": 11.2
+    },
+    {
+      "gate": "selection positional+selection",
+      "passed_tests": 70,
+      "elapsed_seconds": 3.95
+    },
+    {
+      "gate": "Sequence+lowering+catalog",
+      "passed_tests": 139,
+      "elapsed_seconds": null
+    },
+    {
+      "gate": "pull blocked",
+      "passed_tests": 3,
+      "elapsed_seconds": 4.66
+    },
+    {
+      "gate": "Tasks blocked",
+      "passed_tests": 1,
+      "elapsed_seconds": 10.08
+    },
+    {
+      "gate": "catalog Q06 dispatch",
+      "passed_tests": 3,
+      "elapsed_seconds": 9.29
+    },
+    {
+      "gate": "formal inventory",
+      "result": "523 rules; 476 conformance rows; 38 anchors; 505 decode sites"
+    },
+    {
+      "gate": "public API snapshot update",
+      "result": "32 snapshots generated; exactly Structures, Sequence, storage differ intentionally",
+      "elapsed_seconds": 94.07
+    },
+    {
+      "gate": "IR scope",
+      "owner": "cq-lang-structures",
+      "base": "1270d38b",
+      "result": "PASS; only deletion outside owner"
+    },
+    {
+      "gate": "GPU oxide workspace all-targets",
+      "result": "100s timeout during cold dependency compilation; split by target",
+      "gpu_execution": false
+    },
+    {
+      "gate": "GPU oxide workspace libraries",
+      "result": "100s timeout during DOOP/TPC-H codegen; split by package",
+      "gpu_execution": false
+    },
+    {
+      "gate": "GPU oxide cq-gpu-tpch all-targets",
+      "result": "PASS",
+      "elapsed_seconds": 51.99,
+      "gpu_execution": false,
+      "generated_queries": 52
+    },
+    {
+      "gate": "GPU oxide all support targets excluding TPC-H and two DOOP engines",
+      "result": "PASS",
+      "elapsed_seconds": 60.09,
+      "gpu_execution": false
+    },
+    {
+      "gate": "review follow-up Fold host regression",
+      "passed_tests": 1,
+      "elapsed_seconds": 19.3
+    },
+    {
+      "gate": "review follow-up bounded runtime laws",
+      "passed_tests": 6,
+      "elapsed_seconds": 17.2
+    },
+    {
+      "gate": "review follow-up real Q06 routes",
+      "passed_tests": 3,
+      "elapsed_seconds": 57.81
+    },
+    {
+      "gate": "GPU oxide doop-gpu all-targets",
+      "result": "100s timeout; split library/binary needed",
+      "gpu_execution": false
+    },
+    {
+      "gate": "public API check",
+      "result": "PASS 32 snapshots unchanged",
+      "elapsed_seconds": 113.99,
+      "per_cargo_limit_seconds": 100
+    }
+  ],
+  "dependencies": {
+    "baseline": [
+      {
+        "name": "ahash",
+        "version": "0.8.12",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "android_system_properties",
+        "version": "0.1.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-array",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-buffer",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-data",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-ipc",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-schema",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-select",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "autocfg",
+        "version": "1.5.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "base64",
+        "version": "0.22.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "bitflags",
+        "version": "2.13.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "block-buffer",
+        "version": "0.10.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "bumpalo",
+        "version": "3.20.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "byteorder",
+        "version": "1.5.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "bytes",
+        "version": "1.12.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cc",
+        "version": "1.5.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cfg-if",
+        "version": "1.0.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "chrono",
+        "version": "0.4.45",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "const-random",
+        "version": "0.1.18",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "const-random-macro",
+        "version": "0.1.16",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "core-foundation-sys",
+        "version": "0.8.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cpufeatures",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cq-evidence",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ext-aggregate",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ext-correlated",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ext-support",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-index-policy",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-io-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-join-filters",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-cq",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-ix",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-physical",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-ra",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-sequence",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-structures",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-vo",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-load",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-order",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-physical-lowering",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-physical-realization",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planners",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planners-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planners-plan",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planning",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-print",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ra-rewrites",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-reduce",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-relational-lowering",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-represent",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-rewrite-passes",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-rewrites",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-conformance",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-lowering",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-plan",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-pull",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-tasks",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-tasks-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-stage",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-staging",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-storage",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-structure-selection",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-syntax",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-testkit",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-workload-authored",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-workload-passes",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "crossbeam-deque",
+        "version": "0.8.8",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crossbeam-epoch",
+        "version": "0.9.21",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crossbeam-utils",
+        "version": "0.8.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crunchy",
+        "version": "0.2.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crypto-common",
+        "version": "0.1.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "csv",
+        "version": "1.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "csv-core",
+        "version": "0.1.13",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "digest",
+        "version": "0.10.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "either",
+        "version": "1.19.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "find-msvc-tools",
+        "version": "0.1.14",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "flatbuffers",
+        "version": "25.12.19",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "futures-core",
+        "version": "0.3.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "futures-task",
+        "version": "0.3.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "futures-util",
+        "version": "0.3.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "generic-array",
+        "version": "0.14.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.3.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "half",
+        "version": "2.7.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "hashbrown",
+        "version": "0.15.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "hashbrown",
+        "version": "0.17.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "iana-time-zone",
+        "version": "0.1.65",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "iana-time-zone-haiku",
+        "version": "0.1.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "integer-encoding",
+        "version": "3.0.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "itoa",
+        "version": "1.0.18",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "js-sys",
+        "version": "0.3.106",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "libc",
+        "version": "0.2.189",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "libm",
+        "version": "0.2.16",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "log",
+        "version": "0.4.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "memchr",
+        "version": "2.8.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "mini-linq",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "mini-linq-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "num-bigint",
+        "version": "0.4.8",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-complex",
+        "version": "0.4.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-integer",
+        "version": "0.1.47",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-rational",
+        "version": "0.4.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-traits",
+        "version": "0.2.19",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "once_cell",
+        "version": "1.21.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "ordered-float",
+        "version": "2.10.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "p5-q06",
+        "version": "0.0.0",
+        "source": null
+      },
+      {
+        "name": "parquet",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "paste",
+        "version": "1.0.15",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "pin-project-lite",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "proc-macro2",
+        "version": "1.0.107",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "quote",
+        "version": "1.0.47",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "r-efi",
+        "version": "5.3.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rayon",
+        "version": "1.12.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rayon-core",
+        "version": "1.13.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rustc_version",
+        "version": "0.4.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rustversion",
+        "version": "1.0.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "ryu",
+        "version": "1.0.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "semver",
+        "version": "1.0.28",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "seq-macro",
+        "version": "0.3.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde",
+        "version": "1.0.229",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde_core",
+        "version": "1.0.229",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde_derive",
+        "version": "1.0.229",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde_json",
+        "version": "1.0.151",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "sha2",
+        "version": "0.10.9",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "shlex",
+        "version": "2.0.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "slab",
+        "version": "0.4.12",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "snap",
+        "version": "1.1.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "syn",
+        "version": "2.0.119",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "syn",
+        "version": "3.0.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "syn_derive",
+        "version": "0.2.0",
+        "source": "git+https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562#97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562"
+      },
+      {
+        "name": "thrift",
+        "version": "0.17.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "tiny-keccak",
+        "version": "2.0.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "twox-hash",
+        "version": "2.1.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "typenum",
+        "version": "1.20.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "unicode-ident",
+        "version": "1.0.24",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "version_check",
+        "version": "0.9.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasi",
+        "version": "0.11.1+wasi-snapshot-preview1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasip2",
+        "version": "1.0.1+wasi-0.2.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen-macro",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen-macro-support",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen-shared",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-core",
+        "version": "0.62.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-implement",
+        "version": "0.60.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-interface",
+        "version": "0.59.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-link",
+        "version": "0.2.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-result",
+        "version": "0.4.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-strings",
+        "version": "0.5.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wit-bindgen",
+        "version": "0.46.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "zerocopy",
+        "version": "0.8.59",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "zerocopy-derive",
+        "version": "0.8.59",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "zmij",
+        "version": "1.0.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      }
+    ],
+    "candidate": [
+      {
+        "name": "ahash",
+        "version": "0.8.12",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "android_system_properties",
+        "version": "0.1.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-array",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-buffer",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-data",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-ipc",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-schema",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "arrow-select",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "autocfg",
+        "version": "1.5.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "base64",
+        "version": "0.22.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "bitflags",
+        "version": "2.13.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "block-buffer",
+        "version": "0.10.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "bumpalo",
+        "version": "3.20.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "byteorder",
+        "version": "1.5.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "bytes",
+        "version": "1.12.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cc",
+        "version": "1.5.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cfg-if",
+        "version": "1.0.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "chrono",
+        "version": "0.4.45",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "const-random",
+        "version": "0.1.18",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "const-random-macro",
+        "version": "0.1.16",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "core-foundation-sys",
+        "version": "0.8.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cpufeatures",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "cq-evidence",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ext-aggregate",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ext-correlated",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ext-support",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-index-policy",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-io-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-join-filters",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-cq",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-ix",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-physical",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-ra",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-sequence",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-structures",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-lang-vo",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-load",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-order",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-physical-lowering",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-physical-realization",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planners",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planners-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planners-plan",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-planning",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-print",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-ra-rewrites",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-reduce",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-relational-lowering",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-represent",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-rewrite-passes",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-rewrites",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-conformance",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-lowering",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-plan",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-pull",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-tasks",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-sequence-tasks-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-stage",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-staging",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-storage",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-structure-selection",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-syntax",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-testkit",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-workload-authored",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "cq-workload-passes",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "crossbeam-deque",
+        "version": "0.8.8",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crossbeam-epoch",
+        "version": "0.9.21",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crossbeam-utils",
+        "version": "0.8.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crunchy",
+        "version": "0.2.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "crypto-common",
+        "version": "0.1.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "csv",
+        "version": "1.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "csv-core",
+        "version": "0.1.13",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "digest",
+        "version": "0.10.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "either",
+        "version": "1.19.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "find-msvc-tools",
+        "version": "0.1.14",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "flatbuffers",
+        "version": "25.12.19",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "futures-core",
+        "version": "0.3.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "futures-task",
+        "version": "0.3.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "futures-util",
+        "version": "0.3.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "generic-array",
+        "version": "0.14.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.3.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "half",
+        "version": "2.7.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "hashbrown",
+        "version": "0.15.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "hashbrown",
+        "version": "0.17.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "iana-time-zone",
+        "version": "0.1.65",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "iana-time-zone-haiku",
+        "version": "0.1.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "integer-encoding",
+        "version": "3.0.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "itoa",
+        "version": "1.0.18",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "js-sys",
+        "version": "0.3.106",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "libc",
+        "version": "0.2.189",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "libm",
+        "version": "0.2.16",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "log",
+        "version": "0.4.34",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "memchr",
+        "version": "2.8.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "mini-linq",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "mini-linq-macros",
+        "version": "0.1.0",
+        "source": null
+      },
+      {
+        "name": "num-bigint",
+        "version": "0.4.8",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-complex",
+        "version": "0.4.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-integer",
+        "version": "0.1.47",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-rational",
+        "version": "0.4.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "num-traits",
+        "version": "0.2.19",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "once_cell",
+        "version": "1.21.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "ordered-float",
+        "version": "2.10.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "p5-q06",
+        "version": "0.0.0",
+        "source": null
+      },
+      {
+        "name": "parquet",
+        "version": "58.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "paste",
+        "version": "1.0.15",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "pin-project-lite",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "proc-macro2",
+        "version": "1.0.107",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "quote",
+        "version": "1.0.47",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "r-efi",
+        "version": "5.3.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rayon",
+        "version": "1.12.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rayon-core",
+        "version": "1.13.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rustc_version",
+        "version": "0.4.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "rustversion",
+        "version": "1.0.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "ryu",
+        "version": "1.0.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "semver",
+        "version": "1.0.28",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "seq-macro",
+        "version": "0.3.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde",
+        "version": "1.0.229",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde_core",
+        "version": "1.0.229",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde_derive",
+        "version": "1.0.229",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "serde_json",
+        "version": "1.0.151",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "sha2",
+        "version": "0.10.9",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "shlex",
+        "version": "2.0.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "slab",
+        "version": "0.4.12",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "snap",
+        "version": "1.1.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "syn",
+        "version": "2.0.119",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "syn",
+        "version": "3.0.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "syn_derive",
+        "version": "0.2.0",
+        "source": "git+https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562#97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562"
+      },
+      {
+        "name": "thrift",
+        "version": "0.17.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "tiny-keccak",
+        "version": "2.0.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "twox-hash",
+        "version": "2.1.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "typenum",
+        "version": "1.20.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "unicode-ident",
+        "version": "1.0.24",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "version_check",
+        "version": "0.9.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasi",
+        "version": "0.11.1+wasi-snapshot-preview1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasip2",
+        "version": "1.0.1+wasi-0.2.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen-macro",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen-macro-support",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wasm-bindgen-shared",
+        "version": "0.2.129",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-core",
+        "version": "0.62.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-implement",
+        "version": "0.60.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-interface",
+        "version": "0.59.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-link",
+        "version": "0.2.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-result",
+        "version": "0.4.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "windows-strings",
+        "version": "0.5.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "wit-bindgen",
+        "version": "0.46.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "zerocopy",
+        "version": "0.8.59",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "zerocopy-derive",
+        "version": "0.8.59",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      {
+        "name": "zmij",
+        "version": "1.0.23",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      }
+    ]
+  },
+  "main_bug": {
+    "culprit": "fadeecc5294eced9b9e944fba275abb0523cc3c3",
+    "fix": "1270d38b",
+    "error": "expected `struct` at tpch_q06.rs:153 aggregate! (default/par)",
+    "root_cause": "Default/par evidence adapter parsed core syntax before aggregate surface expansion. Evidence is now the final surface pass.",
+    "regression": "cq-workloads catalog includes actual Q06 module and tpch_runtime dispatch",
+    "affected_aggregate_kernels": [
+      "tpch_q06",
+      "tpch_q19"
+    ],
+    "correlated_extension_kernels": [],
+    "coverage_gap": "Catalog/evidence tests read declarations or inject evidence directly; compile-tpch is opt-in and would have caught this. No claim that the opt-in gate ran after the culprit commit.",
+    "compile_tpch": {
+      "passed": 29,
+      "command": "cq-xtask compile-tpch",
+      "log": "artifact://850",
+      "elapsed_seconds": 149.36,
+      "per_cargo_limit_seconds": 100,
+      "execution": "compile and describe only; no data or GPU",
+      "tested_revision": "5713189d (same source as 1270d38b, which additionally registers catalog in default inventory)"
+    },
+    "regression_inventory": "tools/regression-targets.tsv cq-workloads/catalog"
+  },
+  "input": {
+    "path": "/data/mini_linq/features/workloads/target/bench/data/tpch-1/tpch_q06/lineitem.parquet",
+    "sha256": "6b3e20bcb61ab03b7aa8373209185bb6db14e5003d4eaab8a9f932e6e329d3ff",
+    "oracle_path": "/data/mini_linq/features/workloads/target/bench/verification/sf-1/tpch_q06/default/oracle.json",
+    "oracle_sha256": "b716dcf96fae9b94f950d36300e87a31ec11e3639705bc121f07ade8d3afe941",
+    "answer": "123141078.2283"
+  },
+  "cpu": "AMD Ryzen Threadripper PRO 5945WX, 12 cores / 24 hardware threads",
+  "census": {
+    "owner": "cq-lang-structures",
+    "unchanged_decisions": [
+      "Physical canon placement and input uniqueness",
+      "All nonblocked provider choices",
+      "All Q06 algorithms and default/par row routing",
+      "Existing phase ordering and exact consumer read sets"
+    ],
+    "record_changes": [
+      "Structures blocked source records add vector_rows=1024",
+      "Summary and Prune distinguish block/vector minmax",
+      "Sequence scans retain source identity and delete duplicate tile/scratch geometry",
+      "Sort capabilities include ComparatorRows; current canonical choices unchanged"
+    ],
+    "generated_workload_changes": {
+      "tpch_q06": [
+        "Four blocked routes pass explicit source vector_rows to scan/filter APIs",
+        "row-par aliases the existing row Tasks implementation"
+      ]
+    },
+    "exclusions": [
+      "joins",
+      "refresh_join_bindings",
+      "positional payload retention",
+      "group_without_canon",
+      "trusted keys",
+      "H19/H12/H14 route changes"
+    ]
+  },
+  "api_review": {
+    "changed_snapshots": "1\t3\ttools/public-api/cq-lang-sequence.txt\n11\t6\ttools/public-api/cq-lang-structures.txt\n7\t6\ttools/public-api/cq-storage.txt\n",
+    "intentional": [
+      "Structures ComparatorRows capability",
+      "Structures Summary/Prune exact level variants",
+      "Structures Source.vector_rows and check_predicate_operands",
+      "Sequence Scan geometry field deletion",
+      "ScanTable vector_rows arguments and PruneMode variants"
+    ],
+    "scope_check": "PASS cq-lang-structures owner; Sequence deletions only"
+  },
+  "execution_logs": {
+    "main_bug_build": "   Compiling autocfg v1.5.1\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling version_check v0.9.5\n   Compiling cfg-if v1.0.5\n   Compiling typenum v1.20.1\n   Compiling memchr v2.8.3\n   Compiling zmij v1.0.23\n   Compiling serde v1.0.229\n   Compiling itoa v1.0.18\n   Compiling serde_json v1.0.151\n   Compiling cpufeatures v0.2.17\n   Compiling serde_core v1.0.229\n   Compiling libm v0.2.16\n   Compiling getrandom v0.3.4\n   Compiling crossbeam-utils v0.8.23\n   Compiling once_cell v1.21.4\n   Compiling crossbeam-epoch v0.9.21\n   Compiling zerocopy v0.8.59\n   Compiling crossbeam-deque v0.8.8\n   Compiling rayon-core v1.13.0\n   Compiling libc v0.2.189\n   Compiling generic-array v0.14.7\n   Compiling ahash v0.8.12\n   Compiling either v1.19.0\n   Compiling hashbrown v0.15.5\n   Compiling syn v2.0.119\n   Compiling syn v3.0.3\n   Compiling num-traits v0.2.19\n   Compiling block-buffer v0.10.4\n   Compiling crypto-common v0.1.7\n   Compiling digest v0.10.7\n   Compiling sha2 v0.10.9\n   Compiling num-integer v0.1.47\n   Compiling cq-sequence-pull v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-sequence-pull)\n   Compiling semver v1.0.28\n   Compiling num-bigint v0.4.8\n   Compiling rayon v1.12.0\n   Compiling bytes v1.12.1\n   Compiling rustc_version v0.4.1\n   Compiling iana-time-zone v0.1.65\n   Compiling arrow-schema v58.4.0\n   Compiling flatbuffers v25.12.19\n   Compiling num-rational v0.4.2\n   Compiling chrono v0.4.45\n   Compiling num-complex v0.4.6\n   Compiling hashbrown v0.17.1\n   Compiling paste v1.0.15\n   Compiling snap v1.1.2\n   Compiling bitflags v2.13.2\n   Compiling ordered-float v2.10.1\n   Compiling byteorder v1.5.0\n   Compiling integer-encoding v3.0.4\n   Compiling csv-core v0.1.13\n   Compiling thrift v0.17.0\n   Compiling twox-hash v2.1.4\n   Compiling seq-macro v0.3.6\n   Compiling base64 v0.22.1\n   Compiling ryu v1.0.23\n   Compiling csv v1.4.0\n   Compiling cq-storage v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/runtime/cq-storage)\n   Compiling serde_derive v1.0.229\n   Compiling syn_derive v0.2.0 (https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562#97bbe587)\n   Compiling zerocopy-derive v0.8.59\n   Compiling cq-io-macros v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/io/cq-io-macros)\n   Compiling cq-evidence v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/runtime/cq-evidence)\n   Compiling cq-syntax v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-syntax)\n   Compiling cq-stage v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/facade/cq-stage)\n   Compiling cq-lang-physical v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-lang-physical)\n   Compiling cq-lang-cq v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-lang-cq)\n   Compiling cq-lang-ra v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-lang-ra)\n   Compiling cq-lang-structures v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-lang-structures)\n   Compiling cq-lang-vo v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-lang-vo)\n   Compiling cq-lang-sequence v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-lang-sequence)\n   Compiling cq-structure-selection v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-structure-selection)\n   Compiling cq-print v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-print)\n   Compiling half v2.7.1\n   Compiling arrow-buffer v58.4.0\n   Compiling cq-physical-realization v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-physical-realization)\n   Compiling cq-sequence-lowering v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-sequence-lowering)\n   Compiling cq-lang-ix v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/languages/cq-lang-ix)\n   Compiling cq-sequence-plan v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-sequence-plan)\n   Compiling arrow-data v58.4.0\n   Compiling cq-relational-lowering v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-relational-lowering)\n   Compiling cq-order v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-order)\n   Compiling cq-reduce v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-reduce)\n   Compiling cq-planning v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/facade/cq-planning)\n   Compiling arrow-array v58.4.0\n   Compiling arrow-select v58.4.0\n   Compiling cq-ext-support v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/extensions/cq-ext-support)\n   Compiling arrow-ipc v58.4.0\n   Compiling cq-sequence-tasks v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/sequence-tasks)\n   Compiling cq-ra-rewrites v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-ra-rewrites)\n   Compiling cq-planners-plan v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/planners/plan)\n   Compiling parquet v58.4.0\n   Compiling cq-index-policy v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-index-policy)\n   Compiling cq-physical-lowering v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-physical-lowering)\n   Compiling cq-testkit v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/testkit/cq-testkit)\n   Compiling cq-represent v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-represent)\n   Compiling cq-staging v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/passes/cq-staging)\n   Compiling cq-planners-macros v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/planners/macros)\n   Compiling cq-load v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/io/cq-load)\n   Compiling cq-sequence-conformance v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/sequence-conformance)\n   Compiling mini-linq-macros v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/facade/mini-linq-macros)\n   Compiling cq-workload-authored v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/authored)\n   Compiling cq-rewrite-passes v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/rewrites/passes)\n   Compiling cq-planners v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/planners)\n   Compiling cq-sequence-tasks-macros v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/sequence-tasks/macros)\n   Compiling cq-ext-correlated v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/extensions/cq-ext-correlated)\n   Compiling cq-ext-aggregate v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/extensions/cq-ext-aggregate)\n   Compiling cq-join-filters v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/join-filters)\n   Compiling mini-linq v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/facade/mini-linq)\n   Compiling cq-workload-passes v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/pipeline-passes)\n   Compiling cq-rewrites v0.1.0 (/data/mini_linq-wt/p5-salvage/target/p5-baseline/features/rewrites)\n   Compiling p5-q06 v0.0.0 (/data/mini_linq-wt/p5-salvage/target/p5-measurement/baseline)\nerror: expected `struct`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:153:29\n    |\n153 |                 $($prefix)* aggregate! {\n    |                             ^^^^^^^^^\n...\n182 |     query_body!();\n    |     ------------- in this macro invocation\n    |\n    = note: this error originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n182 |     query_body!();\n    |     ------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n182 |     query_body!();\n    |     ------------- in this macro invocation\n    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n182 |     query_body!();\n    |     ------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n182 |     query_body!();\n    |     ------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n186 |     query_body!();\n    |     ------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n186 |     query_body!();\n    |     ------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n189 |     query_body!();\n    |     ------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n189 |     query_body!();\n    |     ------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n192 |     query_body!();\n    |     ------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n192 |     query_body!();\n    |     ------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n197 |     query_body!();\n    |     ------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n197 |     query_body!();\n    |     ------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n204 |     query_body!();\n    |     ------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n204 |     query_body!();\n    |     ------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n214 | }, { query_body!(as_plain; []); });\n    |      ------------------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n214 | }, { query_body!(as_plain; []); });\n    |      ------------------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `group`\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n221 | }, { query_body!(as_bytes; []); });\n    |      ------------------------- in this macro invocation\n    |\nhelp: `group` is captured in macro and introduced a unused variable\n   --> /data/mini_linq-wt/p5-salvage/target/p5-baseline/features/workloads/src/queries/tpch/tpch_q06.rs:165:25\n    |\n165 |                     let group: i32 = 0,\n    |                         ^^^^^\n...\n221 | }, { query_body!(as_bytes; []); });\n    |      ------------------------- in this macro invocation\n    = note: this warning originates in the macro `query_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: `p5-q06` (bin \"p5-q06\") generated 12 warnings (3 duplicates)\n\n[Showing lines 1-300 of 306. Use :301 to continue]",
+    "compile_tpch_fix": "Unbounded raw read blocked for artifact://850 (119.7KB). Reading the whole file verbatim can exhaust memory. Use artifact://850:raw:1-3000 for bounded verbatim chunks, artifact://850:1-3000 for numbered exploration, and the backing file path for search/copy workflows: ~/.omp/agent/sessions/--data-mini_linq--/2026-11-07T03-14-28-084Z_01a1b400-1a74-7462-9c5c-c5e17ef29c9c/850.bash.log"
+  },
+  "candidate_revision": "0f3a9b5a",
+  "review": {
+    "compiler": "No blocking findings; low-priority Host-name Fold refusal gap fixed with relation-based authorization and regression, passed.",
+    "runtime": "No blocking findings; removed redundant iterator vector field/runtime divisor after validating provider geometry; route test now shares real loading decision.",
+    "agents": [
+      "P5Salvage.ReviewCompiler",
+      "P5Salvage.ReviewRuntime"
+    ]
+  },
+  "limitations": [
+    "One timed resident query after five exact warmups per fresh process; paired bootstrap resamples five process pairs, not pseudoreplicated within-process samples.",
+    "No default route promotion; Main decides using resident/load tradeoffs.",
+    "No join measurement or machinery.",
+    "Legacy scan counters do not instrument the bounded protocol; no claim of measured DRAM traffic."
+  ],
+  "expansions": {
+    "baseline": {
+      "sha256": "93c262e8e9e6334110ad6017667f3b478c7baaad39dbb8d557226e146597cc8f",
+      "path": "/data/mini_linq-wt/p5-salvage/target/p5-measurement/baseline-expanded.rs"
+    },
+    "candidate": {
+      "sha256": "fb6bf7f143984c28df7ca2a310a3341831e0a37900a945183902bcf48a37008c",
+      "path": "/data/mini_linq-wt/p5-salvage/target/p5-measurement/candidate-expanded.rs"
+    }
+  },
+  "expansion_review": {
+    "diff": "--- baseline\n+++ candidate\n@@ -119,6 +119,7 @@\n         \"built_hash\",\n         \"built_radix\",\n         \"par\",\n+        \"row-par\",\n         \"no-reduce\",\n         \"generic-smallest\",\n         \"staged\",\n@@ -553,6 +554,62 @@\n         Plain(PlainTable),\n         Bytes(BytesTable),\n     }\n+    enum InputLayout {\n+        Rows,\n+        Plain,\n+        Bytes,\n+    }\n+    #[automatically_derived]\n+    #[doc(hidden)]\n+    unsafe impl ::core::clone::TrivialClone for InputLayout {}\n+    #[automatically_derived]\n+    impl ::core::clone::Clone for InputLayout {\n+        #[inline]\n+        fn clone(&self) -> InputLayout {\n+            *self\n+        }\n+    }\n+    #[automatically_derived]\n+    impl ::core::marker::Copy for InputLayout {}\n+    #[automatically_derived]\n+    impl ::core::fmt::Debug for InputLayout {\n+        #[inline]\n+        fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {\n+            ::core::fmt::Formatter::write_str(\n+                f,\n+                match self {\n+                    InputLayout::Rows => \"Rows\",\n+                    InputLayout::Plain => \"Plain\",\n+                    InputLayout::Bytes => \"Bytes\",\n+                },\n+            )\n+        }\n+    }\n+    #[automatically_derived]\n+    impl ::core::marker::StructuralPartialEq for InputLayout {}\n+    #[automatically_derived]\n+    impl ::core::cmp::PartialEq for InputLayout {\n+        #[inline]\n+        fn eq(&self, other: &InputLayout) -> bool {\n+            let __self_discr = ::core::intrinsics::discriminant_value(self);\n+            let __arg1_discr = ::core::intrinsics::discriminant_value(other);\n+            __self_discr == __arg1_discr\n+        }\n+    }\n+    #[automatically_derived]\n+    impl ::core::cmp::Eq for InputLayout {\n+        #[inline]\n+        #[doc(hidden)]\n+        #[coverage(off)]\n+        fn assert_fields_are_eq(&self) {}\n+    }\n+    fn input_layout(config: &str) -> InputLayout {\n+        match config {\n+            \"blocks-plain\" | \"blocks-plain-par\" => InputLayout::Plain,\n+            \"blocks-bytes\" | \"blocks-bytes-par\" => InputLayout::Bytes,\n+            _ => InputLayout::Rows,\n+        }\n+    }\n     impl LineitemInput {\n         fn as_slice(&self) -> &[LineitemRow] {\n             let Self::Rows(rows) = self else {\n@@ -619,16 +676,18 @@\n     pub fn load(root: &Path, config: &str) -> Result<Data, Box<dyn Error>> {\n         let path = root.join(\"lineitem.parquet\");\n         let blocks = cq_storage::scan::BlockRows::new(1024).unwrap();\n-        let lineitem = match config {\n-            \"blocks-plain\" | \"blocks-plain-par\" => LineitemInput::Plain(\n+        let lineitem = match input_layout(config) {\n+            InputLayout::Plain => LineitemInput::Plain(\n                 PlainLineitemLoader::parquet(path, Default::default(), blocks, false)?\n                     .bind_domains(&scan_domains())?,\n             ),\n-            \"blocks-bytes\" | \"blocks-bytes-par\" => LineitemInput::Bytes(\n+            InputLayout::Bytes => LineitemInput::Bytes(\n                 BytesLineitemLoader::parquet(path, Default::default(), blocks, false)?\n                     .bind_domains(&scan_domains())?,\n             ),\n-            _ => LineitemInput::Rows(LineitemLoader::parquet(path, Default::default())?),\n+            InputLayout::Rows => {\n+                LineitemInput::Rows(LineitemLoader::parquet(path, Default::default())?)\n+            }\n         };\n         Ok(Data { lineitem })\n     }\n@@ -2767,13 +2826,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -2809,13 +2861,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -2851,13 +2896,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -2893,13 +2931,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -2935,13 +2966,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -2977,13 +3001,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     ::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(<::cq_storage::dedup::Sort>::sort(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map({\n                                                                                 let __cq_block_predicate_r1 =\n@@ -3007,6 +3024,7 @@\n                                                                                             ::core::ops::Bound::Excluded(__cq_positional_lineitem.encode_operand::<2usize>(__cq_parameter_5))),\n                                                                                     };\n                                                                                 __cq_positional_lineitem.scan_positions(0..__cq_positional_lineitem.len(),\n+                                                                                    1024usize,\n                                                                                     move |__cq_tile|\n                                                                                         {\n                                                                                             __cq_tile.intersect::<5usize>(&__cq_block_predicate_r1,\n@@ -3173,13 +3191,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -3215,13 +3226,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -3257,13 +3261,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -3299,13 +3296,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -3341,13 +3331,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     {\n                                         let __cq_column:\n@@ -3383,13 +3366,6 @@\n                                                 }\n                                             }\n                                         };\n-                                        if false {\n-                                            if !__cq_column.summaries().is_some() {\n-                                                {\n-                                                    ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                }\n-                                            };\n-                                        }\n                                     }\n                                     ::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(<::cq_storage::dedup::Sort>::sort(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map(::core::iter::Iterator::map({\n                                                                                 let __cq_block_predicate_r1 =\n@@ -3413,6 +3389,7 @@\n                                                                                             ::core::ops::Bound::Excluded(__cq_positional_lineitem.encode_operand::<2usize>(__cq_parameter_5))),\n                                                                                     };\n                                                                                 __cq_positional_lineitem.scan_positions(0..__cq_positional_lineitem.len(),\n+                                                                                    1024usize,\n                                                                                     move |__cq_tile|\n                                                                                         {\n                                                                                             __cq_tile.intersect::<5usize>(&__cq_block_predicate_r1,\n@@ -3579,13 +3556,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -3621,13 +3591,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -3663,13 +3626,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -3705,13 +3661,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -3747,13 +3696,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -3789,13 +3731,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             let __cq_key_source___cq_key_input_r5 =\n                                                 ({\n@@ -3828,7 +3763,7 @@\n                                                                                                                 __cq_positional_lineitem.scan_positions({\n                                                                                                                         let __cq_start = __cq_task_driver_0 * 1024usize;\n                                                                                                                         __cq_start..__cq_start.saturating_add(1024usize).min(__cq_positional_lineitem.len())\n-                                                                                                                    },\n+                                                                                                                    }, 1024usize,\n                                                                                                                     move |__cq_tile|\n                                                                                                                         {\n                                                                                                                             __cq_tile.intersect::<5usize>(&__cq_block_predicate_r1,\n@@ -4033,13 +3968,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -4075,13 +4003,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -4117,13 +4038,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -4159,13 +4073,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -4201,13 +4108,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             {\n                                                 let __cq_column:\n@@ -4243,13 +4143,6 @@\n                                                         }\n                                                     }\n                                                 };\n-                                                if false {\n-                                                    if !__cq_column.summaries().is_some() {\n-                                                        {\n-                                                            ::core::panicking::panic_fmt(format_args!(\"blocked source summary capability\"));\n-                                                        }\n-                                                    };\n-                                                }\n                                             }\n                                             let __cq_key_source___cq_key_input_r5 =\n                                                 ({\n@@ -4282,7 +4175,7 @@\n                                                                                                                 __cq_positional_lineitem.scan_positions({\n                                                                                                                         let __cq_start = __cq_task_driver_0 * 1024usize;\n                                                                                                                         __cq_start..__cq_start.saturating_add(1024usize).min(__cq_positional_lineitem.len())\n-                                                                                                                    },\n+                                                                                                                    }, 1024usize,\n                                                                                                                     move |__cq_tile|\n                                                                                                                         {\n                                                                                                                             __cq_tile.intersect::<5usize>(&__cq_block_predicate_r1,\n@@ -4436,7 +4329,7 @@\n             \"radix_retained\" => radix_retained::execute(data),\n             \"built_hash\" => built_hash::execute(data),\n             \"built_radix\" => built_radix::execute(data),\n-            \"par\" => par::execute(data),\n+            \"par\" | \"row-par\" => par::execute(data),\n             \"staged\" => staged::execute(data),\n             \"no-reduce\" => no_reduce::execute(data),\n             \"generic-smallest\" => generic_smallest::execute(data),\n",
+    "finding": "Q06 serial Bytes differs only by deletion of six dead if-false summary checks and explicit literal 1024usize passed to scan_positions. Item c removes the dead checks; item d adds the argument. Predicates remain PruneMode::None, order and canon unchanged. Runtime change remains a candidate cause; expanded Rust is not identical, so layout is not established.",
+    "status": "same-route Bytes serial slowdown blocks merge pending item isolation/layout control"
+  },
+  "binaries": {
+    "baseline": {
+      "sha256": "2ff47c6c3440c924466bdbde7512b9739003b9dbd11d7ffe6243e5b8d4b3fe87"
+    },
+    "candidate": {
+      "sha256": "b795af2d2ca2bcf171a352c09ec2a31fd5a6254baf491738d2cef2f1518b4c8f"
+    }
+  },
+  "open_risks": [
+    "MERGE BLOCKER: same-route serial Bytes candidate/baseline 1.175 [1.073,1.287], unresolved. Expanded Rust has explicit constant geometry argument and dead-summary-check deletion; no causal attribution yet.",
+    "Cross-layout comparisons cancelled by Main until same-route parity; no complete fresh Bytes/row decision.",
+    "Same-source linker shuffle and per-item performance isolation not run.",
+    "GPU all-target compile incomplete: TPC-H/support slices passed; DOOP all-target and workspace attempts timed out, SRD final slice not completed. Latest private Fold host refusal postdates successful GPU slices.",
+    "Root default-members full gate and quick tier not run; focused touched-package gates listed."
+  ],
+  "decision": "Do not merge or promote par pending regression diagnosis. Historical positive ratios are not current acceptance evidence.",
+  "campaign_interruptions": {
+    "comparisons_6_through_13": "Outer 100-second deadlines expired waiting for another session shared timing lock; no query failure. Restart cancelled by Main to investigate same-route regression first."
+  }
+}

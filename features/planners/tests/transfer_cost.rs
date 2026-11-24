@@ -8,7 +8,8 @@ fn transfer_connects_late_bridge_instead_of_expanding_leaf_product() {
         relation R(x:i32); relation S(y:i32); relation T(x:i32,y:i32);
         answer(x,y) :- R(x), S(y), T(x,y);
     };
-    let written = compile(&source, Planner::WrittenCoarse).unwrap();
+    let error = compile(&source, Planner::WrittenCoarse).unwrap_err().to_string();
+    assert!(error.contains("I3"), "{error}");
     let transfer = compile(&source, Planner::Transfer).unwrap();
     check(&source, &transfer).unwrap();
     for n in [0, 1, 8, 24] {
@@ -17,15 +18,9 @@ fn transfer_connects_late_bridge_instead_of_expanding_leaf_product() {
             ("S".into(), (0..n).map(|v| vec![v]).collect()),
             ("T".into(), (0..n).map(|v| vec![v, v]).collect()),
         ]);
-        let written = semantics::evaluate_ra(&written, &database);
         let transfer = semantics::evaluate_ra(&transfer, &database);
         let expected: Rows = (0..n).map(|v| vec![v, v]).collect();
-        assert_eq!(written.output, expected);
         assert_eq!(transfer.output, expected);
-        assert_eq!(
-            written.definitions.values().map(|r| r.rows.len()).max(),
-            Some((n * n) as usize)
-        );
         assert_eq!(
             transfer.definitions.values().map(|r| r.rows.len()).max(),
             Some(n as usize),
@@ -59,5 +54,34 @@ fn transfer_preserves_partial_guard_domain_while_connecting_later_atoms() {
             })
             .collect();
         assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn transfer_keeps_early_membership_with_conjoined_reducer_restrictions() {
+    let source: cq::Program = syn::parse_quote! {
+        struct EarlyMembership;
+        relation R(p:i32,s:i32); relation L(o:i32,p:i32,s:i32);
+        relation O(o:i32,d:i32); relation P(p:i32); relation S(s:i32,n:i32);
+        answer(o,p,n) :- R(p,s), L(o,p,s), O(o,d),
+            where d > 0, where d < 3, P(p), S(s,n);
+    };
+    let (normal, valuation) = cq_planners::compile_valuation(&source, Planner::Transfer).unwrap();
+    let first: Vec<_> = valuation.valuation.steps.iter().filter_map(|step| match step {
+        cq_planners::vo::Step::Atom(atom, _) => Some(atom.relation.to_string()),
+        _ => None,
+    }).take(2).collect();
+    assert_eq!(first, ["R", "P"]);
+    let (lowered, steps) = cq_relational_lowering::compile(&normal, &valuation).unwrap();
+    cq_relational_lowering::check(&normal, &valuation, &lowered, &steps).unwrap();
+    let target = compile(&source, Planner::Transfer).unwrap();
+    check(&source, &target).unwrap();
+    for seed in 0..4 {
+        let database = cq_testkit::databases::binary_database(&normal, seed);
+        assert_eq!(
+            semantics::evaluate_ra(&target, &database).output,
+            cq_testkit::cq_semantics::evaluate_cq(&normal, &database),
+            "database {seed}",
+        );
     }
 }

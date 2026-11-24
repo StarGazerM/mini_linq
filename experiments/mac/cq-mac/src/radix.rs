@@ -1,7 +1,8 @@
 //! GPU-built grouped RadixRun using the native storage reader verbatim.
 use super::{IndexSpec, MAX_ROWS, MacContext, MacError, Payload, Relation, platform};
 use cq_storage::{
-    IndexRead, RadixRun, RadixRunReadState, RadixRunView, RadixSplineMetadata, RadixSplinePoint, RunCursor,
+    IndexRead, RadixRun, RadixRunReadState, RadixRunView, RadixSplineMetadata, RadixSplinePoint,
+    RunCursor,
 };
 use std::{fmt, rc::Rc};
 
@@ -199,7 +200,10 @@ impl<const KEY_COLUMN: usize> IndexedI64Relation<KEY_COLUMN> {
     pub fn row_ids(&self, key: i64) -> Option<RunCursor<'_, u32>> {
         let key = u32::try_from(key).ok()?;
         let cursor = match &self.inner.index {
-            SourceIndex::Cpu(index) => index.lookup(&key),
+            SourceIndex::Cpu(index) => {
+                let (begin, end) = index.range(&key);
+                RunCursor::from_slice(&index.items()[begin..end])
+            }
             SourceIndex::Gpu(index) => index.lookup(&key),
         };
         (cursor.len() != 0).then_some(cursor)

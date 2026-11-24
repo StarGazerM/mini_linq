@@ -1,8 +1,8 @@
 [package]
 name = "cq-datalog-hasher"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.85.1"
 license.workspace = true
 publish = false
 
@@ -12,7 +12,6 @@ proc-macro = true
 [dependencies]
 cq-datalog-support.workspace = true
 cq-lang-datalog-storage.workspace = true
-cq-lang-datalog-round.workspace = true
 cq-stage.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true

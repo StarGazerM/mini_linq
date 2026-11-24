@@ -14,7 +14,7 @@ pub fn check(scenario: Scenario) {
         struct SurfaceWildcards;
         relation R(x: i32, y: i32, z: i32);
         relation answer(c0: i32);
-        answer(*x) :- R(x, _, _), if *x > 0;
+        answer(*x) :- R(x, _, _), where x > 0;
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

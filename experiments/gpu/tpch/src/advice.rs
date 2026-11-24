@@ -3,10 +3,7 @@
 //! reports contain the resolved invocations, not a second executable query.
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{
-    Ident, Token,
-    parse::{Parse, ParseStream},
-};
+use syn::Ident;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +21,65 @@ pub struct Pipeline {
     pub complete: bool,
     #[serde(default)]
     pub sequence: Vec<String>,
+    #[serde(default)]
+    pub target: Target,
+    #[serde(default)]
+    pub publication: Placement,
+    #[serde(default)]
+    pub recipe: Recipe,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Target {
+    #[default]
+    Device,
+    Host,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    #[default]
+    Host,
+    Device,
+    /// Keep scalar stage results resident; nullable or host-target results stay host.
+    Automatic,
+}
+
+impl Placement {
+    pub fn resolve(self, target: Target, nullable: bool) -> Self {
+        match self {
+            Self::Automatic if matches!(target, Target::Device) && !nullable => Self::Device,
+            Self::Automatic => Self::Host,
+            explicit => explicit,
+        }
+    }
+}
+
+/// Explicit catalog facts; query labels never reach recipe execution.
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Recipe {
+    pub automatic: bool,
+    pub retained_prefixes: Vec<String>,
+    pub filtered_leaves: Vec<String>,
+    pub retained_probe: Option<(String, String)>,
+    pub hoist_inputs: bool,
+    pub membership: bool,
+    pub membership_relations: Vec<String>,
+    pub schedule: Option<Schedule>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Schedule {
+    pub expansions: Vec<String>,
+    pub partition_filters: bool,
+    pub publish_ranges: bool,
+    pub partition: usize,
+    pub segment: usize,
+    pub items: usize,
 }
 
 impl Pipeline {
@@ -35,6 +91,19 @@ impl Pipeline {
             structures: Vec::new(),
             sequence: Vec::new(),
             complete: false,
+            target: Target::Device,
+            publication: Placement::Host,
+            recipe: Recipe::default(),
+        }
+    }
+
+    pub fn automatic() -> Self {
+        Self {
+            recipe: Recipe {
+                automatic: true,
+                ..Recipe::default()
+            },
+            ..Self::baseline()
         }
     }
 
@@ -65,54 +134,31 @@ impl Pipeline {
         })
     }
 
-    /// Stage-local orders measured with DuckDB; see the Box 14b tables in
+    /// Stage-local authored or measured orders; historical measurements are in
     /// compare/tpch_statistics.md. Publications are ordinary relation inputs.
     pub fn staged(query: &str, stage: usize) -> Self {
         let order = match (query, stage) {
             ("h02", 0) => "Region, Nation, Supplier, Partsupp",
-            ("h02", 1) => "Part, Partsupp, MinimumCost, Supplier, Nation, Region",
+            ("h02", 1) => "Part, BrassTypes, Partsupp, MinimumCost, Supplier, Nation, Region",
             ("h11", 0) => "Nation, Supplier, Partsupp",
             ("h11", 1 | 2) => "Stock",
             ("h11", 3) => "TotalValue, PartValue",
+            ("h12", 0) => "Lineitem, Orders",
+            ("h12", 1) => "MatchingLines",
+            ("h12", 2) => "MatchingLines, HighPriorities",
+            ("h12", 3) => "Totals, HighCounts",
+            ("h12", 4) => "Totals",
             ("h13", 0) => "Customer, QualifiedOrders",
             ("h13", 1) => "Customer",
+            ("h16", 0) => "Supplier, BadComments",
+            ("h16", 1) => "Part, AllowedKinds, Partsupp",
             ("h15", 0) | ("h18", 0) | ("h20", 0) => "Lineitem",
             ("h15", 1) => "Revenue",
             ("h15", 2) => "Maximum, Revenue, Supplier",
             ("h18", 1) => "Quantity, Orders, Customer",
-            ("h20", 1) => "Part, Partsupp, Shipped, Supplier, Nation",
+            ("h20", 1) => "Part, ForestNames, Partsupp, Shipped, Supplier, Nation",
             _ => unreachable!("unregistered staged query"),
         };
-        // These are semantic keys: grouped publications have one row per
-        // group; Stock preserves dbgen's Partsupp key, and QualifiedOrders
-        // filters/project the declared Orders key. Counts are not key proofs.
-        let key: Option<(&str, &[&str])> = match (query, stage) {
-            ("h02", 1) => Some(("MinimumCost", &["part_key"])),
-            ("h11", 1 | 2) => Some(("Stock", &["part_key", "supplier_key"])),
-            ("h11", 3) => Some(("PartValue", &["part_key"])),
-            ("h13", _) => Some(("QualifiedOrders", &["order_key"])),
-            ("h15", 1 | 2) => Some(("Revenue", &["supplier_key"])),
-            ("h18", 1) => Some(("Quantity", &["order_key"])),
-            ("h20", 1) => Some(("Shipped", &["part_key", "supplier_key"])),
-            _ => None,
-        };
-        let sequence = key
-            .into_iter()
-            .map(|(relation, columns)| {
-                let evidence = cq_lang_sequence::Evidence {
-                    facts: vec![cq_lang_sequence::EvidenceFact::Key {
-                        subject: quote::format_ident!("{relation}"),
-                        columns: columns
-                            .iter()
-                            .map(|column| quote::format_ident!("{column}"))
-                            .collect(),
-                    }],
-                };
-                cq_sequence_plan::Advice::Evidence(evidence)
-                    .to_token_stream()
-                    .to_string()
-            })
-            .collect();
         Self {
             plan: format!("no_reduce, order({order})"),
             storage: if matches!(query, "h11" | "h15" | "h18") {
@@ -120,7 +166,7 @@ impl Pipeline {
             } else {
                 String::new()
             },
-            sequence,
+            recipe: catalog_recipe(&format!("{query}.{stage}")),
             ..Self::baseline()
         }
     }
@@ -131,12 +177,14 @@ impl Pipeline {
     // segmented Orders/Lineitem, full-key Supplier membership and count output.
     pub fn h05() -> Self {
         Self {
-            storage: "tpch_domains".into(),
+            storage: "tpch_dictionary".into(),
             plan: "no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier)".into(),
             physical: vec!["build_host_reads()".into()],
             structures: Vec::new(),
             sequence: Vec::new(),
             complete: false,
+            recipe: catalog_recipe("h05"),
+            ..Self::baseline()
         }
     }
 
@@ -150,8 +198,6 @@ impl Pipeline {
             "h01" => "Lineitem",
             // Date+discount+quantity: 114,160 / 1,139,264 -> one exact sum.
             "h06" => "Lineitem",
-            // 30,988 / 310,803 qualifying lines; Orders is a unique lookup.
-            "h12" => "Lineitem, Orders",
             // Shipping guard: 214,377 / 2,141,904 lines -> unique Part probes
             // -> 121 / 1,134 aggregate inputs. Keep the mixed branch guard
             // intact; Part-first needs a larger Lineitem adjacency provider.
@@ -161,10 +207,10 @@ impl Pipeline {
             // SF10: 300,276 -> 1,461,923 -> 302,114.
             // The final Lineitem contributes no payload, only existence.
             "h03" => "Customer, Orders, Lineitem",
-            // Customer Nation@6 and Supplier Nation@5 form the exact country
-            // pair before nation-indexed Customer; use the block's measured
-            // forward traversal without replacing the authored disjunction.
-            "h07" => "Nation@6, Nation@5, Customer, Orders, Lineitem, Supplier",
+            // Grow the ready Customer chain from Nation@6 before Nation@5:
+            // the disconnected country-pair prefix violates VO-Order I3.
+            // Keep the authored disjunction after both country names bind.
+            "h07" => "Nation@6, Customer, Orders, Lineitem, Supplier, Nation@5",
             // The two country pairs restrict Customer to 12,008 at SF1, then
             // Orders 121,324 -> dated Lineitem 148,370 -> opposite Supplier 5,924.
             // SF10: 2 -> 120,469 -> 1,205,808 -> 1,463,770 -> 58,365.
@@ -193,18 +239,12 @@ impl Pipeline {
             "h04" => "Lineitem, Orders",
             // Same quarter root, anti membership leaves 4,695 / 47,631 keys.
             "h04_not_exists" => "Orders",
-            // Filtered Part -> exactly four Partsupp rows, then anti membership;
-            // only 4 / 56 bad supplier keys. Anti keys cannot seed the domain.
-            "h16" => "Part, Partsupp",
             // Phone-filtered customer is the only positive root; Orders is an
             // anti lookup by customer, yielding 14,086 / 140,489 keys.
-            "h22" => "Customer",
-            // Green Part: 10,664 / 108,782. PartSupp-first minimizes prefix
-            // positions (777,440 / 7,937,392), but builds the entire composite
-            // Lineitem index. Its selective forward-provider attempt is rejected
-            // at opaque Part publication. Keep the accepted single-key baseline;
-            // the report records both the smaller-prefix candidate and its cost.
-            "h09" => "Part, Lineitem, PartSupp, Orders, Supplier, Nation",
+            "h22" => "Customer, QualifyingPhones",
+            // The authored dictionary predicate publishes qualifying Part codes
+            // before the same single-key join baseline.
+            "h09" => "Part, GreenNames, Lineitem, PartSupp, Orders, Supplier, Nation",
             // Type Part 1,451 / 13,452 -> lines 43,693 / 403,487 ->
             // dated orders 13,389 / 122,404 -> America 2,603 / 24,254.
             // Part-root sum 93,120 / 856,913 beats region-root 494,037 / 4,921,493.
@@ -221,8 +261,7 @@ impl Pipeline {
             _ => return None,
         };
         Some(Self {
-            // Only constant equality/unused string columns are dictionary-coded.
-            // H09 substring, H16 string methods and H22 phone methods stay host.
+            // Dictionary representation is shared by every loader profile.
             storage: if matches!(
                 query,
                 "h03" | "h07" | "h07_block" | "h08" | "h21_positive" | "d19" | "d27" | "d85"
@@ -242,159 +281,89 @@ impl Pipeline {
                 ),
                 _ => format!("no_reduce, order({order})"),
             },
-            physical: if matches!(query, "h01" | "h06" | "h12" | "h19" | "h04") {
+            physical: if matches!(query, "h01" | "h06" | "h19" | "h04") {
                 Vec::new()
             } else {
                 vec!["build_host_reads()".into()]
             },
+            recipe: catalog_recipe(query),
             ..Self::baseline()
         })
     }
 }
 
-#[derive(Default)]
-pub struct Plan {
-    no_reduce: bool,
-    order: Vec<cq_order::OrderAtom>,
-    reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-    skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-}
-
-impl Parse for Plan {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut plan = Self::default();
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            if key == "no_reduce" {
-                plan.no_reduce = true;
-            } else {
-                let arguments;
-                syn::parenthesized!(arguments in input);
-                if key == "order" {
-                    plan.order = arguments
-                        .parse_terminated(cq_order::OrderAtom::parse, Token![,])?
-                        .into_iter()
-                        .collect();
-                } else if key == "reduce" || key == "skip" {
-                    let target = arguments.parse()?;
-                    let with: Ident = arguments.parse()?;
-                    if with != "with" {
-                        return Err(syn::Error::new_spanned(with, "expected with"));
-                    }
-                    let support = arguments.parse()?;
-                    if !arguments.is_empty() {
-                        return Err(arguments.error("unexpected reduction argument"));
-                    }
-                    if key == "reduce" {
-                        plan.reduce.push((target, support));
-                    } else {
-                        plan.skip.push((target, support));
-                    }
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        key,
-                        "expected order, no_reduce, reduce, or skip",
-                    ));
-                }
-            }
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
-        Ok(plan)
+/// Catalog registration resolves workload labels to printable input facts.
+/// Formal rule DR-Recipe: Execute only explicit recipe facts, never query labels.
+fn catalog_recipe(query: &str) -> Recipe {
+    let simple = matches!(
+        query,
+        "h01"
+            | "h06"
+            | "h19"
+            | "h04"
+            | "h02.0"
+            | "h12.0"
+            | "h12.1"
+            | "h12.2"
+            | "h12.3"
+            | "h12.4"
+            | "h13.0"
+            | "h13.1"
+            | "h16.0"
+            | "h11.1"
+            | "h11.2"
+            | "h15.0"
+            | "h15.1"
+            | "h18.0"
+            | "h20.0"
+    );
+    let expansions: &[&str] = match query {
+        "h05" => &["Orders", "Lineitem"],
+        "h09" | "h08" | "d27" | "d19" | "d85" => &["Lineitem"],
+        "h03" | "h07" | "h07_block" => &["Orders"],
+        "h21_positive" | "d72_inner" => &["Supplier", "Lineitem"],
+        "h11.0" => &["Supplier", "Partsupp"],
+        _ => &[],
+    };
+    let prefixes: &[&str] = match query {
+        "h05" | "d19" | "d85" | "h07" | "h07_block" => &["Customer"],
+        "h21_positive" | "d72_inner" | "d27" => &["Supplier"],
+        _ => &[],
+    };
+    Recipe {
+        retained_prefixes: prefixes.iter().map(|s| (*s).into()).collect(),
+        filtered_leaves: Vec::new(),
+        retained_probe: (query == "h21_positive")
+            .then(|| ("Lineitem".into(), "waiting_supplier".into())),
+        hoist_inputs: matches!(
+            query,
+            "h05" | "h08" | "h21_positive" | "d72_inner" | "h04_not_exists"
+        ),
+        membership: query != "h04" && query != "h05",
+        membership_relations: if query == "h05" {
+            vec!["Supplier".into()]
+        } else {
+            Vec::new()
+        },
+        schedule: (!simple).then(|| Schedule {
+            expansions: expansions.iter().map(|s| (*s).into()).collect(),
+            partition_filters: query != "h05",
+            publish_ranges: matches!(query, "d72_inner" | "d85" | "h03"),
+            partition: 256,
+            segment: 1024,
+            items: 4,
+        }),
+        ..Recipe::default()
     }
 }
 
+/// Return the normalized CQ context separately from its selected valuation.
 pub fn valuation(
     source: &cq_lang_cq::Program,
     arguments: &str,
-) -> syn::Result<cq_lang_vo::Program> {
-    let plan: Plan = syn::parse_str(arguments)?;
-    let ordered = if plan.order.is_empty() {
-        let options = cq_order::Options::default();
-        let ordered = cq_order::compile(source, &options)?;
-        cq_order::check(source, &ordered, &options)?;
-        ordered
-    } else {
-        cq_order::compile_explicit(source, &plan.order)?
-    };
-    let options = cq_reduce::Options {
-        semijoins: if plan.no_reduce {
-            cq_reduce::Reductions::None
-        } else {
-            cq_reduce::Reductions::Masks
-        },
-    };
-    let mut reduced = cq_reduce::compile(&ordered, &options)?;
-    cq_reduce::check(&ordered, &reduced, &options)?;
-    if plan.skip.is_empty() && plan.reduce.is_empty() {
-        return Ok(reduced);
-    }
-    let analysis = cq_lang_vo::contract::check(&reduced)?;
-    let graph = cq_lang_cq::hypergraph::Analysis::of(source);
-    let step = |target: &cq_order::OrderAtom,
-                support: &cq_order::OrderAtom|
-     -> syn::Result<cq_lang_vo::Step> {
-        let (t, s) = (
-            target.positive_clause(source)?,
-            support.positive_clause(source)?,
-        );
-        if t == s || graph.shared(t, s).is_empty() {
-            return Err(syn::Error::new_spanned(
-                &target.relation,
-                "reduce advice needs two atoms sharing a variable",
-            ));
-        }
-        Ok(cq_reduce::semijoin(&analysis, &graph, t, s))
-    };
-    for (target, support) in plan.skip {
-        let skipped = step(&target, &support)?;
-        if !reduced.valuation.steps.contains(&skipped) {
-            return Err(syn::Error::new_spanned(
-                &target.relation,
-                "skip advice names no Masks reduction",
-            ));
-        }
-        reduced
-            .valuation
-            .steps
-            .retain(|candidate| *candidate != skipped);
-    }
-    let extra = plan
-        .reduce
-        .iter()
-        .map(|(t, s)| step(t, s))
-        .collect::<syn::Result<Vec<_>>>()?;
-    let first = reduced
-        .valuation
-        .steps
-        .iter()
-        .position(|step| {
-            matches!(
-                step,
-                cq_lang_vo::Step::Atom(..) | cq_lang_vo::Step::Block(..)
-            )
-        })
-        .unwrap_or(reduced.valuation.steps.len());
-    reduced.valuation.steps.splice(first..first, extra);
-    cq_lang_vo::contract::check(&reduced)?;
-    Ok(reduced)
-}
-
-struct Invocation {
-    name: Ident,
-    arguments: TokenStream,
-}
-impl Parse for Invocation {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let name = input.parse()?;
-        let arguments;
-        syn::parenthesized!(arguments in input);
-        Ok(Self {
-            name,
-            arguments: arguments.parse()?,
-        })
-    }
+) -> syn::Result<(cq_lang_cq::Program, cq_lang_vo::Program)> {
+    let options: cq_planning::PlanOptions = syn::parse_str(arguments)?;
+    cq_planning::prefix_valuation(source, &options)
 }
 
 pub fn physical(
@@ -403,39 +372,24 @@ pub fn physical(
 ) -> syn::Result<cq_lang_physical::Program> {
     let mut current = source.clone();
     for invocation in invocations {
-        let Invocation { name, arguments } = syn::parse_str(invocation)?;
-        current = match name.to_string().as_str() {
-            "retain_streams" => cq_rewrite_passes::retain_streams(&current, arguments)?,
-            "hoist" => cq_rewrite_passes::hoist(&current, arguments)?,
-            "canon_prefixes" => cq_rewrite_passes::canon_prefixes(&current, arguments)?,
-            "smallest_intersections" => {
-                cq_rewrite_passes::smallest_intersections(&current, arguments)?
-            }
-            "build_host_reads" => cq_structure_selection::build_host_reads(&current, arguments)?,
-            _ => return Err(syn::Error::new_spanned(name, "unsupported Physical advice")),
-        };
+        let invocation: cq_stage::Invocation = syn::parse_str(invocation)?;
+        current =
+            cq_rewrite_passes::invoke_physical(&current, &invocation.path, invocation.arguments)?;
     }
     Ok(current)
 }
 
 pub fn structures(
+    physical: &cq_lang_physical::Program,
     source: &cq_lang_structures::Program,
     invocations: &[String],
 ) -> syn::Result<cq_lang_structures::Program> {
     let mut current = source.clone();
     for invocation in invocations {
-        let Invocation { name, arguments } = syn::parse_str(invocation)?;
-        current = match name.to_string().as_str() {
-            "sorted_indexes" => cq_rewrite_passes::sorted_indexes(&current, arguments)?,
-            "retype" => cq_structure_selection::retype(&current, arguments)?,
-            "membership" => cq_rewrite_passes::membership(&current, arguments)?,
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    name,
-                    "unsupported Structures advice",
-                ));
-            }
-        };
+        let invocation: cq_stage::Invocation = syn::parse_str(invocation)?;
+        current = cq_rewrite_passes::invoke_structures(
+            physical, &current, &invocation.path, invocation.arguments,
+        )?;
     }
     Ok(current)
 }
@@ -460,7 +414,10 @@ pub fn provider_layout(program: &cq_lang_physical::Program, relation: &str) -> s
 
 /// Resolve a semantic relation selector to its existing lowered producer. This
 /// follows unary projections/filters, never creates or duplicates an operator.
-fn relation_of<'a>(program: &'a cq_lang_physical::Program, name: &Ident) -> Option<&'a Ident> {
+pub(crate) fn relation_of<'a>(
+    program: &'a cq_lang_physical::Program,
+    name: &Ident,
+) -> Option<&'a Ident> {
     let definition = program
         .program
         .definitions
@@ -519,15 +476,16 @@ pub fn joined_prefix(program: &cq_lang_physical::Program, relation: &str) -> syn
 /// logical heading may still contain dead strings; only Structures' proven
 /// layout, never an assumed projection, determines the uploaded carrier.
 pub fn filtered_leaf(
+    physical: &cq_lang_physical::Program,
     program: &cq_lang_structures::Program,
     relation: &str,
 ) -> syn::Result<Option<Ident>> {
-    let facts = cq_lang_structures::contract::check(program)?;
-    for definition in &program.physical.program.definitions {
+    let facts = cq_lang_structures::contract::check(physical, program)?;
+    for definition in &physical.program.definitions {
         if !matches!(
             definition.operator,
             cq_lang_physical::Operator::Project(_) | cq_lang_physical::Operator::Guard(_)
-        ) || !relation_of(&program.physical, &definition.name)
+        ) || !relation_of(physical, &definition.name)
             .is_some_and(|name| name == relation)
         {
             continue;
@@ -555,84 +513,22 @@ pub fn filtered_leaf(
     ))
 }
 
-/// H05's authored R schedule, expressed only as checked rewrites of the generic
-/// lowering. Placement is shared with the planner; decomposition is authored.
-pub fn h05_schedule(source: &cq_lang_sequence::Program) -> syn::Result<cq_sequence_plan::Planned> {
-    use cq_sequence_plan::Advice;
-    let suggested = cq_sequence_plan::decompose(
-        source,
-        &cq_gpu_sequence::machine(),
-        &cq_gpu_sequence::catalog(),
-    )?;
-    let mut planned = cq_sequence_plan::Planned {
-        program: source.clone(),
-        trace: Vec::new(),
-    };
-    for step in suggested.trace {
-        if matches!(
-            step,
-            Advice::Tile { .. } | Advice::Partition { .. } | Advice::Segment { .. }
-        ) {
-            continue;
-        }
-        planned.program = step.apply(&planned.program)?;
-        planned.trace.push(step);
-    }
-    let output = planned
-        .program
-        .sequence
-        .definitions
-        .last()
-        .unwrap()
-        .name
-        .clone();
-    let mut schedule = vec![Advice::Partition {
-        name: output,
-        n: 256,
-        items: None,
-    }];
-    for relation in ["Orders", "Lineitem"] {
-        let physical = &source.structures.physical;
-        let prefix = joined_prefix(physical, relation)?;
-        let definition = source
-            .sequence
-            .definitions
-            .iter()
-            .find(|d| d.name == prefix)
-            .ok_or_else(|| {
-                syn::Error::new_spanned(&prefix, "expansion has no Sequence definition")
-            })?;
-        if !matches!(definition.term, cq_lang_sequence::Term::Flatten(_)) {
-            return Err(syn::Error::new_spanned(
-                &prefix,
-                "expansion is not a named flatten",
-            ));
-        }
-        schedule.push(Advice::Segment {
-            name: prefix,
-            n: 1024,
-            items: Some(4),
-        });
-    }
-    schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Count));
-    for step in schedule {
-        planned.program = step.apply(&planned.program)?;
-        planned.trace.push(step);
-    }
-    Ok(planned)
-}
-
 pub fn apply_sequence(
+    physical: &cq_lang_physical::Program,
+    structures: &cq_lang_structures::Program,
     source: &cq_lang_sequence::Program,
     invocations: &[String],
 ) -> syn::Result<cq_sequence_plan::Planned> {
     let mut planned = cq_sequence_plan::Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: source.clone(),
         trace: Vec::new(),
     };
     for invocation in invocations {
         let step: cq_sequence_plan::Advice = syn::parse_str(invocation)?;
-        planned.program = step.apply(&planned.program)?;
+        (planned.physical, planned.structures, planned.program) =
+            step.apply(&planned.physical, &planned.structures, &planned.program)?;
         planned.trace.push(step);
     }
     Ok(planned)
@@ -645,33 +541,19 @@ pub fn trace_tokens(trace: &[cq_sequence_plan::Advice]) -> String {
 /// Materialize only the measured forward stream, never a reverse reduction.
 pub fn hand_physical(
     program: &cq_lang_physical::Program,
-    query: &str,
+    recipe: &Recipe,
     pipeline: &mut Pipeline,
 ) -> syn::Result<()> {
-    if matches!(query, "h01" | "h06" | "h12" | "h19" | "h04") {
-        return Ok(());
-    }
-    if matches!(
-        query,
-        "h08" | "h21_positive" | "d72_inner" | "h04" | "h04_not_exists"
-    ) {
+    if recipe.hoist_inputs {
         pipeline.physical.push(hoist_inputs(program));
     }
-    let prefix = match query {
-        "h21_positive" | "d72_inner" => Some("Supplier"),
-        "d19" | "d85" | "h07" | "h07_block" => Some("Customer"),
-        "d27" => Some("Supplier"),
-        _ => None,
-    };
-    if let Some(relation) = prefix {
+    for relation in &recipe.retained_prefixes {
         let prefix = joined_prefix(program, relation)?;
         pipeline
             .physical
             .insert(0, quote!(retain_streams(#prefix)).to_string());
     }
-    if query == "h21_positive" {
-        // A 411/4010-supplier root underfills the device. Publish the measured
-        // 156739/1522366 late-line prefix globally before Orders/other-line work.
+    if let Some((relation, column)) = &recipe.retained_probe {
         let prefix = program
             .program
             .definitions
@@ -680,11 +562,8 @@ pub fn hand_physical(
                 let cq_lang_physical::Operator::Probe(_, key) = &definition.operator else {
                     return None;
                 };
-                (relation_of(program, &key.right).is_some_and(|relation| relation == "Lineitem")
-                    && key
-                        .columns
-                        .iter()
-                        .any(|column| column == "waiting_supplier"))
+                (relation_of(program, &key.right).is_some_and(|name| name == relation)
+                    && key.columns.iter().any(|name| name == column))
                 .then_some(&definition.name)
             })
             .ok_or_else(|| {
@@ -702,10 +581,13 @@ pub fn hand_physical(
 
 /// Choose full-key providers only when the checked live layout has no payload.
 /// This includes cycle-closing Probe operators as well as explicit semijoins.
-pub fn hand_membership(program: &cq_lang_structures::Program) -> syn::Result<Vec<String>> {
-    let facts = cq_lang_structures::contract::check(program)?;
+pub fn hand_membership(
+    physical: &cq_lang_physical::Program,
+    program: &cq_lang_structures::Program,
+) -> syn::Result<Vec<String>> {
+    let facts = cq_lang_structures::contract::check(physical, program)?;
     let mut providers = std::collections::BTreeSet::new();
-    for definition in &program.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let (cq_lang_physical::Operator::Semi(_, key)
         | cq_lang_physical::Operator::Anti(_, key)
         | cq_lang_physical::Operator::Probe(_, key)) = &definition.operator
@@ -716,7 +598,7 @@ pub fn hand_membership(program: &cq_lang_structures::Program) -> syn::Result<Vec
         // Current filtered-storage certificates reject constant-bearing host
         // renames (notably H08 Region and H21 finalized Orders). Keep their
         // accepted RangeProvider rather than pretending membership was proved.
-        if program.physical.program.definitions.iter().any(|d| {
+        if physical.program.definitions.iter().any(|d| {
             d.name == key.right
                 && matches!(&d.operator, cq_lang_physical::Operator::Rename(rename)
                 if rename.constants.is_some())
@@ -745,36 +627,22 @@ pub fn hand_membership(program: &cq_lang_structures::Program) -> syn::Result<Vec
 /// Share only legal placement/catalog discovery with decomposition. The root,
 /// expansion boundaries, tile/items and output protocol are authored here.
 pub fn hand_schedule(
+    physical: &cq_lang_physical::Program,
+    structures: &cq_lang_structures::Program,
     source: &cq_lang_sequence::Program,
-    query: &str,
+    recipe: &Schedule,
 ) -> syn::Result<cq_sequence_plan::Planned> {
     use cq_sequence_plan::Advice;
     let suggested = cq_sequence_plan::decompose(
+        physical,
+        structures,
         source,
         &cq_gpu_sequence::machine(),
         &cq_gpu_sequence::catalog(),
     )?;
-    // Keep checked group-input publication boundaries. Group extraction can
-    // consume a flatten, so it must not subsequently receive join segmentation.
-    if matches!(
-        query,
-        "h01"
-            | "h06"
-            | "h12"
-            | "h19"
-            | "h04"
-            | "h02.0"
-            | "h13.0"
-            | "h11.1"
-            | "h11.2"
-            | "h15.0"
-            | "h15.1"
-            | "h18.0"
-            | "h20.0"
-    ) {
-        return Ok(suggested);
-    }
     let mut planned = cq_sequence_plan::Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: source.clone(),
         trace: Vec::new(),
     };
@@ -785,7 +653,8 @@ pub fn hand_schedule(
         ) {
             continue;
         }
-        planned.program = step.apply(&planned.program)?;
+        (planned.physical, planned.structures, planned.program) =
+            step.apply(&planned.physical, &planned.structures, &planned.program)?;
         planned.trace.push(step);
     }
     let output = planned
@@ -798,12 +667,17 @@ pub fn hand_schedule(
         .clone();
     let mut schedule = vec![Advice::Partition {
         name: output,
-        n: 256,
+        n: recipe.partition,
         items: None,
     }];
     // Partition every independent device-side numeric filter. Tiling only join
     // expansion leaves a 6M/60M-row publication as a scalar producer.
-    for definition in &source.structures.physical.program.definitions {
+    for definition in physical
+        .program
+        .definitions
+        .iter()
+        .filter(|_| recipe.partition_filters)
+    {
         let device = planned.trace.iter().any(|step| {
             matches!(step,
             Advice::Grade { name, level, .. }
@@ -820,24 +694,22 @@ pub fn hand_schedule(
         {
             schedule.push(Advice::Partition {
                 name: definition.name.clone(),
-                n: 256,
-                items: Some(4),
+                n: recipe.partition,
+                items: Some(recipe.items),
             });
         }
     }
-    if matches!(query, "d72_inner" | "d85" | "h03") {
+    if recipe.publish_ranges {
         // The host filtered-range builder accepts one half-open column only.
         // Publish numeric filtered leaves on device instead: shipdate+quantity
         // and availability are checked map predicates, not host index bounds.
-        for definition in &source.structures.physical.program.definitions {
+        for definition in &physical.program.definitions {
             if matches!(definition.mode, cq_lang_physical::Mode::Let(_))
                 && matches!(definition.operator, cq_lang_physical::Operator::Range(..))
             {
                 let name = &definition.name;
                 let mut input = definition.operator.input().unwrap();
-                while let Some(parent) = source
-                    .structures
-                    .physical
+                while let Some(parent) = physical
                     .program
                     .definitions
                     .iter()
@@ -874,33 +746,26 @@ pub fn hand_schedule(
                 });
                 schedule.push(Advice::Partition {
                     name: name.clone(),
-                    n: 256,
+                    n: recipe.partition,
                     items: None,
                 });
             }
         }
     }
-    // Observed fanouts: h09 Lineitem 7.49; h08 Lineitem 30;
-    // h21 Supplier 411/4010 and late Lineitem 381/380 (other line ~4);
-    // d72 Supplier 400/4000 and filtered Lineitem 13.56/13.49.
-    let expanded: &[&str] = match query {
-        "h09" | "h08" | "d27" | "d19" | "d85" => &["Lineitem"],
-        "h03" | "h07" | "h07_block" => &["Orders"],
-        "h21_positive" | "d72_inner" => &["Supplier", "Lineitem"],
-        "h11.0" => &["Supplier", "Partsupp"],
-        _ => &[],
-    };
-    for definition in &source.structures.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let cq_lang_physical::Operator::Probe(_, key) = &definition.operator else {
             continue;
         };
-        if !relation_of(&source.structures.physical, &key.right)
-            .is_some_and(|relation| expanded.iter().any(|name| relation == *name))
+        if !relation_of(physical, &key.right)
+            .is_some_and(|relation| recipe.expansions.iter().any(|name| relation == name))
         {
             continue;
         }
         let name = &definition.name;
-        if source
+        // Decomposition may extract a probe into a provider, consuming its
+        // named flatten. Segment only boundaries retained in the current plan.
+        if planned
+            .program
             .sequence
             .definitions
             .iter()
@@ -908,14 +773,15 @@ pub fn hand_schedule(
         {
             schedule.push(Advice::Segment {
                 name: name.clone(),
-                n: 1024,
-                items: Some(4),
+                n: recipe.segment,
+                items: Some(recipe.items),
             });
         }
     }
     schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Count));
     for step in schedule {
-        planned.program = step.apply(&planned.program)?;
+        (planned.physical, planned.structures, planned.program) =
+            step.apply(&planned.physical, &planned.structures, &planned.program)?;
         planned.trace.push(step);
     }
     Ok(planned)

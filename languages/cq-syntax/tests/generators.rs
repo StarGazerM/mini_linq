@@ -1,4 +1,4 @@
-use cq_syntax::algebra::{Bind, LiteralStep, disjoint_unions};
+use cq_syntax::algebra::Bind;
 use quote::ToTokens;
 
 #[test]
@@ -19,49 +19,14 @@ fn generator_and_bind_round_trip_preserve_kind() {
     }
 }
 
-#[test]
-fn generator_preserves_input_constants_without_scalar_literal_inference() {
-    let root = syn::parse_quote!(root);
-    let left = syn::parse_quote!(left);
-    let right = syn::parse_quote!(right);
-    let a: syn::Ident = syn::parse_quote!(a);
-    let b: syn::Ident = syn::parse_quote!(b);
-    let union = syn::parse_quote!(union);
-    let operands = [a.clone(), b.clone()].into_iter().collect();
-    let left_bind: Bind = syn::parse_quote!(bind root with tag = (0));
-    let right_bind: Bind = syn::parse_quote!(bind root with tag = (1));
-    let left_generator: Bind = syn::parse_quote!(bind left with for x = (items));
-    let right_generator: Bind = syn::parse_quote!(bind right with for x = (items));
-    let result = disjoint_unions([
-        (&root, LiteralStep::Empty),
-        (&left, LiteralStep::Bind(&left_bind)),
-        (&right, LiteralStep::Bind(&right_bind)),
-        (&a, LiteralStep::Bind(&left_generator)),
-        (&b, LiteralStep::Bind(&right_generator)),
-        (&union, LiteralStep::Union(&operands, None)),
-    ]);
-    assert!(result.contains("union"));
-
-    // Even syntactically literal generator expressions must not be scalar facts;
-    // their IntoIterator validity is Rust's responsibility, not this fold's.
-    let left_generator: Bind = syn::parse_quote!(bind root with for x = (0));
-    let right_generator: Bind = syn::parse_quote!(bind root with for x = (1));
-    let result = disjoint_unions([
-        (&root, LiteralStep::Empty),
-        (&a, LiteralStep::Bind(&left_generator)),
-        (&b, LiteralStep::Bind(&right_generator)),
-        (&union, LiteralStep::Union(&operands, None)),
-    ]);
-    assert!(!result.contains("union"));
-}
 
 #[test]
 fn occurrence_constants_round_trip_and_require_literal_values() {
     use cq_syntax::algebra::Rename;
     for text in [
-        "rename R@0 {a -> x} constants {b = 7, c = -2}",
-        "rename R@0 {} constants {a = true, b = \"fixed\"}",
-        "rename R@0 {a -> x}",
+        "rename R {a -> x} constants {b = 7, c = -2}",
+        "rename R {} constants {a = true, b = \"fixed\"}",
+        "rename R {a -> x}",
     ] {
         let rename: Rename = syn::parse_str(text).unwrap();
         if let Some(constants) = &rename.constants {
@@ -80,7 +45,7 @@ fn occurrence_constants_round_trip_and_require_literal_values() {
         let constants: cq_syntax::algebra::OccurrenceConstants = syn::parse_str(text).unwrap();
         assert!(constants.check().is_err());
     }
-    assert!(syn::parse_str::<Rename>("rename R@0 {} constants {a = f()}").is_err());
+    assert!(syn::parse_str::<Rename>("rename R {} constants {a = f()}").is_err());
 }
 
 #[test]

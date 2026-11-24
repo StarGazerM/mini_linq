@@ -1,9 +1,7 @@
 //! Physical row and storage adapters for checked Sequence and explicit push emitters.
 //!
-//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
-//! binds and guards keep their written chain; relational steps may move only
-//! earlier across them. Their free variables determine their partial-function
-//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Rust expressions are opaque and total by premise. Their free variables
+//! determine placement; each expression is emitted unchanged.
 //! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
 //! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
@@ -13,8 +11,8 @@
 //!
 //! Sequence and explicit push printers use these adapters to preserve the physical
 //! operator graph and storage choices while choosing Rust control flow and layout.
-//! When Physical records `probe smallest`, supported adjacent probe/check pairs enumerate the smaller runtime candidate
-//! set without changing RA/VO order.
+//! When Physical records `probe smallest`, an adjacent k-way intersection enumerates
+//! the smallest runtime candidate set without changing RA/VO order.
 //!
 //! Rows borrow declared host columns and retain owned computed columns. The
 //! adapters bind hosts once and dispatch reusable host reads by type. Leading
@@ -34,18 +32,17 @@
 //! The fused-block adapter executes arms from one prefix row for Sequence pull realization.
 //! Union chains arms lazily; fallback evaluates the next arm only when the earlier result is empty.
 //! Anti uses the recorded eager/lazy membership route and canon uses the recorded set provider.
-//! Group consumes canonical complete named valuations once into a host hash
-//! table, with one typed accumulator tuple per key. Global groups use a single
-//! accumulator without a table, so empty input still publishes the identities.
+//! Group consumes canonical complete named valuations once into its recorded
+//! Structures accumulator table, with one typed tuple per key. Providers obey
+//! the empty Default, entry/or_insert_with and owned IntoIterator map protocol.
+//! Global groups use a single accumulator without a table, so empty input
+//! still publishes the identities.
 //!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
-//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
-//! heading and I the common new interface; other binders remain branch-local.
+//! Core blocks denote sets: `{ B1 } | { B2 }` unions projected answers;
+//! `{ B1 } else { B2 }` selects the first nonempty arm. F is the free heading
+//! and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Only explicit relational predicates introduce comparisons and constraints.
 //!
 use cq_lang_structures as structures;
 use cq_lang_structures::physical;
@@ -70,12 +67,14 @@ use cq_print::{Context, Repr, error, index, sorted};
 /// `analysis` must be the contract result for `module`.
 /// Opted-in host-set facts are certified eagerly over complete declared rows
 /// before any prepared operator can rely on their uniqueness.
+/// Formal rule P-Realize: Prepare the recorded physical sources and built providers without selecting replacement types.
 pub fn sources_with<'a>(
+    physical: &'a physical::Program,
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
     mut prepared: impl FnMut(&str, &Repr),
 ) -> syn::Result<Context<'a>> {
-    for definition in &module.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         let Some(structures::Repr::Positions { bases, owned, .. }) = analysis.repr.get(&name)
         else {
@@ -120,14 +119,14 @@ pub fn sources_with<'a>(
         }
     }
     let mut printer = Printer {
-        context: Context::new(module, analysis),
+        context: Context::new(physical, module, analysis),
         active_prefixes: BTreeMap::new(),
         consumer: None,
         input: None,
         partitioned: false,
+        canon_target: CanonTarget::Sequential,
     };
-    printer.certify_host_sets(module);
-    let definitions = &module.physical.program.definitions;
+    let definitions = &physical.program.definitions;
     let mut position = 0;
     let deferred: std::collections::BTreeSet<_> = analysis
         .physical
@@ -142,23 +141,18 @@ pub fn sources_with<'a>(
         }
         if matches!(&definitions[position].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
         {
-            let Some(second) = definitions.get(position + 1) else {
-                return error(
-                    &definitions[position].name,
-                    "smallest requires its adjacent check",
-                );
-            };
-            if !printer.intersection(&definitions[position], second, true)? {
+            let consumed = printer.intersection(&definitions[position..], true)?;
+            if consumed == 0 {
                 return error(
                     &definitions[position].name,
                     "Structures does not discharge smallest candidate reads",
                 );
             }
-            for definition in &definitions[position..position + 2] {
+            for definition in &definitions[position..position + consumed] {
                 let name = symbol_name(&definition.name);
                 prepared(&name, &printer.reprs[&name]);
             }
-            position += 2;
+            position += consumed;
         } else {
             printer.define(&definitions[position])?;
             let name = symbol_name(&definitions[position].name);
@@ -167,6 +161,14 @@ pub fn sources_with<'a>(
         }
     }
     Ok(printer.context)
+}
+
+/// Execution target for the recorded canonicalization strategy.
+/// Tasks supplies Parallel explicitly; row types never choose a strategy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanonTarget {
+    Sequential,
+    Parallel,
 }
 
 /// Single-operator adapters shared with the Sequence translation.
@@ -186,6 +188,7 @@ impl<'a> RowEmitter<'a> {
                 active_prefixes: BTreeMap::new(),
                 input: None,
                 partitioned: false,
+                canon_target: CanonTarget::Sequential,
             },
         }
     }
@@ -196,6 +199,14 @@ impl<'a> RowEmitter<'a> {
 
     pub fn context_mut(&mut self) -> &mut Context<'a> {
         &mut self.printer.context
+    }
+
+    pub fn canon_target(&self) -> CanonTarget {
+        self.printer.canon_target
+    }
+
+    pub fn set_canon_target(&mut self, target: CanonTarget) {
+        self.printer.canon_target = target;
     }
 
     /// Emit exactly one operator, reading caller-supplied operand streams.
@@ -255,26 +266,47 @@ impl<'a> RowEmitter<'a> {
         result
     }
 
-    /// Emit the recorded smallest candidate pair at its consuming boundary.
+    /// Emit a recorded smallest intersection at its final consuming boundary.
     /// Canon and storage remain the surrounding Sequence constructors.
     pub fn intersection(&mut self, name: &str) -> syn::Result<Option<TokenStream>> {
-        let second = self.printer.physical[name];
-        let Some(input) = second.operator.input() else {
-            return Ok(None);
-        };
-        let first = self.printer.physical[&symbol_name(input)];
-        if !matches!(&first.operator, Operator::Probe(_, keyed)
-            if matches!(keyed.choice, Some(physical::Choice::Smallest(_))))
-        {
+        if !self.printer.intersect {
             return Ok(None);
         }
-        if !self.printer.intersection(first, second, false)? {
+        let definitions = self.printer.physical_definitions;
+        let Some((position, count)) =
+            definitions
+                .iter()
+                .enumerate()
+                .find_map(|(position, first)| {
+                    if !matches!(&first.operator, Operator::Probe(_, keyed)
+                if matches!(keyed.choice, Some(physical::Choice::Smallest(_))))
+                    {
+                        return None;
+                    }
+                    let intersection = physical::intersection(
+                        &definitions[position..],
+                        self.printer.physical_analysis,
+                    )?;
+                    let count = intersection.keys.len();
+                    (symbol_name(&definitions[position + count - 1].name) == name)
+                        .then_some((position, count))
+                })
+        else {
+            return Ok(None);
+        };
+        if self
+            .printer
+            .intersection(&definitions[position..position + count], false)?
+            == 0
+        {
             return error(
-                &first.name,
+                &definitions[position].name,
                 "Structures does not discharge smallest candidate reads",
             );
         }
-        self.printer.scan(&second.name).map(Some)
+        self.printer
+            .scan(&definitions[position + count - 1].name)
+            .map(Some)
     }
 
     /// Read a representation already installed by the caller.
@@ -289,7 +321,9 @@ impl<'a> RowEmitter<'a> {
         let definition = self.printer.physical[name];
         if physical::ModeKind::from(&definition.mode) != physical::ModeKind::Pipe
             || !self.printer.carried_witnesses[name].is_empty()
-            || (self.printer.analysis.stages.contains_key(name) && !self.printer.probe_stage(name))
+            || (self.printer.analysis.stages.contains_key(name)
+                && !self.printer.probe_stage(name)
+                && !self.printer.analysis.reads.contains_key(name))
         {
             return Ok(None);
         }
@@ -315,33 +349,68 @@ impl<'a> RowEmitter<'a> {
         self.printer.head(name, head, rows)
     }
 
-    /// Canonicalize flat rows with the recorded set provider. Wide equality keys
-    /// are grouped without changing the iterator's row layout.
-    pub fn canon(ty: &syn::Type, rows: TokenStream, width: usize) -> TokenStream {
-        // Std implements tuple Eq/Hash/Ord only through arity twelve. Clone
-        // grouped fields because the set retains keys after each row is yielded.
-        let key = if width <= 12 {
-            quote!(__cq_row)
-        } else {
-            let fields = (0..width)
-                .map(|field| {
-                    let field = index(field);
-                    quote!(::core::clone::Clone::clone(&__cq_row.#field))
-                })
-                .collect::<Vec<_>>();
-            let nested = cq_print::group(&fields);
-            quote!(&#nested)
+    /// Compare complete logical rows, grouping wide tuples without copying.
+    /// Rust resolves Ord at the generated call site; column types stay opaque.
+    pub fn canon_comparator(width: usize) -> TokenStream {
+        let key = |name: TokenStream| {
+            if width <= 12 {
+                name
+            } else {
+                let fields = (0..width)
+                    .map(|field| {
+                        let field = index(field);
+                        quote!(&#name.#field)
+                    })
+                    .collect::<Vec<_>>();
+                let nested = cq_print::group(&fields);
+                quote!(&#nested)
+            }
         };
-        let constructor = cq_print::canonical_set(ty);
-        quote! {{
-            #[allow(unused_imports)]
-            use ::cq_storage::HashSetConstructor as _;
-            let mut __cq_seen = #constructor;
-            ::core::iter::Iterator::filter(#rows, move |__cq_row| {
-                ::cq_storage::require::leibniz(#key);
-                __cq_seen.insert(::core::clone::Clone::clone(#key))
-            })
-        }}
+        let left = key(quote!(__cq_left));
+        let right = key(quote!(__cq_right));
+        quote!(|__cq_left, __cq_right| {
+            ::cq_storage::require::leibniz(#left);
+            ::core::cmp::Ord::cmp(#left, #right)
+        })
+    }
+
+    /// Build a canonical rows record with its provider's distinct-row build
+    /// for the explicitly selected execution target (sequential `sort`,
+    /// parallel `par_sort`; PL-Distinct). The rows it yields are the result.
+    pub fn canon_with_target(
+        target: CanonTarget,
+        provider: &syn::Type,
+        rows: TokenStream,
+        width: usize,
+    ) -> TokenStream {
+        match target {
+            CanonTarget::Sequential => Self::canon(provider, rows, width),
+            CanonTarget::Parallel => {
+                let compare = Self::canon_comparator(width);
+                quote!(<#provider>::par_sort(#rows, #compare))
+            }
+        }
+    }
+
+    /// Sequential distinct-row build of a canonical rows record's provider.
+    pub fn canon(provider: &syn::Type, rows: TokenStream, width: usize) -> TokenStream {
+        let compare = Self::canon_comparator(width);
+        quote!(<#provider>::sort(#rows, #compare))
+    }
+
+    // DESIGN canon-strategy
+    // STORAGE §13.5/6: only the immutable load-verified carrier licenses runs.
+    // Structures/Sequence checked the direct complete source; no type inspection.
+    pub fn ordered_source(context: &Context<'_>, target: CanonTarget, name: &str) -> TokenStream {
+        let host = &context.hosts[&context.physical_analysis.hosts[name]];
+        let value = &host.value;
+        let compare = Self::canon_comparator(host.layout.len());
+        let rows = match target {
+            CanonTarget::Sequential => quote!(::cq_storage::dedup::ordered_ref(#value, #compare)),
+            CanonTarget::Parallel => quote!(::cq_storage::dedup::par_ordered_ref(#value, #compare)),
+        };
+        let rows = quote!(::core::iter::Iterator::map(#rows, ::cq_storage::rows::Columns::columns));
+        context.host_scan_from(name, Some(rows))
     }
 }
 
@@ -351,6 +420,7 @@ struct Printer<'a> {
     active_prefixes: BTreeMap<String, TokenStream>,
     input: Option<(String, TokenStream)>,
     partitioned: bool,
+    canon_target: CanonTarget,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
     type Target = Context<'a>;
@@ -372,14 +442,23 @@ impl Printer<'_> {
         let consumer = self.consumer.replace(name.clone());
         let repr = match physical::ModeKind::from(&definition.mode) {
             physical::ModeKind::Pipe
+                if self.analysis.reads.contains_key(&name)
+                    && self.carried_witnesses[&name].is_empty() =>
+            {
+                let ids = if let Some(ids) = self.staged_ids(&name) {
+                    ids
+                } else {
+                    let ids = self.read_ids(&name)?;
+                    self.buffer_stage(&name, ids)
+                };
+                Repr::Positions(Some(self.profile_stream(&name, ids)))
+            }
+            physical::ModeKind::Pipe
                 if (!self.carried_witnesses[&name].is_empty()
                     || (self.analysis.stages.contains_key(&name) && !self.probe_stage(&name)))
                     && !matches!(definition.operator, Operator::Rename(_)) =>
             {
-                let mut rows = self.produce(&name, definition)?;
-                if definition.canon.is_some() {
-                    rows = self.distinct(&definition.name, rows);
-                }
+                let rows = self.produce(&name, definition)?;
                 Repr::Pipe(Some(self.profile_stream(&name, rows)))
             }
             physical::ModeKind::Pipe if matches!(definition.operator, Operator::Rename(_)) => {
@@ -412,15 +491,8 @@ impl Printer<'_> {
                 let ids = self.profile_input(&name, ids);
                 Repr::Positions(Some(self.profile_stream(&name, ids)))
             }
-            physical::ModeKind::Pipe if self.analysis.reads.contains_key(&name) => {
-                let ids = self.read_ids(&name)?;
-                Repr::Positions(Some(self.profile_stream(&name, ids)))
-            }
             physical::ModeKind::Pipe => {
-                let mut rows = self.produce(&name, definition)?;
-                if definition.canon.is_some() {
-                    rows = self.distinct(&definition.name, rows);
-                }
+                let rows = self.produce(&name, definition)?;
                 Repr::Pipe(Some(self.profile_stream(&name, rows)))
             }
             physical::ModeKind::Let if self.analysis.selections.contains_key(&name) => {
@@ -433,7 +505,12 @@ impl Printer<'_> {
                     rows = self.distinct(&definition.name, rows);
                 }
                 let rows = self.profile_stream(&name, rows);
-                self.materialize(&name, rows)
+                if self.analysis.rows_by_value(&name) {
+                    // STR-RowsByValue: the build is moved into the single scan reader.
+                    Repr::Pipe(Some(self.rows_by_value(&name, rows)))
+                } else {
+                    self.materialize(&name, rows)
+                }
             }
         };
         self.consumer = consumer;
@@ -496,16 +573,37 @@ impl Printer<'_> {
         }
     }
 
+    /// Realize the canon boundary of `operator` from its checked canonical
+    /// reference. A rows record is built by its provider's distinct-row build;
+    /// an existing Built index (existence reads only) and an `exists` rows
+    /// record are built from the candidates themselves by their own build; a
+    /// host carrier is read in its verified order.
     pub(crate) fn distinct(&mut self, operator: &Ident, rows: TokenStream) -> TokenStream {
         let name = symbol_name(operator);
-        let ty = self.analysis.dedup[&name].clone();
-        self.distinct_width(&name, &ty, rows, self.carried(&name).len())
+        if let Some(rows) = self.blocked_canon_rows(&name, rows.clone(), matches!(self.canon_target, CanonTarget::Parallel)) {
+            return rows;
+        }
+        match self.analysis.canonical[&name].clone() {
+            structures::CanonSource::Rows(provider)
+                if self.physical_analysis.modes[&name] == physical::ModeKind::Let =>
+            {
+                self.distinct_width(&name, &provider.ty, rows, self.carried(&name).len())
+            }
+            structures::CanonSource::Rows(_) | structures::CanonSource::Index(_) => rows,
+            structures::CanonSource::Host => {
+                let dedup = format!("{name}.dedup");
+                let key_columns = self.heading(&name).join(",");
+                self.profile_label(&dedup, "DEDUP", &key_columns, vec![name.clone()]);
+                let result = RowEmitter::ordered_source(&self.context, self.canon_target, &name);
+                self.profile_stream(&dedup, result)
+            }
+        }
     }
 
     fn distinct_width(
         &mut self,
         name: &str,
-        ty: &syn::Type,
+        provider: &syn::Type,
         rows: TokenStream,
         width: usize,
     ) -> TokenStream {
@@ -514,7 +612,7 @@ impl Printer<'_> {
         let key_columns = self.heading(input).join(",");
         self.profile_label(&dedup, "DEDUP", &key_columns, vec![input.into()]);
         let rows = self.profile_inserting(&dedup, rows);
-        let result = RowEmitter::canon(ty, rows, width);
+        let result = RowEmitter::canon_with_target(self.canon_target, provider, rows, width);
         self.profile_stream(&dedup, result)
     }
 
@@ -527,17 +625,28 @@ impl Printer<'_> {
                 vec![result.into()],
             );
         }
+        let consumer = symbol_name(&head.relation);
+        let reads = &self.encoded.blocks.reads;
+        let output_carrier = reads.get(&format!("output:{consumer}:carrier"));
+        let output_read = reads.get(&format!("output:{consumer}:read"));
+        let final_read = reads.get(&consumer);
+        let blocked_columns = (final_read.is_some() || output_carrier.is_some() || output_read.is_some()).then(|| {
+            self.carried(result).iter().filter(|column| {
+                [final_read, output_carrier, output_read].into_iter().flatten()
+                    .any(|read| read.fields.contains_key(*column))
+                    || self.infos[result].computed.contains(*column)
+            }).cloned().collect::<Vec<_>>()
+        });
+        let heading = blocked_columns.as_deref().unwrap_or_else(|| self.carried(result));
         let rows = if self.carries_positions(result) {
-            let pattern = self.bind_columns(result, self.carried(result), false);
-            let values = self
-                .carried(result)
-                .iter()
-                .map(|column| self.access(result, column));
+            let pattern = self.bind_columns(result, heading, false);
+            let values = heading.iter()
+                .map(|column| self.blocked_read(&symbol_name(&head.relation), result, column)
+                    .unwrap_or_else(|| self.access(result, column)));
             quote!(::core::iter::Iterator::map(#rows, move |#pattern| (#(#values,)*)))
         } else {
             rows
         };
-        let heading = self.carried(result);
         let variables: Vec<Option<&Ident>> = head.args.iter().map(cq::rust::variable).collect();
         let identity = variables.len() == heading.len()
             && variables
@@ -548,7 +657,7 @@ impl Printer<'_> {
             return if let Some(ty) = self.analysis.head_dedup.get(result) {
                 self.distinct_width(
                     &format!("{result}.head"),
-                    &ty.clone(),
+                    &ty.ty.clone(),
                     rows,
                     head.args.len(),
                 )
@@ -567,15 +676,20 @@ impl Printer<'_> {
             }
         });
         let pattern = quote!((#(#binders,)*));
+        // A capture argument copies its host value; it is never a row column.
+        let answer = |v: &Ident| {
+            self.capture_value(&symbol_name(v))
+                .unwrap_or_else(|| v.to_token_stream())
+        };
         if !computed {
-            let output = variables.iter().flatten();
+            let output: Vec<_> = variables.iter().flatten().map(|v| answer(v)).collect();
             let rows = quote! {
                 ::core::iter::Iterator::map(#rows, move |#pattern| (#(#output,)*))
             };
             return if let Some(ty) = self.analysis.head_dedup.get(result) {
                 self.distinct_width(
                     &format!("{result}.head"),
-                    &ty.clone(),
+                    &ty.ty.clone(),
                     rows,
                     head.args.len(),
                 )
@@ -583,7 +697,13 @@ impl Printer<'_> {
                 rows
             };
         }
-        let shadows = self.shadows(result);
+        let mut shadows = self.shadows(result);
+        if let Some(read) = self.encoded.blocks.reads.get(&consumer) {
+            shadows.extend(read.fields.keys().map(|column| {
+                let ident = self.ident(result, column);
+                quote!(#[allow(unused_variables)] let #ident = &#ident;)
+            }));
+        }
         let temporaries = (0..head.args.len())
             .filter(|&i| variables[i].is_none())
             .map(|i| format_ident!("__cq_h{i}"));
@@ -593,10 +713,14 @@ impl Printer<'_> {
             .zip(&variables)
             .filter(|(_, v)| v.is_none())
             .map(|(e, _)| e);
-        let output = variables.iter().enumerate().map(|(i, v)| match v {
-            Some(v) => v.to_token_stream(),
-            None => format_ident!("__cq_h{i}").to_token_stream(),
-        });
+        let output: Vec<_> = variables
+            .iter()
+            .enumerate()
+            .map(|(i, v)| match v {
+                Some(v) => answer(v),
+                None => format_ident!("__cq_h{i}").to_token_stream(),
+            })
+            .collect();
         let mapped = quote! {
             ::core::iter::Iterator::map(#rows, move |#[allow(unused_variables)] #pattern| {
                 let (#(#temporaries,)*) = { #(#shadows)* (#(#expressions,)*) };
@@ -618,7 +742,7 @@ impl Printer<'_> {
         } else {
             self.distinct_width(
                 &format!("{result}.head"),
-                &self.analysis.head_dedup[result].clone(),
+                &self.analysis.head_dedup[result].ty.clone(),
                 mapped,
                 head.args.len(),
             )

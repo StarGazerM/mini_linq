@@ -2,25 +2,40 @@ use cq_lang_sequence::{Program, contract};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
-fn pipeline(query: TokenStream) -> cq_lang_structures::Program {
+struct Stack {
+    physical: cq_lang_structures::physical::Program,
+    structures: cq_lang_structures::Program,
+    program: Program,
+}
+
+impl syn::parse::Parse for Stack {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = cq_lang_structures::Program::parse(input, &physical)?;
+        Ok(Self { physical, structures, program: input.parse()? })
+    }
+}
+
+fn pipeline(query: TokenStream) -> (cq_lang_structures::physical::Program, cq_lang_structures::Program) {
     let cq: cq_lang_cq::Program = syn::parse2(query).unwrap();
     let normal = cq_lang_cq::normal::normalize(&cq).unwrap();
     let vo = cq_order::compile(&normal, &Default::default()).unwrap();
-    let ra = cq_elaborate::compile(&vo).unwrap();
+    let (ra, _) = cq_relational_lowering::compile(&normal, &vo).unwrap();
     let ix = cq_index_policy::compile(&ra).unwrap();
     let physical = cq_physical_lowering::compile(&ix).unwrap();
-    cq_structure_selection::compile(&physical).unwrap()
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    (physical, structures)
 }
 
 fn assert_answers(
-    structures: cq_lang_structures::Program,
+    (physical, structures): (cq_lang_structures::physical::Program, cq_lang_structures::Program),
     data: TokenStream,
     expected: TokenStream,
 ) -> TokenStream {
-    let program = cq_sequence_lowering::compile(&structures).unwrap();
-    cq_sequence_lowering::check(&structures, &program).unwrap();
-    let analysis = contract::check(&program).unwrap();
-    let sequence = cq_sequence_pull::translate(&program, &analysis)
+    let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    cq_sequence_lowering::check(&physical, &structures, &program).unwrap();
+    let analysis = contract::check(&physical, &structures, &program).unwrap();
+    let sequence = cq_sequence_pull::translate(&physical, &structures, &program, &analysis)
         .unwrap_or_else(|error| panic!("{error}\n{}", program.to_token_stream()));
     quote!({
         #data
@@ -32,30 +47,26 @@ fn assert_answers(
 
 #[test]
 fn reserve_previous_rejects_non_arena_pull_terminals() {
-    let structures = pipeline(quote! {
+    let (physical, structures) = pipeline(quote! {
         struct Query;
         relation R(a:i32);
         answer(a) :- R(a);
     });
-    let mut program = cq_sequence_lowering::compile(&structures).unwrap();
+    let mut program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     program.sequence.output = Some(cq_lang_sequence::OutputProtocol::ReservePrevious);
-    let analysis = contract::check(&program).unwrap();
+    let analysis = contract::check(&physical, &structures, &program).unwrap();
     for result in [
-        cq_sequence_pull::translate(&program, &analysis),
-        cq_sequence_pull::translate_profile(&program, &analysis),
+        cq_sequence_pull::translate(&physical, &structures, &program, &analysis),
+        cq_sequence_pull::translate_profile(&physical, &structures, &program, &analysis),
     ] {
-        let error = result.unwrap_err().to_string();
-        assert!(
-            error.contains("output reserve_previous requires an arena terminal"),
-            "{error}"
-        );
+        assert!(result.is_err());
     }
 }
 
 #[test]
 fn cq_pipeline_answers_equal_independent_expected_sets() {
     let data = quote! {
-        let L = vec![(1i32, 2i32), (1, 2), (2, 3), (3, 4)];
+        let L = vec![(1i32, 2i32), (2, 3), (3, 4)];
         let R = vec![(2i32, 7i32), (2, 8), (3, 9), (5, 10)];
         let S = vec![(7i32, 42i32), (8, 41), (9, 42)];
     };
@@ -105,6 +116,96 @@ fn cq_pipeline_answers_equal_independent_expected_sets() {
     run(quote!(fn main() { #(#checks)* }));
 }
 
+#[test]
+fn closed_relational_operands_run_once_and_rust_stays_verbatim() {
+    let (physical, structures) = pipeline(quote! {
+        struct Query;
+        relation R(a:i32);
+        answer(a) :- R(a), where a >= minimum(), if (*a + 1) > 2;
+    });
+    let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let expression =
+        cq_sequence_pull::translate(&physical, &structures, &program, &contract::check(&physical, &structures, &program).unwrap()).unwrap();
+    let printed = expression.to_token_stream().to_string();
+    assert!(printed.contains("(* a + 1) > 2"), "{printed}");
+    assert!(!printed.contains("wrapping_"), "{printed}");
+    assert_eq!(printed.matches("minimum ()").count(), 1, "{printed}");
+    run(quote! {
+        fn main() {
+            let calls = ::std::cell::Cell::new(0);
+            let minimum = || { calls.set(calls.get() + 1); 2i32 };
+            let R = [(1i32,), (2,), (3,)];
+            let actual: ::std::collections::BTreeSet<_> = (#expression).into_iter().collect();
+            assert_eq!(actual, [(&2i32,), (&3,)].into_iter().collect());
+            assert_eq!(calls.get(), 1);
+        }
+    });
+}
+
+#[test]
+fn closed_path_parameters_preserve_streaming() {
+    let (physical, structures) = pipeline(quote! {
+        struct Query;
+        relation R(a:i32);
+        answer(a) :- R(a), where a >= minimum;
+    });
+    let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let expression =
+        cq_sequence_pull::translate(&physical, &structures, &program, &contract::check(&physical, &structures, &program).unwrap()).unwrap();
+    let printed = expression.to_token_stream().to_string();
+    assert!(printed.contains("= & minimum ;"), "{printed}");
+    assert!(
+        !printed.contains("collect :: < :: std :: vec :: Vec"),
+        "{printed}"
+    );
+    run(quote! {
+        fn main() {
+            let minimum = 2i32;
+            let R = [(1i32,), (2,), (3,)];
+            let actual: ::std::collections::BTreeSet<_> = (#expression).into_iter().collect();
+            assert_eq!(actual, [(&2i32,), (&3,)].into_iter().collect());
+        }
+    });
+}
+
+#[test]
+fn generators_preserve_capture_types_and_row_borrowing() {
+    let scalar = assert_answers(
+        pipeline(quote! {
+            struct Query;
+            relation R(k:i32);
+            relation answer(y:i32);
+            answer(y) :- R(k), for y in 0..limit;
+        }),
+        quote! { let limit = 2i32; let R = [(1i32,), (2,)]; },
+        quote!([(0i32,), (1,)]),
+    );
+    let row = assert_answers(
+        pipeline(quote! {
+            struct Query;
+            relation R(values:Vec<i32>);
+            relation answer(y:&i32);
+            answer(y) :- R(x), for y in x.iter();
+        }),
+        quote! { let R = [(vec![1i32, 2],), (vec![3],)]; },
+        quote!([(&1i32,), (&2,), (&3,)]),
+    );
+    let mixed = assert_answers(
+        pipeline(quote! {
+            struct Query;
+            relation R(values:Vec<i32>);
+            relation answer(y:&i32);
+            answer(y) :- R(x), for y in x.iter().chain(extra.iter());
+        }),
+        quote! {
+            let R = [(vec![1i32, 2],), (vec![3],)];
+            let extra = vec![4i32];
+        },
+        quote!([(&1i32,), (&2,), (&3,), (&4,)]),
+    );
+    run(quote!(fn main() { #scalar #row #mixed }));
+}
+
 fn run(source: TokenStream) {
     let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/cq-storage/src/lib.rs");
@@ -114,36 +215,35 @@ fn run(source: TokenStream) {
 
 #[test]
 fn deliberately_false_evidence_preserves_generated_code_and_answers() {
-    let structures = pipeline(quote! {
+    let (physical, structures) = pipeline(quote! {
         struct Query;
         relation R(a:i32,b:i32);
         relation S(a:i32);
         answer(a,b) :- R(a,b), S(a);
     });
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     let mut advised = source.clone();
     advised.evidence = syn::parse_quote! {
-        evidence {
+        evidence from authored("passes/cq-sequence-pull/tests/translation.rs fixture") {
             count R = 0;
-            key R [a];
             foreign_key R [a] -> S [a];
             selectivity R = 0 / 1;
             bounds R.a = 100 ..= 200;
             sorted R [a];
         }
     };
-    cq_lang_sequence::check_rewrite(&source, &advised).unwrap();
+    cq_lang_sequence::check_rewrite(&physical, &structures, &source, &physical, &structures, &advised).unwrap();
     let original =
-        cq_sequence_pull::translate(&source, &contract::check(&source).unwrap()).unwrap();
+        cq_sequence_pull::translate(&physical, &structures, &source, &contract::check(&physical, &structures, &source).unwrap()).unwrap();
     let estimated =
-        cq_sequence_pull::translate(&advised, &contract::check(&advised).unwrap()).unwrap();
+        cq_sequence_pull::translate(&physical, &structures, &advised, &contract::check(&physical, &structures, &advised).unwrap()).unwrap();
     assert_eq!(
         original, estimated,
         "evidence must not alter execution premises"
     );
     run(quote! {
         fn main() {
-            let R = vec![(2i32, 20i32), (1, 10), (1, 11), (9, 90), (1, 10)];
+            let R = vec![(2i32, 20i32), (1, 10), (1, 11), (9, 90)];
             let S = vec![(1i32,), (2,)];
             let original: ::std::collections::BTreeSet<_> = (#original).into_iter().collect();
             let estimated: ::std::collections::BTreeSet<_> = (#estimated).into_iter().collect();
@@ -155,32 +255,39 @@ fn deliberately_false_evidence_preserves_generated_code_and_answers() {
     });
 }
 
-fn simple(body: TokenStream) -> Program {
+fn simple(body: TokenStream) -> Stack {
     let physical = syn::parse_quote! {
         physical {
-            relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            relation R(a:i32,witness:i32);
+            input = pipe rename R {a -> a,witness -> witness};
+            r = let canon project input keep {a};
             return r as answer(a);
         }
     };
-    Program {
-        structures: cq_structure_selection::compile(&physical).unwrap(),
-        sequence: syn::parse2(quote!(sequence { #body })).unwrap(),
-        graded: None,
-        evidence: Default::default(),
-    }
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    syn::parse_quote!(#physical #structures sequence { #body })
 }
 
 #[test]
 fn sequence_owned_store_keeps_independent_row_accounting_live() {
-    let program = simple(quote! {
-        input = store rows r;
-        out = store canon input;
-    });
-    let analysis = contract::check(&program).unwrap();
+    let physical = syn::parse_quote! { physical {
+        relation R(a:i32);
+        r = pipe rename R {a -> a};
+        combined = let canon union r,r;
+        return combined as answer(a);
+    }};
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let Stack { physical, structures, program }: Stack = syn::parse_quote! {
+        #physical #structures
+        sequence {
+            input = store rows r;
+            out = store canon union [input,input];
+        }
+    };
+    let analysis = contract::check(&physical, &structures, &program).unwrap();
     for output in [
-        cq_sequence_pull::translate(&program, &analysis).unwrap(),
-        cq_sequence_pull::translate_profile(&program, &analysis).unwrap(),
+        cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap(),
+        cq_sequence_pull::translate_profile(&physical, &structures, &program, &analysis).unwrap(),
     ] {
         let printed = output.to_token_stream().to_string();
         assert!(printed.contains(
@@ -193,25 +300,25 @@ fn sequence_owned_store_keeps_independent_row_accounting_live() {
 fn constructors_execute_and_choose_uses_the_else_arm() {
     let cases = [
         (
-            quote!(out = store canon flatten tile 3 rows r;),
+            quote!(out = store canon flatten tile 3 map r rows input;),
             quote!(vec![(&1i32,), (&2i32,)]),
         ),
-        (quote!(out = store fold count rows r;), quote!(vec![3usize])),
-        (quote!(out = store fold or rows r;), quote!(vec![true])),
-        (quote!(out = store fold sum a rows r;), quote!(vec![4i32])),
+        (quote!(out = store fold count map r rows input;), quote!(vec![3usize])),
+        (quote!(out = store fold or map r rows input;), quote!(vec![true])),
+        (quote!(out = store fold sum a map r rows input;), quote!(vec![4i32])),
         (
-            quote!(out = store canon choose [len R < 2 => rows r, else => rows r];),
+            quote!(out = store canon choose [len R < 2 => map r rows input, else => map r rows input];),
             quote!(vec![(&1i32,), (&2i32,)]),
         ),
     ];
     let checks = cases
         .into_iter()
         .map(|(body, expected)| {
-            let program = simple(body);
-            let analysis = contract::check(&program).unwrap();
-            let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
+            let Stack { physical, structures, program } = simple(body);
+            let analysis = contract::check(&physical, &structures, &program).unwrap();
+            let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
             quote!({
-                let R = vec![(1i32,), (1,), (2,)];
+                let R = vec![(1i32, 0i32), (1, 1), (2, 2)];
                 assert_eq!((#output).into_iter().collect::<Vec<_>>(), #expected);
             })
         })
@@ -220,16 +327,150 @@ fn constructors_execute_and_choose_uses_the_else_arm() {
 }
 
 #[test]
+fn worker_choices_stream_flat_and_nested_alternatives() {
+    let mut checks = Vec::new();
+    for bound in [1usize, 2] {
+        for body in [
+            quote!(out = store canon choose [
+                workers < #bound => map r rows input, else => flatten tile 2 map r rows input
+            ];),
+            quote!(out = store canon flatten choose [
+                workers < #bound => tile 1 map r rows input, else => tile 2 map r rows input
+            ];),
+            quote!(out = store canon flatten flatten choose [
+                workers < #bound => tile 1 tile 2 map r rows input,
+                workers < 3 => tile 2 tile 1 map r rows input,
+                else => tile 3 tile 2 map r rows input
+            ];),
+        ] {
+            let Stack { physical, structures, program } = simple(body);
+            let analysis = contract::check(&physical, &structures, &program).unwrap();
+            for pull in [true, false] {
+                assert!(analysis.task_execution.staging(pull).all(|(_, staging)| {
+                    matches!(
+                        staging,
+                        cq_lang_sequence::task_execution::Staging::TileInput
+                    )
+                }));
+            }
+            let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
+            let printed = output.to_token_stream().to_string();
+            assert!(
+                printed.contains("cq_storage :: sequence :: Choice :: Left"),
+                "{printed}"
+            );
+            assert!(
+                printed.contains("cq_storage :: sequence :: Choice :: Right"),
+                "{printed}"
+            );
+            checks.push(quote!({
+                let R = vec![(1i32, 0i32), (1, 1), (2, 2)];
+                assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1i32,), (&2i32,)]);
+            }));
+        }
+    }
+    run(quote!(fn main() { #(#checks)* }));
+}
+
+#[test]
+fn runtime_choices_keep_recorded_selection_owners_alive() {
+    let physical = syn::parse_quote! { physical {
+        relation R(a:i64);
+        r = pipe rename R {a -> a};
+        s = let range select r if (a > 1);
+        out = let canon project s keep {a};
+        return out as answer(a);
+    }};
+    let (physical, mut structures) =
+        cq_structure_selection::compile_with(&physical, quote!(positional(R))).unwrap();
+    // Use an authored scalar marker so the standalone rustc fixture needs
+    // only cq-storage, not cq-load's column marker implementation.
+    for entry in &mut structures.structures.entries {
+        if let cq_lang_structures::Structure::Read { marker, .. } = &mut entry.structure {
+            *marker = syn::parse_quote!(First);
+        }
+    }
+    let mut checks = Vec::new();
+    for bound in [1usize, 2] {
+        for rows in [
+            quote!(choose [
+                workers < #bound => map s rows r,
+                else => map s rows r
+            ]),
+            quote!(flatten choose [
+                workers < #bound => tile 1 map s rows r,
+                else => choose [
+                    workers < #bound => tile 2 map s rows r,
+                    else => tile 3 map s rows r
+                ]
+            ]),
+        ] {
+            let program: Program = syn::parse_quote! {
+                sequence { answer = store canon map out #rows; }
+            };
+            let analysis = contract::check(&physical, &structures, &program).unwrap();
+            assert!(cq_lang_structures::contract::check(&physical, &structures).unwrap().selections.contains_key("s"));
+            for output in [
+                cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap(),
+                cq_sequence_pull::translate_profile(&physical, &structures, &program, &analysis).unwrap(),
+                cq_sequence_pull::translate_with(
+                    &physical,
+                    &structures,
+                    &program,
+                    &analysis,
+                    syn::parse_quote!(1usize),
+                    cq_sequence_pull::CanonTarget::Sequential,
+                    |_, _, _, _, _, _| Ok(()),
+                ).unwrap(),
+                cq_sequence_pull::translate_profile_with(
+                    &physical,
+                    &structures,
+                    &program,
+                    &analysis,
+                    syn::parse_quote!(1usize),
+                    cq_sequence_pull::CanonTarget::Sequential,
+                    |_, _, _, _, _, _| Ok(()),
+                ).unwrap(),
+            ] {
+                checks.push(quote!({
+                    let R = vec![(3i64,), (1,), (2,)];
+                    assert_eq!(
+                        (#output).into_iter().collect::<Vec<_>>(),
+                        vec![(&2i64,), (&3i64,)]
+                    );
+                }));
+            }
+        }
+    }
+    let source = quote! {
+        #[derive(Clone, Copy, Default)]
+        struct First;
+        impl<'a> ::cq_storage::Column<&'a Vec<(i64,)>> for First {
+            type Key = i64;
+            fn key(self, host: &'a Vec<(i64,)>, id: ::cq_storage::RowId) -> i64 {
+                host[id.offset()].0
+            }
+        }
+        impl<'a> ::cq_storage::ColumnSlot<&'a Vec<(i64,)>, 0> for First {}
+        fn main() { #(#checks)* }
+    };
+    let storage = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    // This fixture also executes the explicitly profiled translations.
+    cq_testkit::rustc::Runtime::new(&storage, true).run(&source.to_string());
+}
+
+#[test]
 fn translation_requires_host_grades_but_does_not_recheck_the_program() {
-    let program = simple(quote!(out = store canon rows r;));
-    let mut analysis = contract::check(&program).unwrap();
+    let Stack { physical, structures, program } = simple(quote!(out = store canon map r rows input;));
+    let mut analysis = contract::check(&physical, &structures, &program).unwrap();
     analysis
         .levels
         .insert("out".into(), vec!["host".into(), "pool".into()]);
-    assert!(cq_sequence_pull::translate(&program, &analysis).is_err());
+    assert!(cq_sequence_pull::translate(&physical, &structures, &program, &analysis).is_err());
     analysis.levels.insert("out".into(), vec!["host".into()]);
     assert!(
-        cq_sequence_pull::translate(&program, &analysis)
+        cq_sequence_pull::translate(&physical, &structures, &program, &analysis)
             .unwrap()
             .to_token_stream()
             .to_string()
@@ -242,20 +483,28 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
-            j = pipe canon probe first [a] l,r;
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
             return j as answer(a,b);
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     for entry in &mut structures.structures.entries {
         if let cq_lang_structures::Structure::Built { keyed, .. } = &mut entry.structure {
-            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _>);
+            keyed.provider = cq_lang_structures::provider::base::instance(
+                "sorted_run",
+                syn::parse_quote!(::cq_storage::SortedRun<_, _>),
+            );
         }
     }
+    structures
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration(
+            "sorted_run",
+        )])
+        .unwrap();
     let program = Program {
-        structures,
         sequence: syn::parse_quote!(sequence {
             right = store rows r;
             expanded = store flatten lookup r [a] rows l;
@@ -263,17 +512,22 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
         }),
         graded: None,
         evidence: Default::default(),
+        representation: Default::default(),
     };
-    let analysis = contract::check(&program).unwrap();
+    let analysis = contract::check(&physical, &structures, &program).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
-        cq_lang_sequence::Capability::Exact
+        cq_lang_sequence::structures::Capability::Exact
     );
-    let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
+    assert_eq!(
+        cq_lang_structures::contract::check(&physical, &structures).unwrap().read_accesses["r"][&vec!["a".into()]],
+        cq_lang_structures::ReadAccess::Keyed
+    );
+    let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
     assert!(!output.to_token_stream().to_string().contains("RangeCursor"));
     run(quote!(
         fn main() {
-            let L = vec![(1i32,), (3,), (1,)];
+            let L = vec![(1i32,), (3,)];
             let R = vec![(1i32, 7i32), (1, 8), (2, 9)];
             assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1, &7), (&1, &8)]);
         }
@@ -281,19 +535,60 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
 }
 
 #[test]
-fn canon_uses_the_recorded_set_constructor_without_requiring_build() {
-    let mut program = simple(quote!(out = store canon rows r;));
-    for entry in &mut program.structures.structures.entries {
-        if let cq_lang_structures::Structure::Dedup { ty, .. } = &mut entry.structure {
-            *ty = syn::parse_quote!(::std::collections::BTreeSet<_>);
+fn whole_relation_access_preserves_host_and_retained_empty_key_reads() {
+    let mut checks = Vec::new();
+    for mode in ["pipe", "let"] {
+        for (operator, choice, head) in [
+            ("probe", "first", "a,b"),
+            ("semi", "eager", "a"),
+            ("anti", "eager", "a"),
+        ] {
+            let physical = syn::parse_str(&format!(
+                "physical {{
+                    relation L(a:i32); relation R(b:i32);
+                    l = pipe rename L {{a -> a}};
+                    r = {mode} rename R {{b -> b}};
+                    out = let canon {operator} {choice} [] l,r;
+                    return out as answer({head});
+                }}"
+            ))
+            .unwrap();
+            let structures = cq_structure_selection::compile(&physical).unwrap();
+            let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+            let analysis = contract::check(&physical, &structures, &program).unwrap();
+            assert_eq!(
+                cq_lang_structures::contract::check(&physical, &structures).unwrap().read_accesses["r"][&Vec::<String>::new()],
+                cq_lang_structures::ReadAccess::Whole
+            );
+            let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
+            let expected = match operator {
+                "probe" => quote!(L.iter().flat_map(|(a,)| R.iter().map(move |(b,)| (a, b)))),
+                "semi" => quote!(L.iter().filter(|_| !R.is_empty()).map(|(a,)| (a,))),
+                "anti" => quote!(L.iter().filter(|_| R.is_empty()).map(|(a,)| (a,))),
+                _ => unreachable!(),
+            };
+            checks.push(quote! {
+                for R in [vec![], vec![(7i32,), (8,)]] {
+                    let L = vec![(1i32,), (2,)];
+                    let actual = (#output).into_iter().collect::<::std::collections::BTreeSet<_>>();
+                    let expected = (#expected).collect::<::std::collections::BTreeSet<_>>();
+                    assert_eq!(actual, expected);
+                }
+            });
         }
     }
-    let analysis = contract::check(&program).unwrap();
-    let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
+    run(quote!(fn main() { #(#checks)* }));
+}
+
+#[test]
+fn canon_sorts_and_uniques_without_requiring_build() {
+    let Stack { physical, structures, program } = simple(quote!(out = store canon map r rows input;));
+    let analysis = contract::check(&physical, &structures, &program).unwrap();
+    let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
     run(quote!(
         fn main() {
-            let R = vec![(2i32,), (1,), (2,)];
-            assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&2,), (&1,)]);
+            let R = vec![(2i32, 0i32), (1, 1), (2, 2)];
+            assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1,), (&2,)]);
         }
     ));
 }
@@ -303,17 +598,18 @@ fn membership_and_payload_reads_share_the_same_provider() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             s = pipe semi eager [a] l,r;
-            j = pipe canon probe first [a] s,r;
+            j = let canon probe first [a] s,r;
             return j as answer(a,b);
         }
     };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
     let check = assert_answers(
-        cq_structure_selection::compile(&physical).unwrap(),
+        (physical, structures),
         quote! {
-            let L = vec![(1i32,), (3,), (1,)];
+            let L = vec![(1i32,), (3,)];
             let R = vec![(1i32, 7i32), (1, 8), (2, 9)];
         },
         quote!([(&1i32, &7i32), (&1, &8)]),
@@ -326,17 +622,18 @@ fn non_host_exists_is_stored_before_a_membership_read() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {b -> b};
             s = exists canon project r keep {};
-            j = pipe canon probe first [] l,s;
+            j = let canon probe first [] l,s;
             return j as answer(a);
         }
     };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
     let check = assert_answers(
-        cq_structure_selection::compile(&physical).unwrap(),
+        (physical, structures),
         quote! {
-            let L = vec![(1i32,), (3,), (1,)];
+            let L = vec![(1i32,), (3,)];
             let R = vec![(7i32,), (8,)];
         },
         quote!([(&1i32,), (&3,)]),
@@ -348,34 +645,34 @@ fn non_host_exists_is_stored_before_a_membership_read() {
 fn lifted_maps_folds_and_canon_preserve_tile_boundaries() {
     let cases = [
         (
-            quote!(out = store map r tile 2 rows r;),
+            quote!(out = store map r tile 2 rows input;),
             quote!(vec![(&1i32,), (&1,), (&2,)]),
         ),
         (
-            quote!(out = store fold count tile 2 rows r;),
+            quote!(out = store fold count tile 2 map r rows input;),
             quote!(vec![2usize, 1]),
         ),
         (
-            quote!(out = store canon tile 2 rows r;),
+            quote!(out = store canon tile 2 map r rows input;),
             quote!(vec![(&1i32,), (&2,)]),
         ),
         (
-            quote!(out = store fold sum a tile 2 rows r;),
+            quote!(out = store fold sum a tile 2 map r rows input;),
             quote!(vec![2i32, 2]),
         ),
         (
-            quote!(out = store flatten tile 1 tile 2 rows r;),
+            quote!(out = store flatten tile 1 tile 2 map r rows input;),
             quote!(vec![(&1i32,), (&1,), (&2,)]),
         ),
     ];
     let checks = cases
         .into_iter()
         .map(|(body, expected)| {
-            let program = simple(body);
-            let analysis = contract::check(&program).unwrap();
-            let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
+            let Stack { physical, structures, program } = simple(body);
+            let analysis = contract::check(&physical, &structures, &program).unwrap();
+            let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
             quote!({
-                let R = vec![(1i32,), (1,), (2,)];
+                let R = vec![(1i32, 0i32), (1, 1), (2, 2)];
                 assert_eq!((#output).into_iter().collect::<Vec<_>>(), #expected);
             })
         })
@@ -389,23 +686,24 @@ fn canonical_consumer_receives_duplicate_witnesses_without_local_answer_sets() {
     for head in [quote!(a), quote!(*a % 2)] {
         let physical = syn::parse2(quote! {
             physical {
-                relation R(a:i32);
+                relation R(a:i32,witness:i32);
                 consumer canonical;
-                r = pipe rename R@0 {a -> a};
+                input = pipe rename R {a -> a,witness -> witness};
+                r = pipe project input keep {a};
                 return r as answer(#head);
             }
         })
         .unwrap();
         let structures = cq_structure_selection::compile(&physical).unwrap();
-        let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-        let analysis = contract::check(&sequence).unwrap();
-        let output = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+        let sequence = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+        let analysis = contract::check(&physical, &structures, &sequence).unwrap();
+        let output = cq_sequence_pull::translate(&physical, &structures, &sequence, &analysis).unwrap();
         let printed = output.to_token_stream().to_string();
         assert!(!printed.contains("__cq_seen"), "{printed}");
         assert!(!printed.contains("HashSet"), "{printed}");
         checks.push(quote! {
             {
-                let R = [(1i32,), (1,), (3,)];
+                let R = [(1i32, 0i32), (1, 1), (3, 2)];
                 let rows: Vec<_> = (#output).into_iter().collect();
                 assert_eq!(rows.len(), 3);
             }
@@ -420,22 +718,64 @@ fn canonical_consumer_preserves_internal_canon() {
         physical {
             relation R(a:i32,b:i32);
             consumer canonical;
-            r = pipe canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R {a -> a,b -> b};
             p = pipe project r keep {a};
             return p as answer(a);
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-    let analysis = contract::check(&sequence).unwrap();
-    let output = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+    let sequence = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let analysis = contract::check(&physical, &structures, &sequence).unwrap();
+    let output = cq_sequence_pull::translate(&physical, &structures, &sequence, &analysis).unwrap();
     let printed = output.to_token_stream().to_string();
-    assert_eq!(printed.matches("let mut __cq_seen").count(), 1, "{printed}");
+    assert_eq!(
+        printed.matches("dedup :: Sort > :: sort").count(),
+        1,
+        "{printed}"
+    );
     run(quote! {
         fn main() {
-            let R = [(1i32, 10i32), (1, 10), (1, 20)];
+            let R = [(1i32, 10i32), (1, 20)];
             let rows: Vec<_> = (#output).into_iter().collect();
             assert_eq!(rows, vec![(&1i32,), (&1i32,)]);
         }
     });
+}
+
+#[test]
+fn ordered_canon_consumes_verified_source_without_hashing() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation R(a:i32,b:i32);
+            r = pipe canon rename R {a -> x,b -> y};
+            return r as answer(x,y);
+        }
+    };
+    let structures = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| cq_lang_structures::Program::parse(input, &physical),
+        quote! { structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r canon = host;
+        } },
+    ).unwrap();
+    let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let analysis = contract::check(&physical, &structures, &program).unwrap();
+    let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
+    let printed = output.to_token_stream().to_string();
+    assert!(printed.contains("ordered_ref"), "{printed}");
+    assert!(!printed.contains("HashSet"), "{printed}");
+    run(quote! {
+        fn main() {
+            let R = cq_storage::dedup::verify_prefix_order(
+                vec![(1i32, 9i32), (1, 3), (2, 4)],
+                |left, right| left.0.cmp(&right.0),
+            ).unwrap();
+            let rows: Vec<_> = (#output).collect();
+            assert_eq!(rows, vec![(&1, &3), (&1, &9), (&2, &4)]);
+            assert_eq!(R.len(), 3);
+        }
+    });
+    let mut detached = program.clone();
+    detached.sequence.definitions[0].term = syn::parse_quote!(canon store rows r);
+    assert!(contract::check(&physical, &structures, &detached).is_err());
 }

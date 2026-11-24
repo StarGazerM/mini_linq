@@ -11,11 +11,13 @@ hashbrown = { version = "=0.15.5", default-features = false, features = ["inline
 rayon = "1"
 
 [dev-dependencies]
-cq-load = { path = "../cq-load", default-features = false }
+cq-load = { path = "../../io/cq-load", default-features = false }
 
 [features]
 default = []
 counters = []
+# The pass a program offers a statistics collector once it has its result.
+planner-calibration = []
 # Independent timing mode; enabling counters as well retains every counter.
 operator-timing = []
 

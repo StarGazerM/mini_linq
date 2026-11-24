@@ -1,40 +1,54 @@
 //! # cq-rewrites
 //!
-//! External checked rewrite passes for MiniLinq. This standalone workspace uses
+//! External checked rewrite passes for MiniLinq. This feature group uses
 //! only the public core API. `cq-rewrites` exports the proc macros;
 //! `cq-rewrite-passes` exports the corresponding functions for tools and tests.
 //! Every macro runs `cq_stage::rewrite`, including the language's source, target,
 //! and correspondence checks.
 //!
 //! `sorted_runs` takes no arguments and retypes only explicitly built
-//! `::cq_storage::HashIndex` payload providers with one nonempty key level.
+//! `hash_index` payload providers with one nonempty key level (token
+//! `sorted_run`).
 //! Shared membership reads keep using the same exact payload provider. Host
 //! fallbacks, membership-only annotations, multi-level tries, and providers
 //! used as smallest-intersection candidates are unchanged. The replacement
 //! requires Ord + Copy keys and Copy items (Leibniz admissibility is a premise);
 //! rustc checks Build, IndexRead and ExactMembership at the existing guards.
-//! A single stored i32/i64 column is eligible. Borrowed keys record
-//! BorrowedI64TupleCodec for the rank directory; computed/owned keys record
-//! NoDense for exact binary search. Multi-column and non-integral keys remain HashIndex.
+//! A single stored column is eligible and records `I64Codec`; rustc checks its
+//! `OrderKey` bound at the build (no trait-selected codec). Multi-column keys
+//! remain `hash_index`.
 //! Eligible rank spans exceeding 1,048,576 bits still fall back to binary
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
 //!
-//! `radix_runs` instead selects `::cq_storage::RadixRun<_,_>` for explicit
-//! singleton i32/i64/u32/u64 payload builds, including owned/computed keys.
-//! Its native radix12/error32 spline narrows exact payload search, without a hash
-//! or whole-array binary fallback. Dense-domain membership can use a lazy exact
-//! presence bitmap (at most 128 KiB and one byte per distinct key); payload-only
-//! reads do not allocate it. Unsupported providers stay unchanged.
+//! `radix_runs` instead selects token `radix_run` (`::cq_storage::RadixRun`) for explicit
+//! singleton payload builds, including owned/computed keys. Rust checks the
+//! provider's OrderKey obligations. Its radix12/error32 spline narrows exact
+//! payload search, without a hash or whole-array binary fallback. Dense-domain
+//! membership can use a lazy exact presence bitmap (at most 128 KiB and one
+//! byte per distinct key); payload-only reads do not allocate it. Unsupported
+//! provider layouts stay unchanged.
 //! Compose with `retain_lookups` to reuse exact ranges, and optionally
 //! `expand_lookups(N)` for checked segmented execution. Neither sorted storage
 //! nor range capability alone selects a merge join or GPU execution.
+//! Each selected run also records its payload layout, `items rows` or
+//! `items columns` (SEL-ItemLayout): column-wise (`TupleColumns<_>`) only when
+//! the payload has 2..=12 fields and some reader of the index carries part of
+//! it, otherwise contiguous rows (`Vec<_>`).
 //! Use `pipeline { structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups]; }`.
+//!
+//! `packed_canon` takes no arguments and retypes every canonical rows record
+//! of token `sort` (`::cq_storage::dedup::Sort`) to token `packed`
+//! (`::cq_storage::dedup::Packed`), the
+//! sorted run keyed by the packed `OrderKey` of every column. The advice is
+//! the author's premise that every such column has an `OrderKey` (rustc
+//! checks `PackedRow`); answers and their order are unchanged.
 //!
 //! `retain_lookups` takes no arguments and records a `share` decision and a
 //! `repr` witness for each eligible eager semijoin followed by a probe of the
 //! same provider with declared `supports [retain]` and preserved keys. `expand`
-//! support implies `retain`; provider names do not establish either contract.
+//! support implies `retain`; provider names and column type spellings do not
+//! establish these contracts. Rust checks the selected provider's key traits.
 //! Prefix witnesses force at the introducing probe. Generated cursor types are
 //! inferred with `as _`; an existing positions representation is preserved.
 //! The Structures contract rejects witness escape across retained rows,
@@ -45,8 +59,10 @@
 //! Neither rewrite is enabled by default.
 //! Sorted/radix selection records `supports [retain, expand, keys]`. Native
 //! payload selection records `supports [keys]` where distinct-key enumeration is
-//! implemented. `retype(r => MyProvider<_, _> supports [expand, keys])` replaces
-//! a provider and its declarations together; bare `retype` clears declarations.
+//! implemented. `retype(providers { my_provider = MyProvider<_, _> { reads [exact,
+//! membership], supports [expand, keys], build typed }; } r => @my_provider as
+//! MyProvider<_, _> supports [expand, keys])` replaces a provider token, its
+//! spelling and its declarations together; bare `retype` clears declarations.
 //! Retyping a live retained/staged plan must preserve its required support.
 //!
 //! ```rust
@@ -54,7 +70,6 @@
 //! let answer: Vec<_> = mini_linq::compile! {
 //!     pipeline {
 //!         physical = [cq_rewrites::canon_prefixes];
-//!         structures = [cq_rewrites::retype(dedup => ::std::collections::BTreeSet<_>)];
 //!     }
 //!     struct Project;
 //!     relation R(x: i32, y: i32) = (rows);
@@ -70,30 +85,51 @@
 //! inadmissible. Reapplying a rewrite is idempotent. A projection already known
 //! to preserve a key needs no additional canonical boundary.
 //!
+//! `smallest_intersections(smallest(r0, r1, r2))` instead selects one
+//! complete intersection site by Physical rename definition name; two or more
+//! distinct names are required. Multiple sites are comma-separated `smallest(...)`
+//! clauses. Their list order is immaterial; each must match exactly one admissible
+//! site, including every candidate provider. Missing, duplicate, ambiguous,
+//! partial, or blocked selections are errors. Authored CQ selectors such as
+//! `R@1.0.2` resolve at this invocation through the carried planning side tables.
+//! Unary filters/projections retain the named provider; opaque Rust and
+//! multi-input providers do not invent one.
+//! For an explicit site, a semijoin side with extra payload receives a retained
+//! projection of exactly its membership keys. This private candidate view does
+//! not replace the complete occurrence used by later expansions; Physical
+//! correspondence checks its input, columns and unique smallest consumer.
+//! No advice means no change to default planning or generated code.
+//!
 //! | Pass | Decision written | Admissibility |
 //! |---|---|---|
 //! | `merge_joins` | `probe` becomes `merge` | Nonempty Ord key; each side is retained, a reusable host, or a merge stream ordered on that same key. Native ordered host reads still require `OrderedRead` from rustc. |
 //! | `canon_prefixes` | Adds `canon` on a projection | Drops columns without retaining an inferred uniqueness key; retained columns satisfy the language's Leibniz checks. Existing canonical boundaries remain. |
-//! | `host_sets(E, ...)` | Records `host_set E;` and removes canon implied by full-heading keys | Names used host relations. Every printer checks exact input distinctness before execution and fails on duplicates; this is not an unchecked promise. Dropping a key still needs canon. |
-//! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
+//! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `intersection` law accepts a maximal k-way probe/check chain, k >= 2, and every interposed definition can move before the chain without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
-//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has integral (`i32`/`i64`) keyed stream reads, including an empty Cartesian key, and no lazy membership reader. Keys and predicates are unchanged; selection records providers afterwards. Const-only point/range scans remain host scans. |
+//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has keyed stream reads, including an empty Cartesian key, and no lazy membership reader. Keys and predicates are unchanged; selection records providers afterwards and rustc checks key capabilities. Const-only point/range scans remain host scans. |
 //! | `hoist(r, ...)` | Moves selected relational producers and their dependency closure before other definitions | Explicit names only; stable dependency order; opaque Rust dependencies reject; Physical correspondence checks branch scope and Before obligations. |
 //!
-//! Except for `build_host_reads` and `retain_streams`' explicit retention decisions, these passes
-//! preserve the operator graph, declarations, keys, modes, return head, and
-//! opaque Rust expressions. `smallest_intersections` moves interposed
+//! Except for `build_host_reads`/`retain_streams` retention and explicit
+//! `smallest(...)` private membership-key views, these passes preserve the
+//! operator graph, declarations, keys, modes, return head, and opaque Rust
+//! expressions. `smallest_intersections` moves interposed
 //! relational definitions earlier, preserving their dependency order, to make
-//! the candidate probe and its check adjacent. This includes reusable host
+//! the candidate probe and all its membership checks adjacent. This includes reusable host
 //! renames and retained relational chains. Bind/guard nodes stay at their original
 //! positions with the same payloads. An interposed Rust node or a consumer of the
 //! candidate blocks the rewrite; an explicit named selection then reports an
 //! inadmissible result. `hoist` moves only the selected relational dependency
 //! closure; the remaining definitions retain their relative order. Other passes
 //! preserve definition order.
-//! `smallest_intersections` currently has Set semantics. For future bag/K-relation
-//! semantics, discarding candidate multiplicity additionally requires the checked
-//! `host_set` fact (or a derived uniqueness key); bag gating is not implicit here.
+//! `smallest_intersections` has Set semantics under the unconditional input-set
+//! contract. Future bag/K-relation inputs require a separate multiplicity law
+//! and are not admitted by this contract.
+//! Every provider binds the same one new column from a nonempty prefix. Retained
+//! providers receive two-level candidate directories; reusable hosts dispatch
+//! through their declared candidate/membership capabilities. At each prefix the
+//! native terminal counts all k candidate sets once, enumerates a smallest one
+//! (written-order ties), and tests membership in every other provider. It uses
+//! stack-local scalar choices and iterator chains, not a per-row allocation.
 //!
 //! The generated generic-fine triangle and the corpus `fine_triangle` both get
 //! an active smallest choice. For example:
@@ -116,13 +152,16 @@
 //! assert_eq!(answer, vec![(1,10,100)]);
 //! ```
 //!
-//! `retype(selector => RustType)` replaces recorded types and clears their
-//! support declarations. Optional `supports [...]` replaces the declaration
-//! explicitly on keyed providers. It preserves Physical, entry order, reader
+//! `retype([providers { .. }] selector => @token as RustType)` replaces recorded
+//! provider tokens and spellings and clears their support declarations
+//! (STR-Provider). The token is declared by the advice's leading `providers`
+//! table, by the program, or among the base `cq_storage` tokens. Optional
+//! `supports [...]` replaces the declaration explicitly on keyed providers,
+//! within the token's declared support. It preserves Physical, entry order, reader
 //! identities, and index levels. A bare result name
 //! selects that result's built indexes, keysets and keyed host fallbacks, including
 //! supplemental candidate/membership reads. Scan, point, and range adapters keep
-//! their recorded types. `result(name)` disambiguates a result named like a kind.
+//! their recorded providers. `result(name)` disambiguates a result named like a kind.
 //!
 //! | Kind selector | Selected entries |
 //! |---|---|
@@ -130,13 +169,15 @@
 //! | `membership` | Built and host entries answering a semijoin, plus supplemental membership fallbacks |
 //! | `ordered` | Built and host entries answering a merge |
 //! | `trie` | Built entries with multiple written key levels |
-//! | `dedup` | Canonical-boundary and computed-head dedup state |
 //! | `rows` | Recorded retained row collections |
+//! | `group` | Keyed Group accumulator tables; providers implement empty `Default`, `entry/or_insert_with`, and owned `IntoIterator` finite-map operations |
 //! | `selection` | Immutable positional selections, preserving base, lineage and summary policy |
 //! | `keyset` | Exact key-only builds, also matched by `membership` |
 //! | `join_filter` | Conservative filters with a mandatory covering exact probe |
 //!
-//! `retype(rN join_filter => T)` selects only that scan's join-filter entry.
+//! Canonical boundaries use explicit `sort` strategies, not retypable set providers.
+//!
+//! `retype(rN join_filter => @token as T)` selects only that scan's join-filter entry.
 //! The type must implement `Build` and `ConservativeMembership`; the printer
 //! emits a rustc capability guard. Exact membership types qualify automatically.
 //! `join_filter(rN)` adds an exact filter when the scan has an admissible covering
@@ -145,6 +186,10 @@
 //! `retype` afterwards to choose another type.
 //! The Structures contract rejects missing covers, anti joins and opaque Rust in
 //! the intervening spine. Neither advice changes the exact covering probe.
+//! Exact build eligibility follows the recorded single-level key layout and
+//! declared support, not provider spellings (including routed providers and
+//! aliases). Key enumeration is the build provider's `cq_storage::Keys`
+//! obligation, checked by rustc.
 //!
 //! Keyset budget changes are explicit type rewrites. A read with an exact
 //! interval summary cannot silently lose that trait: rewrite its summary to
@@ -155,9 +200,9 @@
 //!
 //! `kind(name)` explicitly selects a kind. Classification follows recorded reads
 //! and levels, so aliases do not change which entries match. An entry serving
-//! several kinds matches each one. Shared host fallback types must agree; a
+//! several kinds matches each one. Shared host fallback providers must agree; a
 //! partial kind rewrite that violates this constraint is rejected. An unmatched
-//! selector is an error. Named Rust types can contain inference parameters.
+//! selector is an error. Rust spellings can contain inference parameters.
 //! Known incompatible representations fail the Structures check; arbitrary
 //! aliases and custom implementations must satisfy the emitted runtime traits.
 //!
@@ -168,7 +213,10 @@
 //! let left = [(1,)];
 //! let right = [(1, 2)];
 //! let _: Vec<_> = mini_linq::compile! {
-//!     pipeline { structures = [cq_rewrites::retype(payload => NotAnIndex<_>)]; }
+//!     pipeline { structures = [cq_rewrites::retype(
+//!         providers { not_an_index = NotAnIndex<_> { reads [exact, membership], build typed }; }
+//!         payload => @not_an_index as NotAnIndex<_>
+//!     )]; }
 //!     struct MissingBuild;
 //!     relation L(x: i32) = (left);
 //!     relation R(x: i32, y: i32) = (right);
@@ -185,9 +233,9 @@
 //!     pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation R(a: i32, b: i32) = (input);
-//!         r = pipe rename R@0 { a -> x, b -> y };
+//!         r = pipe rename R { a -> x, b -> y };
 //!         projected = pipe project r keep { x };
-//!         return projected as answer(x);
+//!         return canon projected as answer(x);
 //!     }
 //! }.map(|(x,)| *x).collect();
 //! assert_eq!(output, vec![1]);
@@ -197,7 +245,7 @@
 //! oracles, and executable written-order refinement. Sixty generated tests enter
 //! at corpus IX or Physical and use the default lower/select/print macros. Other
 //! tests exercise active merge and smallest choices, custom runtime traits,
-//! representation obligations, exact IR fixtures, duplicates, and empty inputs.
+//! representation obligations, exact IR fixtures, set inputs, and empty inputs.
 //!
 //! The authored adjacent triangle's finite 48-wide fan test resets runtime counters after fixture/oracle
 //! construction and exhausts a fresh query before each snapshot:
@@ -218,7 +266,7 @@
 //! The mandatory `generated` regression uses `cq_planners::order(written, fine)`
 //! through the public macro pipeline, captures its selected Physical program,
 //! and checks its active smallest intersection, both contracts, and public
-//! correspondence. Executed triangle and fan answers, duplicates, and empty inputs
+//! correspondence. Executed triangle and fan answers, set inputs, and empty inputs
 //! agree with cq-testkit's CQ oracle. A generated query with opaque guards and a
 //! partial division bind retains the exact Rust definitions and positions after
 //! the active hoist, and refines executed written-order answers. The mandatory
@@ -238,8 +286,10 @@
 //! each scale, versus two for binary. These finite measurements validate the
 //! specified growth regression; they do not establish a general complexity bound.
 //!
-//! Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
-//! `cargo test` here. The workspace defaults include both support crates.
+//! Run `cargo fmt --check`, then `cargo clippy --all-targets -p cq-rewrites
+//! -p cq-rewrite-passes -p cq-rewrite-test-driver -- -D warnings` and
+//! `cargo test -p cq-rewrites -p cq-rewrite-passes -p cq-rewrite-test-driver`.
+//! Explicit package selection includes both support crates in the root workspace.
 //! From the repository root, `python3 tools/check_external.py` exercises packaged
 //! public dependencies outside the checkout.
 
@@ -247,114 +297,33 @@
 
 use proc_macro::TokenStream;
 
-macro_rules! physical_rewrite {
-    ($name:ident) => {
+macro_rules! physical_rewrites {
+    ($($name:ident => $implementation:path;)*) => {$(
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            cq_stage::rewrite::<cq_lang_physical::Program>(input.into(), cq_rewrite_passes::$name)
-                .into()
+            cq_stage::rewrite_with_planning::<cq_lang_physical::Program>(input.into(), |source, arguments, planning| {
+                let arguments = if stringify!($name) == "smallest_intersections" {
+                    cq_stage::planning::resolve_smallest(arguments, planning)?
+                } else {
+                    arguments
+                };
+                $implementation(source, arguments)
+            }).into()
         }
-    };
+    )*};
 }
 
-physical_rewrite!(merge_joins);
-physical_rewrite!(canon_prefixes);
-physical_rewrite!(smallest_intersections);
-physical_rewrite!(lazy_semijoins);
-/// Retain admissible integral keyed host reads before provider selection.
-#[proc_macro]
-pub fn build_host_reads(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_physical::Program>(
-        input.into(),
-        cq_structure_selection::build_host_reads,
-    )
-    .into()
-}
-physical_rewrite!(host_sets);
-physical_rewrite!(retain_streams);
-physical_rewrite!(hoist);
-
-/// Certify a fully-bound probe as an existential read using checked Structures
-/// membership storage; the Physical operator and query remain unchanged.
-#[proc_macro]
-pub fn membership(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::membership)
-        .into()
+macro_rules! structures_rewrites {
+    ($($name:ident => $implementation:path;)*) => {$(
+        #[proc_macro]
+        pub fn $name(input: TokenStream) -> TokenStream {
+            cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, arguments| {
+                let target = $implementation(physical, source, arguments)?;
+                Ok((physical.clone(), target))
+            }).into()
+        }
+    )*};
 }
 
-/// Change only the representation types matched by `selector => RustType`.
-#[proc_macro]
-pub fn retype(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_structure_selection::retype).into()
-}
-
-/// Record an exact join filter on a named eligible scan occurrence.
-#[proc_macro]
-pub fn join_filter(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::join_filter)
-        .into()
-}
-
-/// Record sorted index layouts for built results: a minimum chain cover of
-/// their read keys, columns ordered by binding order; `Rel => [a][b]`
-/// overrides one result's layout. Compose before `sorted_runs`/`prefix_runs`.
-#[proc_macro]
-pub fn sorted_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(
-        input.into(),
-        cq_rewrite_passes::sorted_indexes,
-    )
-    .into()
-}
-
-/// Retype eligible one-level payload builds to stable sorted runs.
-#[proc_macro]
-pub fn sorted_runs(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_runs)
-        .into()
-}
-
-/// Retype eligible one-key integral payload builds to RadixSpline runs.
-/// Compose with `retain_lookups` and `expand_lookups` for explicit cursor reuse
-/// and staging. This opt-in provider selection does not select merge joins.
-#[proc_macro]
-pub fn radix_runs(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::radix_runs)
-        .into()
-}
-
-/// Record one-level composite scalar HashIndex providers as exact GPU hashed runs.
-/// Compose after `sorted_runs`; this opt-in rewrite leaves CPU defaults unchanged.
-#[proc_macro]
-pub fn hashed_runs(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::hashed_runs)
-        .into()
-}
-
-/// Retain an exact run lookup cursor from an eager semijoin until its later probe.
-///
-/// Records checked `share` and `repr ... witness` decisions only when invoked;
-/// ordinary pipelines retain their existing lookup behavior. Compose after
-/// `sorted_runs` or `radix_runs` to expose Copy range cursors on eligible builds.
-#[proc_macro]
-pub fn retain_lookups(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(
-        input.into(),
-        cq_rewrite_passes::retain_lookups,
-    )
-    .into()
-}
-
-/// Record `stage = batch N expand` at probes whose builds expose length-known
-/// ranges, accepted only by the Structures stage contract. Opt-in.
-/// `expand_lookups(N, depth D)` bounds nested frames per stream; omitted depth
-/// defaults to two. Deeper probes stay lane-local without changing providers.
-/// This is a depth bound, not a byte-budget proof for arbitrary carried payloads.
-#[proc_macro]
-pub fn expand_lookups(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(
-        input.into(),
-        cq_rewrite_passes::expand_lookups,
-    )
-    .into()
-}
+cq_rewrite_passes::physical_registry!(physical_rewrites);
+cq_rewrite_passes::structures_registry!(structures_rewrites);

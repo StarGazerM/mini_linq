@@ -1,0 +1,57 @@
+// le_retail_h05.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5
+// and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner le = Plan-Le: v = O_{Written,Coarse}; outer = written root (CK-Le auto); lookups R(b,_) at the first
+// point their bound key is available, in GYO ear order; expansions as late as column demand or scope exit
+// permits; then restrict, R_{None,Masks}.
+// c0=Lineitem(order_key,supplier_key), c1=Orders(order_key,customer_key,order_date), c2/c3 where on order_date,
+// c4=Customer(customer_key,nation_key), c5=Nation(nation_key,region_key), c6=Region(region_key,"ASIA"),
+// c7=Supplier(supplier_key,nation_key)
+// O-Restrict: both order_date predicates target only c1 -> restrictions at scope head, written order; prefix
+// where steps removed.
+// H-SpanningCore: GYO absorbs 6->5, 5->4; cyclic core {0,1,4,7}; spanning core (all share 1 name; earliest
+// first) 0-1, 0-7, 1-4. Rooted at outer c0: 1->4->5->6, 7 leaf.
+// R-Masks: filtered subtrees (f<3): c6 (literal, f=0) => red(5,6); subtree(5) has c6 => red(4,5); subtree(4) =>
+// red(1,4); c1 is the root's child (root never target). Children first.
+// GYO ear order: 6, 5; core occurrences (1,4,7) follow in written position (O-LeEarOrder).
+// O-LeDemand: first use is the written-chain (v) position of the first later step whose
+// key/free variables need the column; O-LeExit emits remaining expansions at scope exit
+// in written order. I2 drainage moves a ready membership read to its first ready
+// boundary. Membership is determined by the bound prefix, not phase-history syntax.
+// Lookups are fresh partial reads R(b,_) at the first point their key is available.
+struct H05 ; relation Customer (c_custkey : i64 [0] , c_nationkey : i32 [1]) ; relation Orders (o_orderkey : i64 [0] , o_custkey : i64 [0] , o_orderdate : Date [2]) ; relation Lineitem (l_orderkey : i64 [0] , l_suppkey : i64 [0]) ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [1]) ; relation Nation (n_nationkey : i32 [1] , n_regionkey : i32 [1]) ; relation Region (r_regionkey : i32 [1] , r_name : StringCode [3]) ; answer (order_key , supplier_key , nation_key) : - Lineitem (order_key , supplier_key) , Orders (order_key , customer_key , order_date) , where order_date >= (start) , where order_date < (end) , Customer (customer_key , nation_key) , Nation (nation_key , region_key) , Region (region_key , "ASIA") , Supplier (supplier_key , nation_key) ;
+valuation {
+    // O-Restrict (H-Local target c1), written predicate order
+    restrict Orders @ 1 where order_date >= @ (start) ;
+    // O-Restrict (H-Local target c1)
+    restrict Orders @ 1 where order_date < @ (end) ;
+    // R-Masks red(5,6): Region literal filter; deepest first
+    reduce Nation @ 5 with Region @ 6 (region_key) ;
+    // R-Masks red(4,5): children first
+    reduce Customer @ 4 with Nation @ 5 (nation_key , _) ;
+    // R-Masks red(1,4)
+    reduce Orders @ 1 with Customer @ 4 (customer_key , _) ;
+    // outer: written root (CK-Le automatic outer = outer(w))
+    Lineitem @ 0 (order_key , supplier_key) ;
+    // lookup(c1): key order_key available after outer; c1 before c7 by written core position
+    Orders @ 1 (order_key , _ , _) ;
+    // lookup(c7): key supplier_key available after outer
+    Supplier @ 7 (supplier_key , _) ;
+    // expand(c1): customer_key demanded at c4's written position
+    Orders @ 1 (order_key , customer_key , order_date) ;
+    // lookup(c4): key customer_key now available
+    Customer @ 4 (customer_key , _) ;
+    // expand(c4): nation_key demanded at c7's (drained) written position
+    Customer @ 4 (customer_key , nation_key) ;
+    // lookup(c5): key nation_key available; ear order
+    Nation @ 5 (nation_key , _) ;
+    // expand(c7): emitted at scope exit after Nation's expansion (written order), introduces nothing; final I2
+    // drainage moves it before expand(c5)
+    Supplier @ 7 (supplier_key , nation_key) ;
+    // expand(c5): region_key demanded at c6's written position
+    Nation @ 5 (nation_key , region_key) ;
+    // lookup(c6): key region_key available (literal column not listed)
+    Region @ 6 (region_key) ;
+    // expand(c6): full row; CK-Le requires lookup<expand exactly once each even when the row has no further column
+    Region @ 6 (region_key) ;
+}

@@ -5,14 +5,68 @@ use std::error::Error;
 use std::path::Path;
 use std::time::Instant;
 
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")
-                .and_then(|v| v.split_whitespace().next()?.parse().ok())
-        })
+#[derive(Clone, Copy)]
+struct Usage {
+    minor_faults: u64,
+    major_faults: u64,
+    peak_rss_kib: u64,
+}
+
+fn usage() -> std::io::Result<Option<Usage>> {
+    #[cfg(unix)]
+    {
+        let mut value = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: getrusage initializes the pointed-to rusage on success.
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, value.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let value = unsafe { value.assume_init() };
+        // Darwin reports bytes; other supported Unix hosts report KiB.
+        let peak_rss_kib = value.ru_maxrss as u64;
+        #[cfg(target_os = "macos")]
+        let peak_rss_kib = peak_rss_kib / 1024;
+        Ok(Some(Usage {
+            minor_faults: value.ru_minflt as u64,
+            major_faults: value.ru_majflt as u64,
+            peak_rss_kib,
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(None)
+    }
+}
+
+fn faults(before: Option<Usage>, after: Option<Usage>) -> (Option<u64>, Option<u64>) {
+    match (before, after) {
+        (Some(before), Some(after)) => (
+            Some(after.minor_faults - before.minor_faults),
+            Some(after.major_faults - before.major_faults),
+        ),
+        _ => (None, None),
+    }
+}
+
+fn check_answers(
+    answers: &mut Vec<query::Answer>,
+    reference: &std::collections::BTreeSet<Vec<String>>,
+    decimals: &std::collections::BTreeSet<usize>,
+    policy: bench_check::Policy,
+) -> Result<bench_check::RelationEvidence, Box<dyn Error>> {
+    let started = Instant::now();
+    // Query APIs expose bags in some configurations. Deduplicate typed rows,
+    // without copying/stringifying them, before reporting logical cardinality.
+    answers.sort_unstable();
+    answers.dedup();
+    let mut evidence = bench_check::check_relation(
+        reference,
+        "answer",
+        answers.len(),
+        |index| comparison::normalize_row(query::canonical_row(&answers[index]), decimals),
+        policy,
+    )?;
+    evidence.validation_seconds = started.elapsed().as_secs_f64();
+    Ok(evidence)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -37,38 +91,40 @@ fn main() -> Result<(), Box<dyn Error>> {
     if (runs != 0 && runs % 2 == 0) || !query::CONFIGS.contains(&args[1].as_str()) {
         return Err("worker requires a known configuration and positive odd RUNS (or zero for verification)".into());
     }
-    let witness: serde_json::Value = serde_json::from_slice(&std::fs::read(&args[5])?)?;
+    let mut witness: serde_json::Value = serde_json::from_slice(&std::fs::read(&args[5])?)?;
     let oracle: std::collections::BTreeSet<Vec<String>> =
-        serde_json::from_value(witness["rows"].clone())?;
+        serde_json::from_value(witness["rows"].take())?;
     let decimals: std::collections::BTreeSet<usize> =
-        serde_json::from_value(witness["decimal_columns"].clone())?;
+        serde_json::from_value(witness["decimal_columns"].take())?;
     let start = Instant::now();
     let data = query::load(Path::new(&args[0]), &args[1])?;
     let load_ms = start.elapsed().as_secs_f64() * 1000.0;
-    // One warm execution; its result is the correctness witness. Keep the
-    // canonical witness outside measurement; do not retain warm query state.
+    // Warmup remains a full correctness check and does not discharge the
+    // first measured full check. Data and oracle stay indexed across samples.
     #[cfg(any(feature = "counters", feature = "profile"))]
     cq_storage::counters::reset();
     let profiling = std::env::var_os("CQ_OPERATOR_PROFILE").is_some();
     if cfg!(feature = "counters") && runs != 0 && !profiling {
         return Err("instrumented workers only count a separate untimed run".into());
     }
-    let warm = query::run(&data, &args[1]);
+    let warm_before = usage()?;
+    let mut warm = query::run(&data, &args[1]);
+    let warm_after = usage()?;
+    let warm_faults = faults(warm_before, warm_after);
     #[cfg(any(feature = "counters", feature = "profile"))]
     let counts = cq_storage::counters::snapshot();
-    let expected = comparison::normalize_set(query::canonical(&warm), &decimals);
-    if expected != oracle {
-        return Err(format!("{} / {} warm answer differs from DuckDB before any measured run: expected {} rows, actual {}; missing {:?}; extra {:?}",
-            query::NAME, args[1], oracle.len(), expected.len(),
-            oracle.difference(&expected).take(3).collect::<Vec<_>>(),
-            expected.difference(&oracle).take(3).collect::<Vec<_>>()).into());
+    let warm_check = check_answers(&mut warm, &oracle, &decimals, bench_check::Policy::full())?;
+    let answer_rows = warm_check.actual_count;
+    if runs == 0 {
+        let expected = comparison::normalize_set(query::canonical(&warm), &decimals);
+        std::fs::write(&args[3], serde_json::to_vec(&expected)?)?;
+    } else {
+        std::fs::write(&args[3], serde_json::to_vec(&serde_json::json!({"answer":warm_check}))?)?;
     }
     drop(warm);
-    std::fs::write(&args[3], serde_json::to_vec(&expected)?)?;
-    let answer_rows = expected.len();
     #[cfg(any(feature = "counters", feature = "profile"))]
     if profiling {
-        return operator_profile(&data, &args, &expected, &decimals, runs);
+        return operator_profile(&data, &args, &oracle, &decimals, runs, warm_check);
     }
     if runs == 0 {
         std::fs::write(
@@ -115,26 +171,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
         return Ok(());
     }
-    let mut times = Vec::with_capacity(runs);
-    for _ in 0..runs {
+    let mut samples = Vec::with_capacity(runs);
+    let mut checks = Vec::with_capacity(runs);
+    for ordinal in 0..runs {
+        let before = usage()?;
         let start = Instant::now();
-        let answers = query::run(std::hint::black_box(&data), &args[1]);
+        let mut answers = query::run(std::hint::black_box(&data), &args[1]);
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        let after = usage()?;
+        let (minor, major) = faults(before, after);
         std::hint::black_box(&answers);
-        // Every measured execution must agree with the warm answer, not just
-        // its cardinality. Conversion, sorting, and comparison are untimed.
-        let canonical = comparison::normalize_set(query::canonical(&answers), &decimals);
-        if canonical != expected {
-            return Err("query answer changed between warm and measured runs".into());
-        }
-        times.push(elapsed);
+        let evidence = check_answers(&mut answers, &oracle, &decimals, bench_check::Policy::from_env(ordinal)?)?;
+        checks.push(serde_json::json!({"answer":evidence}));
+        samples.push((elapsed, minor, major, after.map(|value| value.peak_rss_kib)));
     }
-    times.sort_by(f64::total_cmp);
+    samples.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let median = samples[runs / 2];
     std::fs::write(
         &args[4],
         serde_json::to_vec_pretty(&serde_json::json!({
-            "load_ms": load_ms, "median_ms": times[runs / 2], "samples_ms": times,
-            "answer_rows": answer_rows, "peak_rss_kib": peak_rss_kib(),
+            "load_ms": load_ms, "median_ms": median.0,
+            "warm_check": {"answer":warm_check},
+            "samples_checks": checks,
+            "check_policy": bench_check::Policy::from_env(0)?,
+            "validation_order": "execution order; samples_ms is sorted by elapsed time",
+            "samples_ms": samples.iter().map(|sample| sample.0).collect::<Vec<_>>(),
+            "samples_minor_faults": samples.iter().map(|sample| sample.1).collect::<Vec<_>>(),
+            "samples_major_faults": samples.iter().map(|sample| sample.2).collect::<Vec<_>>(),
+            "samples_peak_rss_kib": samples.iter().map(|sample| sample.3).collect::<Vec<_>>(),
+            "query_minor_faults": median.1, "query_major_faults": median.2,
+            "query_peak_rss_kib": median.3,
+            "warm_minor_faults": warm_faults.0, "warm_major_faults": warm_faults.1,
+            "warm_peak_rss_kib": warm_after.map(|value| value.peak_rss_kib),
+            "answer_rows": answer_rows, "peak_rss_kib": usage()?.map(|value| value.peak_rss_kib),
             "instrumented": false,
             "zone_build_ms": crate::tpch_runtime::zone_metrics().0,
             "zone_metadata_bytes": crate::tpch_runtime::zone_metrics().1,
@@ -151,6 +220,7 @@ fn operator_profile(
     expected: &std::collections::BTreeSet<Vec<String>>,
     decimals: &std::collections::BTreeSet<usize>,
     runs: usize,
+    warm_check: bench_check::RelationEvidence,
 ) -> Result<(), Box<dyn Error>> {
     use cq_storage::counters::{self, OperatorLabel, OperatorProgram};
     if runs < 3 {
@@ -164,7 +234,8 @@ fn operator_profile(
         .ok_or("missing independent operator rows")?;
     let mut samples = Vec::new();
     let mut reference = None;
-    for _ in 0..runs {
+    let mut checks = Vec::with_capacity(runs);
+    for ordinal in 0..runs {
         counters::reset();
         let root = OperatorProgram::new(&[OperatorLabel {
             result: "query",
@@ -173,16 +244,15 @@ fn operator_profile(
             inputs: &[],
         }]);
         let started = Instant::now();
-        let answers = root.scope(0, || query::run(std::hint::black_box(data), &args[1]));
+        let mut answers = root.scope(0, || query::run(std::hint::black_box(data), &args[1]));
         let elapsed = started.elapsed().as_secs_f64() * 1000.;
         std::hint::black_box(&answers);
-        let actual = comparison::normalize_set(query::canonical(&answers), decimals);
-        if &actual != expected {
-            return Err("profile answers differ from DuckDB".into());
-        }
-        root.rows(0, 0, actual.len() as u64, 0);
+        let evidence = check_answers(&mut answers, expected, decimals, bench_check::Policy::from_env(ordinal)?)?;
+        let answer_rows = evidence.actual_count;
+        checks.push(serde_json::json!({"answer":evidence}));
+        root.rows(0, 0, answer_rows as u64, 0);
         let mut records = counters::operators();
-        records[0].rows_out = actual.len() as u64;
+        records[0].rows_out = answer_rows as u64;
         let measured: Vec<_> = records
             .iter_mut()
             .filter(|r| r.label.kind != "QUERY")
@@ -241,12 +311,16 @@ fn operator_profile(
             return Err("top-level scope differs from independently measured query wall time by more than 3%".into());
         }
         let operators=records.iter().map(|r|serde_json::json!({"id":r.id,"program":r.program,"result":r.label.result,"kind":r.label.kind,"key":r.label.key,"inputs":r.label.inputs,"rows_in":r.rows_in,"rows_out":r.rows_out,"rows_inserted":r.rows_inserted,"elapsed_ms":r.elapsed.as_secs_f64()*1000.,"calls":r.calls})).collect::<Vec<_>>();
-        samples.push((elapsed,serde_json::json!({"tree":tree,"operators":operators,"operator_rows":operator_rows(&records),"answer_rows":actual.len(),"index_builds":counts.index_builds,"rows_copied":counts.rows_copied,"distinct_insertions":counts.distinct_insertions,"candidate_insertions":counts.candidate_insertions,"rows_enumerated":counts.rows_enumerated,"bag_insertions":bag_insertions,"set_insertions":set_insertions,"top_level_ms":root_ms,"build_rows_verified":counters::STORAGE_COUNTERS_ENABLED,"top_level_clock_verified":true})));
+        samples.push((elapsed,serde_json::json!({"tree":tree,"operators":operators,"operator_rows":operator_rows(&records),"answer_rows":answer_rows,"index_builds":counts.index_builds,"rows_copied":counts.rows_copied,"distinct_insertions":counts.distinct_insertions,"candidate_insertions":counts.candidate_insertions,"rows_enumerated":counts.rows_enumerated,"bag_insertions":bag_insertions,"set_insertions":set_insertions,"top_level_ms":root_ms,"build_rows_verified":counters::STORAGE_COUNTERS_ENABLED,"top_level_clock_verified":true})));
     }
     samples.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut metrics = samples[runs / 2].1.clone();
     metrics["median_ms"] = serde_json::json!(samples[runs / 2].0);
     metrics["samples_ms"] = serde_json::json!(samples.iter().map(|s| s.0).collect::<Vec<_>>());
+    metrics["warm_check"] = serde_json::json!({"answer":warm_check});
+    metrics["samples_checks"] = serde_json::json!(checks);
+    metrics["validation_order"] = serde_json::json!("execution order; samples_ms is sorted by elapsed time");
+    metrics["check_policy"] = serde_json::to_value(bench_check::Policy::from_env(0)?)?;
     metrics["verified"] = serde_json::json!(true);
     std::fs::write(&args[4], serde_json::to_vec_pretty(&metrics)?)?;
     Ok(())

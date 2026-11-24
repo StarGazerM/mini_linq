@@ -1,83 +1,322 @@
 \section{Structures: concrete representations}
 \label{sec:structures}
 
-\paragraph{Grammar.} Structures extends a complete Physical program.
+\paragraph{Grammar.} Structures annotates a separately supplied complete Physical
+program $p$, referring to its definitions by name. Parsing and checking receive
+$p$ explicitly; the Structures program neither embeds nor prints it.
 \begin{lstlisting}
-Structures ::= Physical structures { Entry* }
-Entry ::= r = Type [K]... [supports [Support,...]]
+Structures ::= structures { providers { Decl* } Entry* }
+Decl ::= x = Type { Fact, ... };
+Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | typed)
+       | accounting (rows | keys) | (nested | routed) N | join_filter
+       | shared | packed_bits N | abi (range | runs | columns)
+       | contiguous_range | bounds resident_columns
+       | items N [rows Type, columns Type]
+       | choice N [eager Arg, lazy Arg]
+Cap ::= exact | range | membership | ordered | distinct | resident | comparator_rows
+Provider ::= @x [(Provider)] [InputSchema] as Type
+InputSchema ::= input { keys N; columns [InputColumn,...] }
+InputColumn ::= Type => Type [codec ["[" N "]"] Type]
+Entry ::= r = Provider [K]... [supports [Support,...]] [items (rows | columns)]
               [membership] [payload[P] constants{c = term, ...}];
-        | r host reader = Type [K]... [supports [Support,...]];
-        | r rows = Type; | r canon = Type; | r head = Type;
-        | r selection = Type base H lineage{a -> c, ...}
+        | r host ReaderRef = Provider [K]... [supports [Support,...]];
+        | r native ReaderRef = HostRead [K] [supports [Support,...]];
+        | r rows = Provider; | r canon = Canon; | r head = Provider;
+        | r group = Provider;
+        | r selection = Provider base H lineage{a -> c, ...}
               summary (none | per_block);
-        | r keyset = Type [K] (owned | borrowed)
+        | r keyset = Provider [K] (owned | borrowed)
               base H lineage{a -> c, ...};
         | r read = positional base H lineage{a -> c, ...}
               column c marker Type predicate Predicate;
-        | r join_filter = Type build s [k]
-              covering j marker Type;
+        | r join_filter = Provider build s [k]
+              covering j marker Type policy (always | abandon N of H keys (key_count | Accessor));
         | r share = lookup b [K] first s force p;
         | r repr = (tuples | positions {H lineage {a -> c, ...}, ...}
                          owned [O]) [witness {b [K] at s as Type}];
         | r stage = batch N [expand];
 Predicate ::= physical | membership s [K] summary (exact | row)
+ReaderRef ::= scan | candidates | membership | result(Ident)
+HostRead ::= exact | membership | candidates | range | ordered
 Support ::= retain | expand | keys
+Canon ::= rows | [K] | host
 \end{lstlisting}
 
-\paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
-(1)~built columns belong to the heading and never repeat across levels; a built
-key answers a union of a prefix of its levels;
-(2)~host entries record fallback types per reader, not native trait claims;
-(3)~retained scans, multiple unfiltered builds and exists state record row
-storage; unfiltered host renames record scan and keyed-reader fallbacks;
-(4)~every definition canon has a dedup entry; \code{return canon} has a head
-dedup entry; computed heads that may collapse valuations have one too unless
-\code{consumer canonical} assigns that returned boundary to the consumer;
-(5)~filtered entries (ordinary renames without literal bindings, declarative
-selections including trusted-total predicates, or unions) record one shared
-projection; their readers are stream \code{probe first}, semi or anti on a level
-prefix; payload plus the singleton constants proved by the selection cover all
-downstream keys, predicates, Rust free variables and answers. Constant columns
-are reconstructed, not stored. Literal-bearing renames instead have ordinary
-\code{let} storage entries, with no filtered payload annotation: their source
-filters and drops literal columns before ordinary row retention and index builds.
-The recorded layout of the retained result itself is this projection, as are
-the layouts seen by its keyed readers; projection occurs after evaluating the
-predicate, before publication or upload.
-Eligible leading literal keys use the host's native point read; otherwise the
-build source scans and filters. GPU retained occurrence tables are produced in
-the build phase, not filtered inside the query stream kernel;
-(6)~selection, keyset and read entries independently rederive a single declared
-host occurrence and a total, injective logical-to-host mapping over the reader's
-heading. Rename, declarative selection, occurrence-preserving projection and
-the left of eager semi propagate lineage. Computed columns, bind, opaque guard,
-join expansion, canon, union/fallback/anti and fused branch scopes do not;
-(7)~a selection replaces a retained tuple collection, never a key-only,
-ordered or candidate provider. Every filtering step down to a prior immutable
-snapshot has an explicit read; an unrecorded retained result cannot be bypassed;
-(8)~a positional read refers only to its existing point/range predicate or its
-own eager semi's strictly earlier RHS build. These exact read entries cannot
-form summary cycles or name nonlocal probe filters. Exact summary requires
-an owned scalar keyset and \code{ExactIntervalMembership}; row summary uses exact membership alone;
-(9)~keysets record their concrete provider and ownership. The default policy
-records its codec and bitmap budget in that provider type; Rust checks codec,
-key-layout and interval traits uniformly for builtin and aliased types.
-Payload indexes may coexist with keysets.
-Every positional or join-filter marker must implement \code{ColumnSlot<H,N>}
-for the declaration-order slot $N$ derived from its recorded lineage.
-Rust proves this binding even through a type alias; compatible key types alone
-cannot justify selecting a different column. No marker spelling grants it.
-Rust additionally checks positional host, marker, key, lifetime and provider
-obligations; a trait implementation must obey the storage abstraction laws.
+\paragraph{Provider tokens.} A provider is a declared token, never a Rust type.
+The pass that selects a provider, or authored \code{retype} advice, records
+its token id $x$, the inner instance of a nested or routed token, and the Rust
+spelling printers emit verbatim. The \code{providers} table declares each
+referenced token once: its read capabilities, the strongest support an
+instance may declare, its construction (\code{inferred}: a bare path built by
+\code{Build::build}; \code{typed}: \code{<T as cq\_storage::Build<\_>>::build}), allocation
+accounting, composition with the inner's generic argument index, supplementary
+join-filter eligibility, sharing with pool and task readers, a packed-key
+width limit, native ABI, contiguous-range eligibility and bounds source.
+Native Host input instances additionally record ordered logical/storage columns
+and optional codecs. Each \code{InputColumn} stores
+\code{codec\_id: Option<CodecId>} beside \code{codec: Option<syn::Type>}, with
+\code{cq\_lang\_structures::provider::CodecId(pub u32)}.
+Source \code{codec Type} may omit the id; the Structures declaration boundary
+interns missing ids once by opaque token spelling, locally to that declaration
+context. Repeated automatically interned spellings share an id.
+Explicit \code{codec [0] Type} and \code{codec [1] Type} remain distinct even
+with the same spelling; explicit ids are preserved. \code{None} is identity.
+Later passes compare recorded ids, never codec types; the type is only a
+printing payload after interning. Codec-id presence records encoding.
+Logical declaration identity is separately recorded as
+\code{logical\_type\_id: Option<cq\_syntax::LogicalTypeId>}, whose id wraps
+\code{u32}. Relation syntax is \code{column: Type [id] in [domain] (expr)};
+provider columns use \code{[id] Logical => Storage codec [id] Codec}.
+Ids may be omitted at declaration boundaries: interning preserves explicit
+ids and shares automatically interned equal spellings once, without merging
+explicitly different ids. Source/provider logical-id mismatches are rejected.
+Parsing Structures with its supplied Physical program seeds the input declaration
+table with that program's relation identities, so input encounter order cannot renumber
+logical types. Standalone Structures declarations intern in their own table;
+programmatic producers copy the source declaration identities.
+RA and Physical rows carry a sparse \code{logical\_type\_ids} map.
+Physical computed output columns receive their result declaration's id;
+computed opaque types without such a declaration remain unknown. Later codec lookup is keyed by
+logical id, not by the printing-only logical type. Neither logical identity
+nor codec identity proves the runtime codec laws.
+Comparing token ids is identity, not recognition.
+\begin{mathpar}
+\Rule{STR-Provider}{\mathsf{tokens}(t)=\mathrm{dom}(\mathsf{decls}(t))\quad
+ \forall p.\ p.\mathsf{inner}\ne\bot\iff\mathsf{decl}(p).\mathsf{composition}\ne\bot\quad
+ \mathsf{supports}(e)\subseteq\mathsf{facts}(e).\mathsf{supports}}
+ {\mathsf{facts}(e)=\mathsf{decl}(e.\mathsf{token})\text{ is the only provider fact of }e}
+
+\Rule{STR-Routed}{\mathsf{decl}(p).\mathsf{composition}=\mathsf{routed}\quad
+ p.\mathsf{inner}=q\quad\mathsf{decl}(q).\mathsf{composition}\ne\mathsf{routed}}
+ {\mathsf{facts}(p).\mathsf{reads}=\mathsf{facts}(q).\mathsf{reads}\cap\{\mathsf{exact},\mathsf{membership}\}\quad
+  \mathsf{facts}(p).\mathsf{supports}=\mathsf{facts}(q).\mathsf{supports}\cap\{\mathsf{keys}\}}
+\end{mathpar}
+Hash routing preserves exact probes and distinct-key enumeration but neither a
+part's global order nor its retained or expandable cursors; a routed instance
+enumerates a supplementary join filter iff its inner does.
+
+\paragraph{Contract.}
+Write $h_r=A.physical.headings[r]$, $B_r=A.built[r]$, $F=A.fallbacks$,
+$N=A.natives$, $S=\mathrm{dom}(A.selections)$, $R=\mathrm{dom}(A.retained)$,
+$D=\mathrm{dom}(A.reads)$ and $Q=\mathrm{dom}(A.filtered)$.
+$k_r$ is the list of Physical keyed reads $(u,K,supply)$ of $r$.
+The function $\mathsf{prefixes}(L)$ returns the unions of the nonempty
+prefixes of the sequence of levels $L$.
+$\mathsf{candidates}(t)$ returns the Physical candidate sides $(r,K)$.
+$\mathsf{required}(t,A,r)$ is the downstream column demand computed by
+\code{filtered::required\_columns}, including keys, predicates, Rust free
+variables and the answer. $\mathsf{constants}(r)$ is the map of reconstructible
+literal equalities proved by a declarative selection, and the empty map for
+a rename or union. $\mathsf{multi}(r)$ is true exactly for a union with no
+correlated \code{over} origin. These functions do not inspect type spellings.
+$\mathsf{physicalReads}$ enumerates the checked Physical keyed and merge
+demands as $(provider,key,mode)$ triples, using range mode for non-stream
+point/range supplies and the reader's probe, semi, anti or merge mode otherwise.
+\begin{mathpar}
+\Rule{STR-E-Built}{
+ \forall r,(L,T)\in B_r.\quad
+ \varnothing\ne\biguplus_i L_i\subseteq h_r\ \land\
+ |\mathop{\mathrm{concat}} L|=|\bigcup_i L_i|\ \land\
+ A.physical.modes[r]\ne pipe\ \land\ r\notin\mathrm{dom}(A.host\_layouts)
+ \\
+ \forall r,(L,T)\in B_r.\ \exists(u,K,stream)\in k_r.\ K\in\mathsf{prefixes}(L)
+ \\
+ \forall r.\ |\{L\mid(L,T)\in B_r\}|=|B_r|
+}{\mathsf{EntriesBuilt}(t,A)}
+
+\Rule{STR-E-Fallback}{
+ \forall(r,\rho,K)\in\mathrm{dom}(F).\quad
+ K\subseteq h_r\ \land\
+ (A.physical.modes[r]=pipe\land r\in\mathrm{dom}(A.physical.hosts)
+ \ \lor\ \rho=Scan\land r\in\mathrm{dom}(A.physical.hosts))
+ \\
+ \forall(r,\rho,K)\in\mathrm{dom}(F).\quad
+ (\rho=Scan\Rightarrow K=\varnothing)\ \land\
+ (\rho=Candidates\Rightarrow(r,K)\in\mathsf{candidates}(t))\ \land\
+ (\rho=Membership\Rightarrow K=h_r\land\exists P.(r,P)\in\mathsf{candidates}(t))
+ \ \land\ (\rho=Result(u)\Rightarrow\exists s.(u,K,s)\in k_r)
+ \\
+ \{Scan,Candidates,Membership\}\cap\{Result(u)\mid u\in\mathrm{Ident}\}=\varnothing
+ \\
+ \forall(r,\rho,K),(r,\rho',K)\in\mathrm{dom}(F).\quad
+ \rho,\rho'\ne Scan\ \land\
+ \mathsf{op}(\rho),\mathsf{op}(\rho')\notin\{Point,Range\}\ \land\
+ (\mathsf{op}(\rho)=Merge\iff\mathsf{op}(\rho')=Merge)
+ \Rightarrow F[r,\rho,K]=F[r,\rho',K]
+}{\mathsf{EntriesFallback}(t,A)}
+
+\Rule{STR-E-Rows}{
+ \forall r.\quad A.physical.modes[r]\ne pipe\ \land\
+ (r\in A.physical.scanned\lor(|B_r|>1\land r\notin Q)
+ \lor A.physical.modes[r]=exists)\Rightarrow r\in R\cup S
+ \\
+ \forall r\in R.\ A.physical.modes[r]\ne pipe
+ \\
+ \forall r\in\mathrm{dom}(A.physical.hosts).\ (r,Scan,\varnothing)\in\mathrm{dom}(F)
+ \\
+ \forall r\in\mathrm{dom}(A.physical.hosts),(u,K,s)\in k_r.\quad
+ K\ne\varnothing\land A.physical.modes[r]=pipe\land u\notin D
+ \Rightarrow(r,Result(u),K)\in\mathrm{dom}(F)\cup\mathrm{dom}(N)
+}{\mathsf{EntriesRows}(t,A)}
+
+\Rule{STR-E-Canon}{
+ \mathrm{dom}(A.canonical)=A.physical.canon
+ \\
+ \mathrm{dom}(A.head\_dedup)=
+ \begin{cases}\{t.physical.returned\}&t.physical.head\_dedup()=true\\
+ \varnothing&t.physical.head\_dedup()=false\end{cases}
+}{\mathsf{EntriesCanon}(t,A)}
+
+\Rule{STR-E-Filtered}{
+ \forall r\in Q.\quad \mathsf{op}(r)\in\{Rename_{\varnothing},Select,Point,Range,Union\}
+ \land A.physical.modes[r]=let
+ \\
+ \forall r\in Q.\quad \mathsf{multi}(r)=false\Rightarrow
+ (r\notin A.physical.scanned\land
+ (r\notin R\lor(A.rows\_held(r)=false\land r\in A.physical.canon))
+ \land |B_r|=1\land\forall(L,T)\in B_r.\ |L|=1)
+ \\
+ \forall r\in Q,\ e\in t.structures.entries.\quad
+ e.name=r\land e.kind=Built\Rightarrow e.filtered=A.filtered[r]
+ \\
+ \forall r\in Q,(u,K,s)\in k_r.\quad
+ s=stream\land\mathsf{op}(u)\in\{Probe_{first},Semi,Anti\}
+ \land\exists(L,T)\in B_r.\ K\in\mathsf{prefixes}(L)
+ \\
+ \forall r\in Q.\quad C_r=\mathsf{constants}(r)\ \land\
+ P_r\subseteq h_r\setminus\mathrm{dom}(C_r)\ \land\
+ |\mathsf{payloadList}(r)|=|P_r|\ \land\
+ |\mathsf{constantList}(r)|=|\mathrm{dom}(C_r)|\ \land\
+ \mathsf{required}(t,A,r)\subseteq P_r\cup\mathrm{dom}(C_r)
+}{\mathsf{EntriesFiltered}(t,A)}
+\end{mathpar}
+Here $P_r,C_r$ are the payload set and constant map recorded in
+$A.filtered[r]$; list lengths reject duplicate declarations.
+$\mathsf{op}(Result(u))$ is the operator of $u$, and other reader tags
+have their own distinct operator tags.
+The function $\ell_t(r)$ rederives lineage in definition order: a
+literal-free rename starts its declared host occurrence; Select, Point and
+Range inherit their input; Project restricts its input map to $h_r$;
+non-lazy Semi inherits its left input. All other operators, canon boundaries,
+computed columns and fused members return $\bot$. A result is retained only
+when its map is total on $h_r$ and injective.
+$\mathsf{spine}(r)$ follows Project inputs, Point/Range inputs and Semi
+left inputs to the first prior selection or rename; it includes $r$ but
+excludes a prior selection endpoint.
+\begin{mathpar}
+\Rule{STR-E-Lineage}{
+ \forall e\in t.structures.entries,\ e.kind\in\{Selection,KeySet,Read\}.\quad
+ \ell_t(e.name)=(H,o,\lambda)\ne\bot\ \land\
+ e.origin.base=H\ \land\ e.origin.columns=\lambda\ \land\
+ |e.origin.columnsList|=|\lambda|\ \land\
+ \lambda:h_{e.name}\hookrightarrow\mathsf{columns}(H)
+}{\mathsf{EntriesLineage}(t,A)}
+
+\Rule{STR-E-Selection}{
+ \forall r\in S.\quad A.physical.modes[r]=let\ \land\
+ \mathsf{op}(r)\in\{Point,Range,Semi\}\ \land\ r\notin R\cup Q
+ \\
+ \forall r\in S,\ u\in\mathsf{spine}(r).\quad
+ (u\ne r\Rightarrow A.physical.modes[u]=pipe)\ \land\
+ \mathsf{op}(u)\in\{Rename,Project,Point,Range,Semi\}\ \land\
+ (\mathsf{op}(u)\in\{Point,Range,Semi\}\Rightarrow u\in D)\ \land\
+ (\mathsf{op}(u)\in\{Point,Range\}\Rightarrow|\mathsf{conditionColumns}(u)|=1)
+ \ \land\
+ (\mathsf{op}(u)=Point\Rightarrow
+ |\mathsf{equalities}(u)|+|\mathsf{constraints}(u)|=1)
+}{\mathsf{EntriesSelection}(t,A)}
+
+\Rule{STR-E-Read}{
+ \forall r\in D.\quad
+ \nexists(s,Result(r),K)\in\mathrm{dom}(F)
+ \\
+ \forall r\in D.\quad
+ \bigl(A.reads[r].predicate=Physical\land
+ \mathsf{op}(r)\in\{Point,Range\}\land
+ c_r=\mathsf{conditionColumn}(r)\land
+ (\mathsf{op}(r)=Point\Rightarrow c_r\in\mathrm{dom}(\mathsf{selectionConstants}(r)))\bigr)
+ \ \lor\
+ \bigl(A.reads[r].predicate=Membership(s,K,\sigma)\land
+ r=Semi_{eager}[K](l,s)\land s<r\land K=\{c_r\}\land
+ (s,K)\in\mathrm{dom}(A.keysets)\land A.keysets[s,K].ownership=owned\bigr)
+ \\
+ \forall r\in D,\ u\in\mathsf{readSpine}(r).\quad
+ A.physical.modes[u]=pipe\land
+ (\mathsf{op}(u)\in\{Rename,Project\}\lor u\in D)
+}{\mathsf{EntriesRead}(t,A)}
+
+\Rule{STR-E-Keysets}{
+ \forall(r,K)\in\mathrm{dom}(A.keysets).\quad
+ A.physical.modes[r]=let\land\varnothing\ne K\subseteq h_r\land
+ |\mathsf{keyList}(r,K)|=|K|\land
+ (A.keysets[r,K].ownership=owned\Rightarrow|K|=1)\land r\in R\cup S
+ \\
+ \forall(r,K)\in\mathrm{dom}(A.keysets).\quad
+ \exists(u,K)\in A.physical.key\_reads[r].\ \mathsf{op}(u)\in\{Semi,Anti\}
+ \\
+ \forall r.\quad
+ |\mathsf{groupEntries}(r)|=
+ \begin{cases}1&\mathsf{op}(r)=Group_{G;Acc}\land G\ne\varnothing\\
+ 0&\mathsf{op}(r)\ne Group\lor G=\varnothing\end{cases}
+}{\mathsf{EntriesKeysets}(t,A)}
+
+\Rule{STR-Entries}{
+ \mathsf{WF}_{Physical}(t.physical)\Downarrow A.physical
+ \\
+ \mathsf{EntriesBuilt}(t,A)\quad\mathsf{EntriesFallback}(t,A)\quad
+ \mathsf{EntriesRows}(t,A)\quad\mathsf{EntriesCanon}(t,A)
+ \\
+ \mathsf{EntriesFiltered}(t,A)\quad\mathsf{EntriesLineage}(t,A)\quad
+ \mathsf{EntriesSelection}(t,A)\quad\mathsf{EntriesRead}(t,A)\quad
+ \mathsf{EntriesKeysets}(t,A)
+}{\mathsf{Entries}(t,A)}
+\end{mathpar}
+In STR-E-Read, $c_r$ is the logical column mapped to the recorded host
+column. $\mathsf{conditionColumn}$ returns the first point key or range
+column, and $\mathsf{selectionConstants}$ includes the proved singleton
+terms (not only reconstructible literals).
+$\mathsf{readSpine}(r)$ starts at the predicate input (the left input for
+Semi), stops before a prior selection, and otherwise follows Project until
+a rename or recorded read. Other operators are included and rejected by
+STR-E-Read. The order $<$ is Physical definition order, so summary edges
+cannot form cycles. Both row and exact summaries require an owned scalar
+keyset; exact summaries additionally incur Rust's
+\code{ExactIntervalMembership} obligation.
+
+The remaining representation and realization laws are not additional
+Structures-checker predicates. Constant columns are reconstructed rather
+than stored; projection follows predicate evaluation and precedes publication
+or upload. Literal-bearing renames use ordinary storage without filtered
+annotations; eligible leading literal keys can use native point access,
+otherwise the source scans and filters. GPU retained occurrence tables are
+built before the query stream kernel.
+Keysets record their provider and ownership without excluding payload indexes.
+Default policy records codec and bitmap budget in the provider type.
+Rust checks codec, key-layout, interval, positional host, marker, key,
+lifetime and provider obligations uniformly through aliases. Every positional
+or join-filter marker must implement \code{ColumnSlot<H,N>} for the
+declaration-order slot derived from lineage; type compatibility or spelling
+does not establish that binding. These trait and storage abstraction laws
+remain semantic premises, not checks performed by the Structures validator.
+A keyed Group's recorded provider is a finite map from keys to declared
+accumulator tuples: \code{Default} creates the empty map,
+\code{entry(k).or\_insert\_with(f)} returns the unique state and invokes $f$
+only on insertion, and owned \code{IntoIterator} enumerates each pair once.
+Rust checks operations and bounds, not these finite-map laws. Realization
+preserves the recorded provider type; \code{group} retyping selects it.
 
 \paragraph{Provider-authored support.}
-Support is recorded with the selected provider layout, not inferred from a Rust
-type spelling. \code{retain} requires an immutable exact lookup with a Copy
+Support is recorded with the selected provider layout, bounded by its token's
+declared support, and never inferred from a Rust type spelling. \code{retain}
+requires an immutable exact lookup with a Copy
 cursor; \code{expand} additionally requires an exact finite cursor length and
 implies retain. \code{keys} requires exact distinct-key enumeration through
-\code{Keys}. Duplicate declarations, support on scan adapters, and payload-cursor
+\code{Keys}. Duplicate declarations, support on scan adapters, support not
+declared by the token, and payload-cursor
 support on membership-only builds are rejected. A one-level unit key remains a
 lawful keyed read; empty levels in a multi-level layout do not confer support.
+Default selection records \code{keys} on a one-level, non-membership payload
+build exactly when its chosen token declares it.
 Ordinary complete-key reads and Smallest candidate directories select different
 layouts: a capability on a payload index cannot certify a separate candidate
 directory, or conversely.
@@ -89,13 +328,28 @@ membership, interval and ordered accesses retain their own trait obligations.
 Aliases and unrelated provider names receive identical checks. Default selection
 declares support only for implementations and access paths it chooses, without
 imposing unused fallback bounds on a native host read.
-Retyping replaces the support packet; bare retyping clears it. Existing witnesses,
-expansion and filters must remain justified. Target catalogs record the same
-support data and selection preserves live obligations, while replay freezes
-both provider types and support. Neither support nor sorted storage grants
+Retyping replaces token, spelling and support packet together; bare retyping clears the packet. Existing witnesses,
+expansion and filters must remain justified. Target catalogs declare the same
+tokens and selection preserves live obligations, while replay freezes
+both provider records and support. Neither support nor sorted storage grants
 Ordered, contiguous Sequence Range, or device placement.
 \begin{mathpar}
-\Rule{STR-Lineage}{\mathsf{singleOccurrenceSpine}(r,H)\quad
+\Rule{STR-Reader}{\rho\in\{\mathsf{Scan},\mathsf{Candidates},\mathsf{Membership},
+ \mathsf{Result}(r)\}\quad\mathsf{matchesRead}(\rho,K)}
+ {\mathsf{hostFallback}(b,\rho,K,T)\text{ uses the tagged identity }\rho}
+
+\Rule{STR-Group}{r=\mathsf{group}_{G;A}(s)\quad G\ne\varnothing\quad
+ \mathsf{concrete}(T)\quad\mathsf{entries}_{group}(r)=[T]}
+ {\mathsf{accumulator}(r)=T}
+
+\Rule{SEL-Group}{r=\mathsf{group}_{G;A}(s)\quad G\ne\varnothing}
+ {\mathsf{select}(r)\text{ records }\code{group = std::collections::HashMap<\_, AccTuple, cq_storage::HashState>}}
+
+\Rule{P-GroupState}{\mathsf{accumulator}(r)=T\quad
+ T:\mathsf{FiniteMap}(G,\mathsf{AccTuple})}
+ {\mathsf{realize}(r)\text{ folds into }T\text{ and enumerates its present entries}}
+
+\Rule{STR-Lineage}{\mathsf{singleOccurrenceSpine}_{\mathsf{semiLeft}}(r,H)\quad
  \lambda:\mathsf{heading}(r)\hookrightarrow\mathsf{columns}(H)}
  {\mathsf{lineage}(r)=(H,\lambda)}
 
@@ -103,8 +357,11 @@ Ordered, contiguous Sequence Range, or device placement.
  \mathsf{keyset}(s,K)\quad\mathsf{lineage}(r)=(H,\lambda)}
  {r\;\mathsf{read}(H,\lambda(K),\mathsf{membership}(s,K))\text{ is admissible}}
 
-\Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)}
- {\mathsf{answers}(r,C,probe/semi)}
+\Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)\lor
+ (C=\varnothing\land\mathsf{reusableRows}(r))}
+ {\mathsf{answers}(r,C,probe/semi)\quad
+  \mathsf{access}(r,C)=
+  \begin{cases}\mathsf{Whole}&C=\varnothing\\\mathsf{Keyed}&C\ne\varnothing\end{cases}}
 
 \Rule{STR-Keyset}{\mathsf{keyset}(r,K)\quad
  \mathsf{reusableRows}(r)\quad T:\code{ExactMembership}(K)}
@@ -114,6 +371,15 @@ Ordered, contiguous Sequence Range, or device placement.
  \mathsf{readKeys}(r)=\{K\}\quad \mathsf{reads}(r)\subseteq\{probe\ first,semi,anti\}}
  {\mathsf{membershipBuild}(r,K)\text{ replaces witness enumeration by existence}}
 
+\Rule{STR-FullKey}{K=\mathsf{heading}(r)\quad \mathsf{set}(r)\\
+ \mathsf{readKeys}(r)=\{K\}\quad \mathsf{read}(l,r)=\mathsf{probe}(K)\quad \mathsf{orderedReads}(r)=\varnothing}
+ {\mathsf{membershipBuild}(r,K)\text{ answers the positive probe by existence}}
+
+Every right-hand column is already fixed by the supplied key.  Equal
+witnesses therefore add no new valuation during a positive probe; the
+recorded membership decision returns zero or one copy of the left row.
+This rule does not depend on Rust type spelling or on a preceding selection.
+
 \Rule{STR-Range}{\text{constant window on }r,c}
  {\mathsf{answers}(r,\{c\},range)\text{ by direct range or scan/filter; no build}}
 
@@ -121,23 +387,188 @@ Ordered, contiguous Sequence Range, or device placement.
  \text{or }(\mathsf{mode}(r)=pipe\land\mathsf{operator}(r)=merge[C](l,s))}
  {\mathsf{answers}(r,C,merge)}
 
-\Rule{WF-Structures}{\mathsf{Entries}(t,A)\quad\text{all Physical reads answered}\\
+\Rule{WF-Structures}{\mathsf{Entries}(t,A)\quad
+ \forall(r,C,m)\in\mathsf{physicalReads}(t.physical).\ \mathsf{answers}(r,C,m)\\
  \textsc{CK-Return}(t,\Gamma)}
  {\mathsf{WF}_{Structures}(t)\Downarrow A}
 \end{mathpar}
-Uniqueness: Unit has the empty key; a rename of a certified or discharged
-\code{host_set} has its full heading as key, and other host renames have none; join needs both
-keys and unions them; semi/anti keep the left key; union infers none;
-selections, guards and binds preserve it; projection preserves it only if no key
-column is dropped; a canon flag gives the full heading through its dedup type.
+Structures obtains its uniqueness map from the shared whole-program Physical
+analysis using the already checked Physical headings; it introduces no separate
+key-transfer rules. Physical establishes the returned set boundary before
+Structures checks its storage evidence. Unit has the empty key; every input
+relation is a set, so a rename has its full heading as key; joins need both keys;
+semi/anti retain the left key; certified disjoint unions require unique arms;
+filters and scalar binds preserve keys, but opaque generators do not.
+Projection must retain every key column, and grouping establishes its grouping
+key. A recorded canon boundary supplies the full-heading key when inference
+does not already establish one; Structures checks its canonical reference.
 A built structure alone proves no uniqueness.
 An explicit \code{membership} modifier on a single-level filtered build proves
 that every downstream observation is a supplied key or reconstructed constant.
 The checker rederives projection coverage and rejects partial-key or ordered
 reads. The printer emits one unit witness on successful membership, without an
-occurrence-preserving payload index. The default integral-key representation is
-\code{AdaptiveKeySet} with its recorded borrowed codec and bitmap bound.
+occurrence-preserving payload index. Default selection records
+token \code{dense\_membership} for one stored key column, whose declaration spells
+\code{DenseMembership<K,16777216>} once and requires \code{K: OrderKey}.
+Wider stored keys record \code{adaptive\_membership}, whose declaration spells
+\code{AdaptiveMembership<K,16777216>} once. Rust key syntax is never inspected.
+The membership contract itself remains valid for explicitly recorded composite keys.
 No base-table key or foreign-key assumption is used.
+
+\paragraph{One ordered key law.}
+\code{OrderKey} supplies one total order embedding for stored and absent
+query keys. Dense, rank and radix representations all use this encoding;
+\code{KeyCodec} is only a sealed directory policy delegating to it, or
+\code{NoDense}, which disables numeric directories. Width requirements
+are provider capabilities, never truncation.
+\[
+\Rule{IX-OrderKey}{x,y:K\quad \mathsf{OrderKey}(K)}
+ {\mathsf{cmp}(x,y)=\mathsf{cmp}(\mathsf{ord}(x),\mathsf{ord}(y))}
+\]
+
+\paragraph{Runtime scan blocks.}
+The authored family $F$ is Plain or Bytes. Plain stores native-width ordinals;
+Bytes stores constant, byte or two-byte residuals when strictly narrower,
+otherwise native-width ordinals. Block size is a positive multiple of 1024.
+The inverse ordinal law is a premise on the host type, not compiler inspection.
+Ordinals and extrema are collected in one input traversal; reusable block
+scratch supplies the final payload after its base and width are known.
+\begin{mathpar}
+\Rule{RT-ScanCodec}{b=\mathsf{encode}_F(v)\quad
+ \forall x\in v.\ \mathsf{fromOrdinal}(\mathsf{ord}(x))=x}
+ {\mathsf{concat}(\mathsf{decodeVectors}(b))=v}
+\Rule{RT-ScanSummary}{b=\mathsf{encode}_F(v)\quad
+ s=\mathsf{summary}(b)\quad v\ne []}
+ {s.lo=\min_{x\in v}\mathsf{ord}(x)\quad s.hi=\max_{x\in v}\mathsf{ord}(x)}
+\Rule{RT-Translate}{b=\mathsf{encode}_F(v)\quad
+ p\in\{\mathsf{point},\mathsf{window},\mathsf{membership}\}\quad
+ c_i=\mathsf{ord}(v_i)-b.base}
+ {\mathsf{translate}(p,b)(c_i)\iff p(\mathsf{ord}(v_i))}
+\end{mathpar}
+Window translation handles open endpoints with checked successor/predecessor;
+absent constants and empty intersections do not introduce matches. Filtering
+returns ascending occurrence positions, including duplicate occurrences.
+
+\paragraph{Opt-in shared scan descriptors (P6 A).}
+S1 has one little-endian byte layout, declared Plain/Bytes family,
+domain identity/version and carrier. A fresh immutable snapshot identifies
+the encoded source; layout and domain are not inferred from Rust names.
+Let $\alpha_S$ be the ordinal occurrence sequence of a checked descriptor.
+Metadata validation is independent of encoding: it checks family membership,
+byte extents/alignment, block/vector counts, live prefix and summary provenance,
+not equality with the encoder's preferred compression choice. Safe imports
+add payload overflow/carrier and summary-enclosure checks.
+\begin{mathpar}
+\Rule{STR-DeviceBlocks}{S=\mathsf{checkedS1}(A,F,D)\quad
+ F\in\{\mathsf{Plain},\mathsf{Bytes}\}}
+ {\mathsf{concat}(\alpha_S(\mathsf{vectors}))=\mathsf{ord}_D(A)}
+\Rule{GPU-VectorSummary}{S\text{ checked}\quad
+ s=\mathsf{summary}_S(v)\quad
+ \mathsf{provenance}(s)=(S.\mathsf{snapshot},S.\mathsf{domain})}
+ {\forall a\in\alpha_S(v).\ s.lo\le a\le s.hi}
+\Rule{GPU-LateRead}{S\text{ retained and checked}\quad
+ P.\mathsf{snapshot}=S.\mathsf{snapshot}\quad
+ \forall p\in P.\ 0\le p<S.\mathsf{liveCount}}
+ {\mathsf{readPositions}(S,P)=[\alpha_S[p]\mid p\in P]}
+\Rule{GPU-BlockTransfer}{S\text{ checked S1}\quad
+ U=\mathsf{uploadInitialized}(S)\quad
+ \mathsf{ready}(U)\prec\mathsf{read}(U)\prec\mathsf{releaseOwners}(U)}
+ {\alpha_U[0:S.\mathsf{liveCount}]=\alpha_S[0:S.\mathsf{liveCount}]}
+\Rule{STR-CarrierRead}{O\text{ original provider/domain/consumer obligations}\quad
+ R\text{ recorded representation, publication and read packets}\\
+ \mathsf{checkReadFacts}(O,R)\quad
+ \mathsf{roles}(R)=\mathsf{roles}(O)\quad
+ \mathsf{valueWitness}(r)\Rightarrow\mathsf{injectiveGlobalCode}(r)}
+ {\mathsf{authorizedFields}(R)=\mathsf{demandedFields}(O)\quad
+  \mathsf{preserveOtherCarriers}(R)}
+\end{mathpar}
+Optional vector extrema originate in the encoding traversal, or are validated
+against imported payload. Conservative enclosing extrema are lawful.
+The positional read law preserves duplicates and requested order and returns
+ordinal carriers, not reconstructed authored Rust values. It does not supply
+compiler read authorization. Predicate-mask agreement uses RT-Translate;
+these laws do not assert cooperative tile scheduling, payload-read pruning,
+default codec selection or retirement of existing logical inverse sites.
+Legacy FastLanes is not a selectable S1 family.
+
+\paragraph{Membership representation law.}
+Selection records the \code{dense\_membership} token
+\code{DenseMembership<K,B>} for a membership store with one stored key column
+(counted after filtering) and \code{adaptive\_membership}
+(\code{AdaptiveMembership<K,B>}, exact hash membership for every
+\code{Eq + Hash} key) for wider keys; neither selection nor printing inspects
+Rust types. Both denote exactly the supplied set of keys. The dense provider
+requires \code{K: OrderKey}, a total order-preserving ordinal:
+$\mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y$. A recorded dense key lacking the
+capability is a rustc error at its one typed build, never a hash fallback;
+integer aliases and user implementations obey the same capability law. The
+provider's Rust type carries the ordinal capability, so each membership probe
+has no indirect codec call.
+
+\paragraph{Columnar loading.}
+Source batches feed one bounded block tail per ordinary column. Interned
+columns finalize the dictionary first; their temporary-code remap feeds that
+same block encoder. Neither route constructs an intermediate vector of rows.
+\[
+\Rule{LD-ScanBlocks}{R=\mathsf{concat}(batches)\quad
+ C=\mathsf{loadColumns}_{F,B}(batches)}
+ {\alpha(C)=R\quad
+  \mathsf{summary}(C_j)=\mathsf{extrema}(\mathsf{ord}(R_j))}
+\]
+The summary equation applies only when requested. Payload and extrema consume
+the same input occurrences, independent of source batch boundaries; source
+errors do not publish partial dictionaries.
+The capability also records an associated unsigned word type: ordinary
+integer and string-code ordinals use \code{u64}; wide custom ordinals may use
+\code{u128}. Bounds and offsets use that word without a universal widening.
+A checked conversion of the complete span to \code{usize}, followed by the
+budget check, precedes bitmap allocation and every bounded offset conversion.
+The dense provider uses a bitmap only when its observed ordinal span fits the
+recorded bound $B$; otherwise it keeps exact hash membership. Contains-only
+membership does not construct a sorted interval index.
+The compiler records the provider and budget; key sets and sorted runs record
+their codec in the provider spelling (for example \code{I64Codec}), never a
+guessed or trait-selected codec.
+\[
+\Rule{STR-AdaptiveMembership}{
+ \mathsf{OrderKey}(K)\quad
+ \forall x,y:K.\ \mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y\\
+ \mathsf{span}(\mathsf{ord}(I))\le B
+}{
+ \alpha(\mathsf{bitmap}_{K,B}(I))=\mathsf{set}(I)
+}
+\]
+The hash alternative has the same abstraction for every \code{Eq + Hash} key.
+Existing explicit providers retain their ordinary \code{Build} implementation.
+
+\paragraph{Native host reads.}
+An entry \code{r native }$c$\code{ = }$\rho$\code{ [}$\vec K$\code{] [supports [}$S$\code{]]}
+records that reader $c$ of host rename $r$ reads its host value directly
+with declared read $\rho$ on key $\vec K$, built nothing. The checker verifies
+it against the host declaration (\textsc{IF-HostDecl}) without rerunning
+selection: $r$ is a reusable host rename (or a host scan), the renamed key is
+a declared host key in declaration order whose reads include $\rho$, $c$ reads
+$r$ on exactly that key, $\rho$ is a read $c$'s operator needs, and the
+recorded supports are declared and belong to an exact keyed read. A keyed read
+has at most one record: a native read or a fallback, never both.
+Native point reads require a leading-prefix host key; a non-leading
+single-column declaration does not support a native point read.
+Structures rejects a native scan when its Physical rename is both canonical
+and piped, since that source uses ordered host canonicalization. Sequence
+separately rejects native scans over tiled sources.
+\[
+\Rule{STR-NativeHost}{
+ r=\mathsf{rename}(R)\quad\mathsf{renames}(\vec K)=\mathsf{declOrder}_R(K)\quad
+ \rho\in\mathsf{hostReads}(R,K)\cap\mathsf{need}(c)\\
+ \mathsf{reads}(c,r)=K\quad S\subseteq\mathsf{hostSupports}(R,K)\quad
+ S\neq\emptyset\Rightarrow\rho=\code{exact}\quad
+ \neg\mathsf{fallback}(r,c,K)\\
+ \mathsf{point}(c)\Rightarrow K\text{ is a leading prefix}\quad
+ c=\mathsf{scan}\Rightarrow\neg(\mathsf{canon}(r)\land\mathsf{pipe}(r))
+}{
+ \mathsf{native}(r,c,K)=(\rho,\vec K,S)
+}
+\]
 
 \paragraph{Sorted runs.}
 \code{SortedRun} stably clusters payload occurrences by key. Its directory
@@ -147,7 +578,7 @@ Presence/rank and binary-search directory access identify the same exact
 range. This is a payload representation, not a uniqueness assertion.
 \code{RadixRun} uses the same stable clustered payload representation, but its
 directory is radix routing over a bounded-error rank spline. A total injective
-order-preserving \code{RadixKey} encoding covers owned, borrowed, and singleton
+order-preserving \code{OrderKey<Ordinal = u64>} encoding covers owned, borrowed, and singleton
 tuple i32/i64/u32/u64 keys. Integer differences precede floating conversion;
 the final window includes a conservative rounding allowance. Exact equality
 inside that window determines the payload range, not the prediction itself.
@@ -156,6 +587,31 @@ the encoded keys in a bitmap: a bit is set iff that key occurs in $D$.
 Its word-rounded storage is at most one byte per distinct key and 128 KiB;
 sparse domains keep exact spline search. Initialization neither changes
 $(D,O,V)$ nor invalidates existing payload cursors.
+Payload layout is explicit: \code{RadixRun<K,V,C>} requires
+\code{ItemColumns<Row=V>}. The default vector stores opaque items;
+tuple-of-vector layouts store independent columns. All columns have the same
+length; append and range-copy preserve the same occurrence positions.
+Key-only operations do not call row reconstruction. Column-group reads
+borrow the selected arrays and position ranges; lookup reconstructs only
+demanded rows, while contiguous legacy item reads may materialize a row view.
+The compiler records C rather than inspecting V: a one-level payload build
+carries the Structures fact \code{items rows} or \code{items columns}. The
+provider token declares the layout argument and both spellings
+(\code{items 2 [rows ::std::vec::Vec<\_>, columns ::cq\_storage::TupleColumns<\_>]}
+for \code{radix\_run}); the instance spelling ends before that argument and
+the checked analysis appends the declared spelling of the recorded fact
+(the tuple of vectors rustc derives from the row type, so no arity is spelled).
+The fact is the argument's only source: a spelling that states the layout, a
+missing fact or a fact on a token without the slot is rejected. Host readers
+and key-only membership storage keep the type's default layout.
+The payload is the filtered schema, else the result's carried columns
+(\code{cq\_lang\_structures::demand}, the same column demand printers carry),
+without the key. A reader's need is the carried columns of the probe or merge
+reading the index.
+\[
+\Rule{IX-ItemColumns}{\mathsf{columns}(I)=(C_1,\ldots,C_m)\quad 0\le j<|I|}
+ {\forall i.\ |C_i|=|I|\quad (C_1[j],\ldots,C_m[j])=I[j]}
+\]
 \begin{mathpar}
 \Rule{STR-SortedRun}{
  \mathsf{stableCluster}(I,K)=(D,O,V)\quad
@@ -164,7 +620,7 @@ $(D,O,V)$ nor invalidates existing payload cursors.
 
 \Rule{EXT-SortedRuns}{
  \mathsf{oneLevelHashPayload}(b,K)\quad
- \mathsf{borrowedIntegralKey}(K)\quad\mathsf{streamReads}(b)
+ \mathsf{singleStoredKey}(K)\quad\mathsf{streamReads}(b)
 }{\mathsf{retype}(b,\mathsf{SortedRun})\text{ preserves Structures}}
 
 \Rule{STR-RadixRun}{
@@ -175,12 +631,27 @@ $(D,O,V)$ nor invalidates existing payload cursors.
 
 \Rule{EXT-RadixRuns}{
  \mathsf{oneLevelHashPayload}(b,K)\quad
- \mathsf{singleIntegral64Key}(K)\quad\mathsf{streamReads}(b)
+ \mathsf{singleKey}(K)\quad\mathsf{singleStoredKey}(K)\quad\mathsf{streamReads}(b)
 }{\mathsf{retype}(b,\mathsf{RadixRun})\text{ preserves Structures}}
+
+\Rule{STR-ItemLayout}{
+ b\text{ built}\quad |\mathsf{levels}(b)|=1\quad \neg\mathsf{membership}(b)\\
+ \ell=\mathsf{columns}\Rightarrow|\mathsf{payload}(b)|\ge2
+}{b\ \code{items}\ \ell\text{ is admissible}}
+
+\Rule{STR-ReaderChoice}{
+ \mathsf{token}(e)\text{ declares }\code{choice}\ i\ [\code{eager}\ a_e,\ \code{lazy}\ a_l]\quad
+ \mathsf{spelling}(e)\text{ ends before argument }i\\
+ e\text{ serves reader }d
+}{e\text{ prints }a_l\text{ iff }d\text{ records }\code{lazy}\text{, else }a_e}
+
+\Rule{SEL-ItemLayout}{
+ P=\mathsf{payload}(b)\quad 2\le|P|\le12\\
+ \exists d.\ d\text{ probes or merges }b\text{ on its key}\land P\not\subseteq\mathsf{carried}(d)
+}{\mathsf{radixRuns}\text{ records }b\ \code{items columns}\text{, otherwise }\code{items rows}}
 
 \Rule{EXT-SortedIndexes}{
  \mathcal{K}=\{K\mid \mathsf{streamRead}(b,K)\}\quad
- \mathsf{integralKeys}(\mathcal{K})\quad
  \mathcal{C}=\mathsf{minChainCover}(\mathcal{K})\ \text{with probed keys maximal}\\
  \text{each chain's levels ordered by first binding in the reading stream}
 }{\mathsf{layouts}(b,\mathcal{C})\text{ preserves Physical and Structures}}
@@ -188,6 +659,10 @@ $(D,O,V)$ nor invalidates existing payload cursors.
 The external sorted-runs and radix-runs rewrites change only eligible built
 providers, not host fallbacks or smallest-intersection candidate providers.
 Their independent checker preserves Physical and rederives coverage.
+The key-shape premises concern recorded columns, not their Rust types.
+Rust proves the selected provider's ordering and \code{OrderKey} obligations;
+the recorded provider spelling names its codec (\code{NoDense} or an explicit
+codec); no trait-selected codec exists. No compiler type inspection establishes these capabilities.
 RadixRun declares Exact, Range, and Membership at the Sequential host level;
 it does not assert Ordered reads, already-sorted probes, or a GPU implementation.
 The sorted-indexes rewrite records which lexicographic layouts serve a built
@@ -199,42 +674,211 @@ must serve every read. It decides no canonical (dedup or maintenance) layout
 and no representation type beyond the defaults that \code{sorted\_runs} and
 \code{prefix\_runs} then retype.
 
+\paragraph{Device radix runs.}
+\code{DeviceRadixRun<W,O,C>} (\code{gpu-datalog-runtime}) is the device
+counterpart of \code{RadixRun}. Keys are packed words $W$ whose
+most-significant-first lane order is the \textsc{IX-OrderKey} embedding
+(\textsc{DL-DevicePacking}); they are stored whole. A stable
+least-significant-lane radix permutation clusters occurrences into distinct
+keys $D$, offsets $O$ of the carrier type selected upstream (builds whose
+item count exceeds the carrier are rejected), and gathered item columns.
+The directory is an exact radix prefix: for $r>0$ recorded bits, entry $p$ is
+the first slot whose top $r$ bits of $k-\min D$ at the span's resolution are
+at least $p$; a lower-bound search inside that bucket is exact, also for
+absent keys. Reads over all published runs take the key/offset/directory view
+only; item columns are a separate view. Ratio, directory bits and merge tile
+size are caller parameters; grids follow \textsc{GPU-LAUNCH-OCCUPANCY}.
+\begin{mathpar}
+\Rule{GPU-RadixRun}{
+ \mathsf{stableCluster}(I,K)=(D,O,V)\quad \mathsf{packedOrderKey}(K)\quad
+ |I|\le\max O\\
+ \mathsf{dir}_r(D)[p]=\min\{s\mid \mathsf{prefix}_r(D[s])\ge p\}
+}{\mathsf{lowerBound}(k)=\mathsf{lowerBound}_D(k)\quad
+ \mathsf{lookup}(k)=I|_{K=k}\quad \alpha(D,O,V)=\mathsf{bag}(I)}
+
+\Rule{GPU-RadixItemColumns}{\mathsf{columns}(I)=(C_1,\ldots,C_m)\quad
+ \pi\text{ a stable permutation or merge source map}}
+ {\forall i.\ C_i'[j]=C_i[\pi(j)]\quad (C_1'[j],\ldots,C_m'[j])=I[\pi(j)]}
+\end{mathpar}
+Full-key set construction has a distinct witness: every complete key occurs
+once, so its descriptor records implicit offsets $O[i]=i$ and stores no offset
+lane or item-source map. Occurrence construction, including \code{C=()},
+retains materialized group offsets. A shared offset accessor consumes the
+descriptor's recorded representation; it does not inspect keys or infer
+uniqueness. Diagnostic host downloads alone may materialize the unit offsets.
+
+
+A \code{RadixLayout<K,V,W,O,C>} is the typed relational view of one
+immutable publication: a checked most-significant-first packing of $K$ into
+whole $W$ keys, one item column per field of $V$ in a lane that holds its
+domain, the retained snapshot and its resident occurrence count. Match
+cursors $(\sigma,j,b,e)$ name snapshot $\sigma$, run $j$ and the run-local
+group $[b,e)$; merged-order ranges are counts, never addresses. Reads launch on
+an execution pool sharing the snapshot's memory, ordered after publication by
+fork readiness and before consumers by join readiness.
+\begin{mathpar}
+\Rule{GPU-RadixLayout}{\mathsf{pack}(K)\text{ checked against }W\quad
+ \forall i.\ \mathsf{lane}(C_i)\supseteq\mathsf{dom}(V_i)\quad
+ \sigma=\mathsf{snapshot}(\mathcal L)}
+ {\alpha(\mathsf{view}(\sigma))=\alpha(\mathcal L)\quad
+  \mathsf{count}(\sigma)=|\alpha(\mathcal L)|\quad
+  \mathsf{republish}(\sigma,\mathcal L)=\sigma\ \text{if runs unchanged}}
+
+\Rule{GPU-RadixCursor}{\mathsf{cursor}_\sigma(k)=((\sigma,j,b_j,e_j))_{j}}
+ {\mathsf{lookup}_\sigma(k)=\mathop{+\!\!+}_{j}\ C^{\sigma,j}[b_j,e_j)\quad
+  e_j\le|L_j|\quad \text{columns of }\sigma'\neq\sigma\text{ rejected}}
+
+\Rule{GPU-RadixLaneRead}{\mathsf{sharesMemory}(P,\mathsf{pool}(\sigma))\quad
+ \mathsf{publish}(\sigma)\prec_{\mathsf{fork}}\mathsf{read}_P\prec_{\mathsf{join}}\mathsf{use}}
+ {\mathsf{read}_P(\sigma)=\mathsf{read}_{\mathsf{pool}(\sigma)}(\sigma)}
+\end{mathpar}
+
 \paragraph{Meaning.} That of the embedded Physical. Each Rust type is a
 representation whose abstraction function $\alpha$ satisfies the
 \code{cq-storage} laws: $\alpha(\mathsf{build}(I))=\mathrm{bag}(I)$, lookups
 enumerate exactly the matching items, membership is exact. Rust checks the trait
 bounds at generated uses; the laws are tested, not derived.
 
-\paragraph{Recorded decisions.} Every concrete type: built indexes and levels,
-per-reader host fallbacks, retained rows, dedup state, filtered payloads and
-constants, positional bases and column lineage, mask-summary policy, column
-markers, keyset ownership/codec/budget and exact versus row-only read summaries.
+\paragraph{Recorded decisions.} Every concrete type and its selected-layout
+support: built indexes and levels, per-reader host fallbacks, keyed group
+accumulator tables, retained rows, canonical references, filtered payloads and constants,
+positional bases and column lineage, mask-summary policy, column markers,
+keyset ownership/codec/budget and exact versus row-only read summaries.
 Positions identify base occurrences without becoming logical columns. A selection
-is not Canonical or OrderedRead. Nothing is substituted at print time.
+requires its provider's declared \code{positions} capability: construction by
+\code{from\_positions}, immutable narrowing, survivor positions and rows, and
+builds over those rows. Logical-key \code{membership} does not provide this
+protocol. The intrinsic \code{selection} token declares \code{positions} and
+shared reads; Pull and Tasks catalogs admit it, and the GPU catalog admits it
+only at host. Catalog replacement must preserve this obligation independently
+of token spelling. A selection is not Canonical or OrderedRead. Nothing is
+substituted at print time.
+\begin{mathpar}
+\Rule{STR-Positions}{e=\code{selection}(p,H,\ell,s)}
+ {\code{positions}\in\mathsf{facts}(p).\mathsf{reads}}
+\end{mathpar}
+
+\paragraph{Canonical references.}
+A canon result is stored in its \emph{canonical} index: an ordinary member of
+the result's index set, chosen by index selection (SRDatalog's
+\code{select\_indices}/\code{canonical\_index}). Structures records only a
+reference to it, never a strategy, store or separate provider kind:
+\code{r canon = rows;} names the result's rows record, whose provider build
+yields distinct complete rows (\textsc{PL-Distinct}; default
+\code{::cq\_storage::dedup::Sort}, the sorted array);
+\code{r canon = [K];} names an existing one-level complete-row Built entry;
+\code{r canon = host;} names the load-verified host carrier of a direct
+complete host rename. \code{r head = Type;} types the answer relation's
+identity index the same way; it exists exactly when Physical records the
+return-boundary obligation (\textsc{PH-HeadDedup}).
+\begin{mathpar}
+\Rule{STR-Canon}{(c=\mathsf{rows}\land\mathsf{mode}(r)\ne pipe\land
+  r\text{ records rows})\ \lor\\
+ (c=[K]\land K\text{ is the full heading}\land\mathsf{mode}(r)=let\land
+  \mathsf{built}(r)=\{[K]\}\land
+  \text{every read of }r\text{ is existence-only and unscanned})\ \lor\\
+ (c=\mathsf{host}\land\mathsf{mode}(r)=pipe\land\mathsf{directHostScan}(r)
+ \land\mathsf{loadVerifiedPrefixCarrier}(r))}
+ {\mathsf{canonical}(r,c)\text{ is admissible}}
+\end{mathpar}
+A Built reference is the result's only storage: its build need not be
+duplicate-free, since existence reads observe support. The host carrier pairs
+immutable rows with the exact prefix comparison verified at load. Rust checks
+the carrier capability; the compiler checks the direct complete host-scan
+shape, never a Rust type spelling. No projection, filter, join, computed head
+or other downstream operator inherits this evidence. Full-row equality must
+imply equal prefixes; equal-prefix runs are still sorted and uniqued by
+complete-row identity: prefix order never establishes uniqueness. The
+default rows provider \code{dedup::Sort} collects the complete boundary
+stream, uses Rust \code{Ord} comparison via \code{sort\_unstable\_by}, then
+adjacent unique; Tasks uses its parallel sort. Compared fields may be opaque
+user Rust types, and wide rows need not implement a tuple-level \code{Ord} or
+\code{Hash}. The order/identity laws remain representation premises.
+Catalog selection may retype the rows provider to another \textsc{PL-Distinct}
+provider, but never turn a host reference into rows.
+
+Rows records are values, not shared buffers:
+\begin{mathpar}
+\Rule{STR-RowsByValue}{\mathsf{mode}(r)=let\quad
+ \mathsf{scans}(r)+|\mathsf{built}(r)|\le1\quad
+ r\text{ has no selection, keyset, or empty-key stream read}}
+ {r\text{ holds no rows record; its build moves into its single consumer}}
+\end{mathpar}
+A rows record is held as storage for an empty-key stream read that replays the
+relation, or with more than one consumer (scan reads plus Built entries).
+Filtered builds replay their direct source, so an unscanned filtered result
+never holds rows; only a canon result's unheld rows record may sit beside
+filtered storage.
+
+Selection writes the reference:
+\begin{mathpar}
+\Rule{SEL-Canon}{r=\mathsf{canon}(\ldots)}
+ {\mathsf{mode}(r)=pipe\Rightarrow r\ \code{canon = host}\\
+  \mathsf{mode}(r)\ne pipe\Rightarrow r\ \code{rows = dedup::Sort; canon = rows}\ 
+  (\code{Exists}\text{ for exists})\\
+  \text{existence-only single complete Built}\Rightarrow r\ \code{canon = [K]}\text{, rows dropped}}
+\end{mathpar}
+Returned results record \code{ret head = ::cq\_storage::dedup::Sort}.
+
+Authored advice may record a different \textsc{PL-Distinct} rows provider.
+\code{dedup::Packed} is the sorted run keyed by the packed \code{OrderKey} of
+every column. Its build measures each column's ordinal span while collecting,
+packs the span-relative ordinals most significant column first into one word
+together with the row position, sorts the words and reads the rows in word
+order, skipping equal keys. Packing is injective and lexicographic, so order
+and identity are those of the tuple order the printed comparator denotes; it
+falls back to that comparator when the spans exceed 128 bits. Its rows are
+\code{Copy}. The external \code{packed\_canon} rewrite (\code{canon(packed)} in
+the TPC-H harness) records it; the advice is the authored premise that every
+column has an \code{OrderKey}, which rustc checks through \code{PackedRow}.
+Selection never chooses it itself: that would need a recorded column
+representation fact or evidence-driven grading.
+\begin{mathpar}
+\Rule{PL-PackedCanon}{\forall i.\ \mathsf{OrderKey}(T_i)\quad
+ \mathsf{pack}(t)=\textstyle\sum_i (\mathsf{ord}_i(t_i)-m_i)\,2^{s_i}}
+ {\mathsf{pack}\text{ injective and lexicographic}\Rightarrow
+  \mathsf{build}_{\mathsf{Packed}}(t^*)=\mathsf{build}_{\mathsf{Sort}}(t^*)}
+
+\Rule{EXT-PackedCanon}{r\ \code{canon = rows}\quad r\ \code{rows = dedup::Sort}\quad
+ \text{advice } \mathsf{packedCanon}}
+ {r\ \code{rows = dedup::Packed}\text{ preserves Structures}}
+\end{mathpar}
+Membership indexes and retained row buffers remain ordinary members of the
+same index set.
+
 
 \paragraph{Default hash representations.} Selection records
-\code{::cq_storage::HashSet<_>} for built membership, canonicalization and
-head deduplication. This alias names
+\code{::cq_storage::HashSet<_>} for general built membership and candidate-key
+enumeration; membership-only projections use the adaptive provider above.
+These sets answer consumer membership probes, not self-deduplication.
+This alias names
 \code{std::collections::HashSet<K, cq_storage::HashState>};
 \code{HashState} uses keyed aHash. Payload reads record
 \code{::cq_storage::HashIndex<'_,_,_>}; its definition uses the same fast
-hash state. A deferred host membership fallback records
-\code{::cq_storage::dispatch::KeySet<_>} (or the lazy \code{false} form),
-whose key set uses that state. Trie levels and the staging and hash forms of
+hash state. A deferred host membership fallback records token \code{keyset}
+(\code{::cq_storage::dispatch::KeySet<_>}); its declared \code{choice 1}
+argument is printed from the served reader's recorded Physical eager/lazy
+choice (\textsc{STR-ReaderChoice}), so no spelling restates laziness. Its
+key set uses that state. Trie levels and the staging and hash forms of
 \code{AdaptiveKeySet} likewise fix their hash representation in the named
-runtime type. The printer emits recorded type tokens directly; retyping to
+runtime type. The printer passes recorded provider tokens to capability
+construction without choosing the resulting Rust implementation; retyping to
 \code{std::collections::HashSet<_>} retains the standard hasher.
-Dedup construction imports \code{HashSetConstructor} for hash sets with an
-explicit state, preserving the existing \code{new()} protocol and inherent
-constructors of custom providers. It does not replace a recorded type.
 Counter builds retain their deterministic measurement collections and fixed
-seeds; their hash-finish counts cover runtime internal collections, not every
-canonicalization or host hash operation.
+seeds; their hash-finish counts cover runtime internal collections and host
+hash operations, not sort canonicalization. CPU Datalog's
+\textsc{DL-InsertNew} uses the recorded canonical provider's membership and
+insertion operations on the committed and round-local NEW layouts, not a
+separate hash-seen store.
 
 \code{HashIndex} stores exact keys and arena slots in a hashbrown Swiss table
 using the recorded keyed hash state, plus a contiguous arena of first payloads.
 Hash collisions always require full key equality.
 Only keys with additional occurrences allocate a shared tail.
+The directory and arena grow by doubling; once the first $2^{16}$ source rows
+carry distinct keys, initialization reserves the source's remaining lower size
+bound at once. That reservation never exceeds the footprint of the same rows
+with distinct keys, and the stored keys, slots and buckets are unchanged.
 Initialization consumes the source once, on first access, and is shared by
 cloned handles. A standalone lookup cursor copies the first payload and owns
 its tail; it survives dropping the index and advances independently.
@@ -253,7 +897,7 @@ stage entries mean scalar demand. Already-reduced/joined streams, opaque guards
 and branches retain scalar demand by default; computed rows and curried access
 retain their existing lookup protocol. The printer consumes the recorded
 decision. No runtime statistics or adaptive choice is used, and bounded
-lookahead cannot force an unvisited partial Rust expression.
+lookahead preserves the recorded operator plan and free-variable bindings.
 Candidate counts remain exact occurrence counts (upper bounds for distinct
 candidate enumeration), without enumerating a bucket. Retained-capacity
 counters account for the directory, arena and live tail buffers separately.
@@ -263,12 +907,12 @@ contracts hold and the embedded Physical AST and token serialization are exactly
 equal. Lineage, read coverage and summary obligations are rederived independently.
 Retype selectors \code{kind(selection)} and \code{kind(keyset)} preserve origin,
 levels and policy; \code{rows} still selects FromIterator buffers. Membership
-includes keysets. Losing interval membership requires an explicit row-summary
+includes keysets, not positional selections. Losing interval membership requires an explicit row-summary
 rewrite or rejection, never a printer fallback.
 
 \paragraph{Covered join filters.}
 An entry \code{s join_filter = Type build b [k] covering j
-marker ::cq_load::ColumnAt<n>;} records a structure's Rust type, the scan
+marker ::cq_load::ColumnAt<n> policy P;} records a structure's Rust type, the scan
 occurrence, the filtered key column, host key column and exact covering
 operator. A scan may carry several entries, one per covering operator and key
 column. The core neither classifies approximate algorithms nor recognizes their names.
@@ -277,6 +921,16 @@ semijoin of \code{b} on a key $K\ni k$ served by a single-level exact key index,
 that the build is total, and that the scan reaches \code{j} through an
 exclusive pipe spine whose every result carries $k$: renames, projections,
 declarative selections and left operands of eager probes and semijoins.
+The recorded single-level key layout, not the provider's Rust type name,
+establishes eligibility. Recorded \code{Keys} support describes the exact stored
+key layout. With neither realization flag, projected \code{Build} consumes
+\code{Keys::distinct\_keys} only after activation, the recorded default.
+Source \code{run\_filter} and realization \code{borrowed\_filter} are distinct
+provider facts. Explicit borrowing requires a scalar complete stored layout and
+\code{RunFilterSource}. Explicit \code{attached\_filter} instead requires an
+incremental \code{BuildSidecar} builder attached through the exact
+\code{BuildWithSidecar} provider; the two realization facts are mutually
+exclusive. Rust discharges these capabilities, not provider-name recognition.
 Rows of the scan with $k\notin\pi_k(b)$ produce, along that spine, only rows
 with the same $k$, which \code{j} drops; so the filter keeps a superset of the
 rows \code{j} can keep ($R\ltimes b\subseteq\sigma_F(R)\subseteq R$). A key bound
@@ -286,7 +940,8 @@ left operands are rejected. An anti join cannot cover
 a filter. Removing the exact operator leaves an invalid entry: a conservative
 filter can never be the only check of the constraint.
 
-For the keys $S$ supplied by \code{Build}, the capability laws are
+For the projected scalar keys $S$ supplied by distinct-key enumeration,
+observed by attached construction or borrowed at publication, the capability laws are
 \[
  \begin{aligned}
  T:\code{ConservativeMembership<K>} &: \quad k\in S\implies T.\mathsf{test}(k),\\
@@ -300,8 +955,12 @@ never permitted. A conservative \code{may_contain_in(lo,hi)} may return false on
 when the closed interval contains no build key. Its default retains every
 block; the exact-to-conservative blanket uses this default. Missing host block
 metadata also retains the block. Exact keyset reads retain their separate
-\code{ExactIntervalMembership} capability. Rustc checks capabilities through
-\code{require::conservative::<K,T>}; semantic provider laws remain premises.
+\code{ExactIntervalMembership} capability. For sidecars rustc checks
+\code{require::conservative::<K,T>}; borrowed \code{RunFilterView} implements
+\code{ReadPredicate} only, avoiding overlap with the exact-membership blanket.
+\code{RunFilterPredicate} wraps an optional borrowed view and preserves identity
+when inactive. All three paths obey the same no-false-negative read law;
+semantic provider laws remain premises.
 External structures may supply stronger block summaries without changing the
 covering obligation. False positives are eliminated by the unchanged probe.
 For a positional static read directly over the rename/project spine, realization
@@ -312,12 +971,13 @@ conditions and relational readers can reduce the surviving count further.
 \begin{mathpar}
 \Rule{STR-JoinFilter}{
  j\in\{\mathsf{probe}[K](l,b),\mathsf{semi}[K](l,b)\}\ \text{eager}\quad
- k\in K\quad k:\code{i64}\quad
- \mathsf{exactKeyIndex}(b,K)\quad\mathsf{declaresKeys}(b,K)\\
+ k\in K\quad \mathsf{exactKeyIndex}(b,K)=P\quad
+ \mathsf{declaresKeys}(b,K)\quad P:\code{Keys}\\
  \mathsf{exclusiveSpine}_k(s,l)\quad
  \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\
- T:\code{Build}\quad T:\code{ConservativeMembership}(k)\quad
+ \mathsf{recordedProjectedBorrowedOrAttachedBuild}(P,T,K,k)\quad
+ \mathsf{conservativeReadLaw}(F,k)\quad
  \pi_k(b)\subseteq\{x\mid F.\mathsf{test}(x)\}
 }{
  s\;\mathsf{joinFilter}(F,b,k,j,C)\text{ is admissible}
@@ -327,10 +987,12 @@ Here $\mathsf{exclusiveSpine}_k$ contains only one-use pipe renames,
 projections, declarative selections and left operands of eager probes and
 semijoins, each carrying $k$, without canon or fused scopes; the scan's
 lineage maps $k$ to a host column.
-The selected provider enumerates its exact distinct keys through \code{Keys}
-for filter construction. Any lawful implementation can satisfy this premise;
-retyping must preserve the declaration and its Rust trait obligation.
-A checked \code{Sharded} family preserves exact key enumeration as well: each
+The selected source provider declares exact distinct-key enumeration through
+\code{Keys}; the default projected realization consumes it only after activation.
+Explicit borrowed and attached realizations satisfy their respective capabilities
+without that enumeration. Any lawful implementation can satisfy these premises;
+retyping must preserve the declarations and Rust trait obligations.
+A routed token (STR-Routed) preserves exact key enumeration as well: each
 complete key routes to exactly one native index, and enumerating all its native
 keys gives the same global key support, including the one-index identity
 representation. Its selected provider must still declare and satisfy the
@@ -348,3 +1010,172 @@ are checked by rustc, rather than by a provider-name whitelist. External
 admissible covering operator of \code{s} not yet recorded (including total
 unfiltered builds); it records positional-host advice and undergoes the same
 contract and correspondence checks.
+Every entry records exactly one activation policy $P$:
+\code{always}, or \code{abandon p of B keys S}, which activates the filter only
+while the covering build's exact key count read through $S$ is at most $p\%$ of
+the positional base $B$. $S$ is \code{key\_count} (\code{Keys::key\_count}) or a
+declared exact optional Keys statistic accessor, whose absence selects identity.
+\textsc{STR-FilterPolicy} checks legality only; which policy is profitable
+belongs to \textsc{SEL-FilterPolicy}, and the checker does not rerun it.
+\begin{mathpar}
+\Rule{STR-FilterPolicy}{
+ P=\mathsf{always}\ \lor\ \bigl(P=\mathsf{abandon}(p,B,S)\quad 1\le p\le 100\quad
+ \mathsf{lineageBase}(b)=B\in\mathsf{positionalBases}\\
+ (S=\mathsf{key\_count}\ \lor\ \mathsf{declaredExactHostBuildKeys}(\mathsf{built}(b,K),S))\bigr)
+}{
+ s\;\mathsf{joinFilter}(F,b,k,j,C)\ \mathsf{policy}\ P\text{ is admissible}
+}
+\end{mathpar}
+
+\subsection{Authored CPU blocked scan bindings}
+
+The optional \code{blocks} packet belongs to the existing encoded contract.
+It adds source geometry and schema-slot obligations, scan representation
+references, exact predicate decisions, and consumer reads. It does not own
+another family or domain table: every column refers to an encoded declaration
+and representation identity. The explicit selection spelling is
+\code{blocks(R \{ block\_rows 1024; summary none; columns [a: bytes u64]; \})}.
+All source columns must appear exactly once. Family and native carrier are
+authored provider premises, never inferred from a Rust type or expression.
+Logical type and code-domain identities come from the actual declaration
+table. The native carrier is a rustc/provider obligation. The runtime checks
+the immutable table binding, aligned lengths, geometry, domain and snapshot.
+
+\begin{mathpar}
+\Rule{STR-Blocks}{
+ \mathsf{scan}(o)=R \quad
+ \mathsf{schemaSlots}(R)=\mathsf{slots}(B) \quad
+ \mathsf{logicalIds}(R)=\mathsf{logicalIds}(B)\\
+ \mathsf{serves}(P,o) \quad
+ \mathsf{repr}(c)=(P,R,o,c,s,d,\mathsf{S1},f,w) \quad
+ f\in\{\mathsf{Plain},\mathsf{Bytes}\}\\
+ v=B.\mathsf{vectorRows}=1024 \quad b>0 \quad b\bmod v=0 \quad b\leq 2^{32}-1 \quad
+ \mathsf{widths}(\mathsf{Plain},w)=\{w\} \quad
+ \mathsf{widths}(\mathsf{Bytes},w)=\{0,1,2,w\}\cap[0,w]
+}{
+ B,o \vdash \mathsf{blockedScan}(R,s)
+}
+\end{mathpar}
+The abstraction concatenates decoded blocks in original occurrence order.
+Source records own the vector geometry; execution consumes it without a second
+geometry declaration. Summary policies are \code{none}, \code{minmax}
+(block min/max), and \code{vector\_minmax} (vector min/max). Each nonempty policy
+requires the matching declared buffer kind enclosing that same immutable source;
+neither summary level substitutes for the other.
+Geometry and permissible physical widths are checked independently of the
+encoder; the actual residual width remains runtime header data. Domain
+namespaces reify explicit binder identities, scoped by this source provider:
+logical-only $i$ maps to $2i+1$, code-domain $d$ to $2d+2$, with the declared
+dictionary version or zero. This is not a cross-query dictionary equivalence.
+
+\begin{mathpar}
+\Rule{STR-PreservedOp}{
+ \mathsf{injective}(E) \quad
+ (op\in\{\mathord{<},\mathord{\leq},\mathord{>},\mathord{\geq}\}
+     \Rightarrow \mathsf{monotone}(E)) \quad
+ \mathsf{sameDomain}(c,x)
+}{
+ op(\mathsf{dec}(c),x)
+ \iff \mathsf{translated}_{op}(c,\mathsf{translate}(x))
+}
+\Rule{STR-BlockPredicate}{
+ \mathsf{physical}(p)=\sigma_\theta(i) \quad
+ \mathsf{record}(p).\mathsf{columns}=\mathsf{FV}(\theta) \quad
+ \mathsf{lineage}(p)=\mathsf{originalLineage}(p)\\
+ \mathsf{ops}(\theta)\subseteq\mathsf{preserves}(P) \quad
+ \mathsf{translation}=\mathsf{S1Ordinal} \quad
+ \forall q\in\mathsf{comparisonLeaves}(\theta).\ \mathsf{FV}(q)\ne\varnothing\\
+ \mathsf{prune}\ne\mathsf{none}\Rightarrow
+    (\mathsf{prune}=\mathsf{summary}(P)\land\mathsf{unaryExactTemplate}(\theta))
+}{
+ p\vdash(\mathsf{prune},\mathsf{test},\mathsf{strategy})
+}
+\end{mathpar}
+Equality includes inequality and membership; order requires monotonicity.
+Plain and Bytes advertise both laws. Missing dictionary literals remain Empty
+for equality and insertion ranks for order under RT-Translate; integers from
+different code domains are not comparable merely because their widths agree.
+The record names the original Physical predicate, including every conjunct,
+disjunction arm and cross-column comparison. Window and Point are checked
+exact templates; Formula retains the entire algebra, with pruning disabled
+and an explicit physical decode-to-global-code test. Each demanded column is
+read once for the live row before evaluating the full formula. Necessary unary
+envelopes cannot discharge a correlated formula. Window and Point admit both
+encoded residual testing and explicitly selected physical decode-to-code tests.
+Adding a frame base reconstructs a global ordinal, not an authored Rust value.
+Every comparison leaf needs a declared column to determine its translation
+domain, recursively through disjunctions. Between requires this for both
+endpoint comparisons; membership requires a variable subject. Closed-only
+leaves are rejected even when another leaf mentions a column.
+
+\begin{mathpar}
+\Rule{STR-ComparatorRows}{
+ \mathsf{blocked}(r)\quad \mathsf{canonicalRows}(r)=P\quad
+ \mathsf{ComparatorRows}\in\mathsf{capabilities}(P)
+}{
+ r\vdash\mathsf{canonicalCarrierRows}(P)
+}
+\end{mathpar}
+ComparatorRows promises complete logical-comparator sorting and one carrier
+representative per equal key, including parallel sorting. Distinct alone does
+not promise that interface. The same requirement applies at blocked return
+canonical boundaries and is preserved by catalog provider selection.
+
+\paragraph{Reads, ownership and the checkpoint boundary.}
+Each opaque Bind/Guard records exactly its original free-variable demand,
+excluding already-owned computed fields. Owned reads construct scoped values;
+borrowed temporary reads are permitted only for Guard, never escaping into a
+Bind or final answer. Genuine final reads name the actual answer and exact
+head demand; a Physical return alone does not establish final publication.
+An outer compiler may instead transport a checked consumer requirement
+$(c,H,V)$: original consumer identity, ordered head-variable identities, and
+the subset read for logical values by its checked Context. Structures binds
+this requirement once, independently of representation choices. Its head
+must match the Physical head, including captures hoisted outside row headings.
+It neither implies canonicality nor discharges the original set boundary.
+
+For such an external consumer, base fields in $H\setminus V$ receive a
+\code{PreserveCarrier}/\code{Ordinal} packet naming $c$. These are global
+injective \emph{value codes}: $E(x)=E(y)\iff x=y$ under the original source,
+domain, snapshot and S1 equality law. Neither occurrence positions nor
+block-relative residuals satisfy this obligation, and no primary-key premise
+is required. Already-owned computed fields retain their original carrier;
+captures remain host values and require no row read. Logical demands in $V$
+belong to the separate \code{OpaqueRustRead} role, never
+\code{FinalHostAnswer}. At this checkpoint external consumers may read
+computed values or captures only: an encoded base-value demand is rejected
+until a checked borrowing/ownership protocol can serve the outer fold.
+An owned reconstruction cannot be passed to a consumer expecting a borrowed
+source field. Internal Bind/Guard reads still use their authorized opaque
+Rust reads, including arithmetic that computes an outer measure.
+
+The checker derives both exact role packets directly from $(c,H,V)$ and
+Physical row/capture identities, checks field lineage and injectivity, and
+rejects extra, missing or reassigned fields. Correspondence preserves the
+original requirement, rejecting simultaneous edits to it and its selected
+packets. The printer emits the selected actions; it does not infer consumers
+or reconstruct ignored values.
+
+Canonical reads name the canonical result with purpose
+\code{PreserveCarrier} and action \code{Ordinal}, covering every noncomputed
+logical heading field. They authorize no inverse codec. Canonical equality is
+equality of the full logical heading (ordinal keys plus owned computed values),
+not equality of occurrence positions; equal witnesses at different positions
+still deduplicate by value. Comparator rows are explicitly selected for this
+boundary, with one position retained after dedup.
+
+The first executable checkpoint carries \code{Repr::Positions} through Rename,
+Project, every declarative predicate, Bind and Guard, and comparator canonical
+rows. A Group may consume owned computed operands. A group key or aggregate
+argument that reads an encoded base field is rejected before printing; it
+requires a future explicit relational carrier/group protocol, not an opaque
+read or an inverse-codec fallback. Computed-only grouping remains supported.
+Any blocked occurrence reaching a join, index, noncanonical
+retained store, fused scope or restricted Rename (source atom literals) is
+rejected by the Structures checker before printing.
+This is an explicit checkpoint boundary, not a
+claim of complete blocked join/index support. Unknown and unadvised hosts keep
+the prior Structures decisions. Correspondence checks Physical preservation;
+the language checker derives source, predicate, canonical and consumer
+coverage independently, without invoking selection or requiring its preferred
+Plain/Bytes, pruning or code-test choice.

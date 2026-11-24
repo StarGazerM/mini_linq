@@ -6,7 +6,7 @@
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
 use cuda_device::{device, thread};
 use gpu_device_columns::ColumnView;
-pub use gpu_device_columns::{decode, decode_u32};
+pub use gpu_device_columns::{decode, decode_u32, original_position};
 
 pub use gpu_tiles::{BLOCK_THREADS, SCAN_SCRATCH_WORDS, TILE_ITEMS};
 
@@ -56,29 +56,10 @@ pub use gpu_tiles::owner;
 pub unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
     unsafe {
         (
+            // DECODE V: lower directory offset FOR inversion precedes range expansion; P6 use plain index directories.
             decode_u32(offsets, key as u64),
+            // DECODE V: upper directory offset FOR inversion precedes range expansion; P6 avoid compressed random-access directories.
             decode_u32(offsets, key as u64 + 1),
         )
     }
-}
-
-/// Exact membership in an ascending resident u32 column over `[begin, end)`.
-/// Empty ranges return false without reading a value.
-///
-/// # Safety
-/// The column and its owners must be live. `begin <= end` must delimit an
-/// initialized logical range sorted by decoded u32 value.
-#[device]
-#[inline(always)]
-pub unsafe fn contains_u32(column: ColumnView, begin: u32, end: u32, value: u32) -> bool {
-    let (mut low, mut high) = (begin, end);
-    while low < high {
-        let middle = low + (high - low) / 2;
-        if unsafe { decode_u32(column, middle as u64) } < value {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    low < end && unsafe { decode_u32(column, low as u64) } == value
 }

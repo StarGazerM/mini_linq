@@ -186,10 +186,10 @@ mod custom_indexes {
             select_case! { pipeline { ::stacked_ir_test_passes::custom_indexes, ::mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
                 physical {
                     relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
-                    l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a, b -> b};
-                    s = let rename S@2 {b -> b, c -> c};
+                    l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
+                    s = let rename S {b -> b, c -> c};
                     j = pipe probe first [a] l, r; p = pipe probe first [b] j, s;
-                    out = pipe canon project p keep {a, c}; return out as answer(a, c);
+                    out = let canon project p keep {a, c}; return out as answer(a, c);
                 }
             },
         )
@@ -216,7 +216,7 @@ mod merged {
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
         ::core::iter::Iterator::collect(
-            compile_case! { pipeline { physical = [::stacked_ir_test_passes::merged]; structures = [::stacked_ir_test_passes::ordered_dedup]; }
+            compile_case! { pipeline { physical = [::stacked_ir_test_passes::merged]; }
                 struct Chain;
                 relation L(a: Value);
                 relation R(a: Value, b: Value);
@@ -327,18 +327,11 @@ fn computed_columns_follow_the_head_order() {
     );
 }
 
-/// Relational prefix canonicalization preserves the final set. The opaque
-/// guard stays after the complete written join; evaluation counts are outside
-/// the denotation.
+/// Relational prefix canonicalization preserves the final set. The opaque,
+/// pure, total guard needs only a's binder, not the complete written join.
 mod generic_canon {
-    use std::cell::Cell;
-
-    fn observe(a: &i32, visits: &Cell<usize>) -> bool {
-        // a=4 has an R prefix but no complete triangle. Evaluating this Rust
-        // step on that prefix would move it before a written relational step.
-        assert_ne!(*a, 4, "guard evaluated before the complete written prefix");
-        visits.set(visits.get() + 1);
-        true
+    pub(super) fn accepts(a: &i32) -> bool {
+        *a != 2
     }
 
     #[allow(non_snake_case)]
@@ -346,7 +339,6 @@ mod generic_canon {
         R: &'a [(i32, i32)],
         S: &'a [(i32, i32)],
         T: &'a [(i32, i32)],
-        visits: &Cell<usize>,
     ) -> Vec<(&'a i32, &'a i32, &'a i32)> {
         ::core::iter::Iterator::collect(
             compile_case! { pipeline { plan = ::stacked_ir_test_passes::plan_generic; physical = [::stacked_ir_test_passes::canonical_projects]; }
@@ -354,33 +346,33 @@ mod generic_canon {
                 relation R(a: i32, b: i32);
                 relation S(b: i32, c: i32);
                 relation T(a: i32, c: i32);
-                answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if observe(a, visits);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if accepts(a);
             },
         )
     }
 }
 
 #[test]
-fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
-    let r = [(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
+fn generic_prefix_canonicalization_preserves_total_guard_answers() {
+    let mut r = vec![(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
+    r.sort_unstable();
+    r.dedup();
     let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
     let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
-    let visits = std::cell::Cell::new(0);
-    let actual = generic_canon::run(&r, &s, &t, &visits);
+    let actual = generic_canon::run(&r, &s, &t);
     let mut expected = HashSet::new();
     for (a, b) in &r {
         for (sb, c) in &s {
-            if sb == b && t.iter().any(|(ta, tc)| ta == a && tc == c) {
+            if sb == b
+                && t.iter().any(|(ta, tc)| ta == a && tc == c)
+                && generic_canon::accepts(a)
+            {
                 expected.insert((a, b, c));
             }
         }
     }
     assert_eq!(actual.len(), expected.len());
     assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
-    assert!(
-        visits.get() > 0,
-        "the surviving tuples reach the final guard"
-    );
 }
 
 /// Generic join: one variable at a time, every atom holding it checked

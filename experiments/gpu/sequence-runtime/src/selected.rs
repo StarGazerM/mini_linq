@@ -1,7 +1,9 @@
 //! Stable row-ID selection for resident scans without an index build.
-use crate::{build_module, config, pointer, release, temporary, Pool, RangeSelection, Result};
-use cuda_core::DeviceBuffer;
-use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
+use crate::{
+    build_module, pointer, release, temporary, Auxiliary, Geometry, Pool, RangeSelection, Result,
+};
+use crate::DeviceBuffer;
+use rccl_thrust::{arithmetic_range, select_flagged};
 use std::sync::Arc;
 
 /// Original base-row IDs satisfying a range predicate, in input order.
@@ -20,6 +22,10 @@ impl SelectedRows {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+    /// Allocated row-ID storage, including the unused suffix.
+    pub fn bytes(&self) -> usize {
+        self.rows().len() * std::mem::size_of::<u32>()
+    }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
     }
@@ -32,19 +38,17 @@ impl SelectedRows {
         self.rows().cu_deviceptr() as *const u32
     }
 }
-impl Drop for SelectedRows {
-    fn drop(&mut self) {
-        if let Some(rows) = self.rows.take() {
-            let result = unsafe { rows.drop_async(self.pool.stream()) };
-            self.pool.context().record_err(result);
-        }
-    }
-}
 
 /// Select original row IDs by `start <= decoded_value < end`, without sorting
 /// or building a directory. RCCL flagged selection preserves source order.
 /// One selected-count readback establishes the returned logical length.
-pub fn select(pool: Arc<Pool>, selection: &RangeSelection) -> Result<SelectedRows> {
+/// `geometry` is the recorded `selection` family geometry.
+pub fn select(
+    pool: Arc<Pool>,
+    selection: &RangeSelection,
+    geometry: Geometry,
+) -> Result<SelectedRows> {
+    geometry.check("selection", Auxiliary::SUPPORTED.selection)?;
     if !Arc::ptr_eq(selection.column.pool(), &pool) {
         return Err("selection column must share the execution pool".into());
     }
@@ -53,32 +57,35 @@ pub fn select(pool: Arc<Pool>, selection: &RangeSelection) -> Result<SelectedRow
         return Err("selection exceeds the u32 row-ID domain".into());
     }
     let stream = pool.stream();
-    let mut rows = temporary::<u32>(stream, base_rows)?;
+    let mut rows = temporary::<u32>(&pool, base_rows)?;
     let len = if base_rows == 0 {
         0
     } else {
         let module = build_module(&pool)?;
         let thrust = rccl_thrust::cuda::Program::load(pool.context())?;
         let exec = thrust.par_in(stream, pool.resource())?;
-        let flags = temporary::<u32>(stream, base_rows)?;
+        let flags = temporary::<u32>(&pool, base_rows)?;
+        let shape = module.prepare_range_flags(geometry.config(1))?;
+        let blocks = geometry.grid(shape.function(), base_rows)?;
+        // DECODE V: selection launches value reconstruction before range comparison; P6 evaluate translated encoded predicates.
         module.range_flags(
             stream,
-            &module.prepare_range_flags(config(base_rows))?,
+            &module.prepare_range_flags(geometry.config(blocks))?,
             selection.column.view(),
             base_rows as u32,
             selection.start,
             selection.end,
             pointer(&flags),
         )?;
-        let mut count = temporary::<u64>(stream, 1)?;
+        let mut count = temporary::<u64>(&pool, 1)?;
         select_flagged(
             &exec,
             arithmetic_range(0_u32, 1, base_rows),
-            flags.view(),
-            rows.view_mut(),
+            &flags,
+            &mut rows,
             &mut count,
         )?;
-        let len = count.to_host_vec(stream)?[0] as usize;
+        let len = count.to_host_vec()?[0] as usize;
         release(stream, flags)?;
         release(stream, count)?;
         len

@@ -3,6 +3,8 @@
 //! indexes, a user-defined index type, merge joins over compiler-built
 //! ordered maps, the acyclic planner's Yannakakis plan, and a bounded scan
 //! of an ordered host. Every query evaluates to an iterator of answers.
+//! Relation fixtures contain distinct full rows; duplicate answer witnesses
+//! come from joins and projections, not duplicate input rows.
 #![recursion_limit = "1024"]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -116,9 +118,10 @@ fn compiler_built_indexes_feed_the_pull_program() {
     let (l, r, s) = fixture();
     let actual: HashSet<_> = built::run(&l, &r, &s).into_iter().collect();
     assert_eq!(actual, oracle(&l, &r, &s));
-    // Canonical return: duplicated inputs do not duplicate answers.
-    let doubled: Vec<_> = l.iter().chain(&l).cloned().collect();
-    assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
+    // Distinct join witnesses project to the same answer.
+    let mut fanout = s.clone();
+    fanout.push((Value(11), Value(100)));
+    assert_eq!(built::run(&l, &r, &fanout).len(), oracle(&l, &r, &fanout).len());
 }
 
 /// A caller-selected provider builds a user index for materialized results.
@@ -169,10 +172,10 @@ mod custom_indexes {
             ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::custom_indexes, ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
                 physical {
                     relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
-                    l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a, b -> b};
-                    s = let rename S@2 {b -> b, c -> c};
+                    l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
+                    s = let rename S {b -> b, c -> c};
                     j = pipe probe first [a] l, r; p = pipe probe first [b] j, s;
-                    out = pipe canon project p keep {a, c}; return out as answer(a, c);
+                    out = let canon project p keep {a, c}; return out as answer(a, c);
                 }
             },
         )
@@ -199,7 +202,7 @@ mod merged {
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
         ::core::iter::Iterator::collect(
-            ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::merged]; structures = [::core_pass_fixtures::ordered_dedup]; }
+            ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::merged]; }
                 struct Chain;
                 relation L(a: Value);
                 relation R(a: Value, b: Value);
@@ -260,7 +263,7 @@ mod windowed {
         ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Windowed;
             relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if *a >= 2 && *a < 9 && *b != 5;
+            answer(a, b) :- R(a, b), where a >= 2 && a < 9 && b != 5;
         })
     }
 }
@@ -292,12 +295,12 @@ mod computed {
     pub(super) fn run<'a>(
         R: &'a [(i32, i32)],
         S: &'a [(i32, i32)],
-    ) -> Vec<(&'a i32, String, &'a i32)> {
+    ) -> Vec<(&'a i32, Vec<i32>, &'a i32)> {
         ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Computed;
             relation R(a: i32, b: i32);
             relation S(b: i32, c: i32);
-            answer(a, s, c) :- R(a, b), S(b, c), let s: String = format!("{}", a);
+            answer(a, s, c) :- R(a, b), S(b, c), let s: Vec<i32> = vec![*a];
         })
     }
 }
@@ -305,23 +308,22 @@ mod computed {
 #[test]
 fn computed_columns_follow_the_head_order() {
     assert_eq!(
-        computed::run(&[(1, 2), (1, 2)], &[(2, 3)]),
-        vec![(&1, "1".to_string(), &3)]
+        computed::run(&[(1, 2), (1, 4)], &[(2, 3), (4, 3)]),
+        vec![(&1, vec![1], &3)]
     );
 }
 
-/// Relational prefix canonicalization preserves the final set. The opaque
-/// guard stays after the complete written join; evaluation counts are outside
-/// the denotation.
+/// Relational prefix canonicalization preserves the final set. Total opaque
+/// guards may run wherever their free variables are available; their evaluation
+/// counts and placement relative to unrelated joins are outside the denotation.
 mod generic_canon {
     use std::cell::Cell;
 
     fn observe(a: &i32, visits: &Cell<usize>) -> bool {
-        // a=4 has an R prefix but no complete triangle. Evaluating this Rust
-        // step on that prefix would move it before a written relational step.
-        assert_ne!(*a, 4, "guard evaluated before the complete written prefix");
+        // This predicate is total even for a=4, which has an R prefix but no
+        // complete triangle. Reject a=2 to exercise the guard's set semantics.
         visits.set(visits.get() + 1);
-        true
+        *a != 2
     }
 
     #[allow(non_snake_case)]
@@ -344,8 +346,8 @@ mod generic_canon {
 }
 
 #[test]
-fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
-    let r = [(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
+fn generic_prefix_canonicalization_preserves_total_guard_answers() {
+    let r = [(1, 2), (1, 3), (2, 3), (4, 5)];
     let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
     let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
     let visits = std::cell::Cell::new(0);
@@ -353,7 +355,7 @@ fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
     let mut expected = HashSet::new();
     for (a, b) in &r {
         for (sb, c) in &s {
-            if sb == b && t.iter().any(|(ta, tc)| ta == a && tc == c) {
+            if sb == b && t.iter().any(|(ta, tc)| ta == a && tc == c) && *a != 2 {
                 expected.insert((a, b, c));
             }
         }
@@ -362,7 +364,7 @@ fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
     assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
     assert!(
         visits.get() > 0,
-        "the surviving tuples reach the final guard"
+        "the total guard participates in evaluating the query"
     );
 }
 
@@ -428,17 +430,17 @@ fn generic_join_reads_multiple_host_keys_through_dispatch() {
 
 #[test]
 fn key_only_filtered_index_preserves_existential_answers_without_primary_keys() {
-    let l = [(1_i64,), (1,), (2,), (3,), (4,)];
-    let r = [(1_i64, 2_i64), (1, 3), (1, 3), (2, 0), (3, 2), (9, 5)];
+    let l = [(1_i64,), (2,), (3,), (4,)];
+    let r = [(1_i64, 2_i64), (1, 3), (2, 0), (3, 2), (9, 5)];
     let rows: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation l(a:i64); relation r(a:i64,b:i64);
-            left = pipe rename l@0 {a -> x};
-            right = pipe rename r@1 {a -> x,b -> y};
+            left = pipe rename l {a -> x};
+            right = pipe rename r {a -> x,b -> y};
             selected = let range select right if (y > 1);
             joined = pipe probe first [x] left,selected;
-            result = pipe canon project joined keep {x}; return result as answer(x);
+            result = let canon project joined keep {x}; return result as answer(x);
         }
     }
     .map(|(x,)| *x)
@@ -516,10 +518,12 @@ mod wcoj {
     }
 
     #[test]
-    fn candidate_choice_preserves_nonempty_answers_with_duplicate_rows() {
-        let r = [(V(1), V(2)), (V(1), V(2)), (V(1), V(3)), (V(4), V(5))];
+    fn candidate_choice_preserves_nonempty_answers_with_canonicalized_inputs() {
+        let mut r = vec![(V(1), V(2)), (V(1), V(2)), (V(1), V(3)), (V(4), V(5))];
         let s = [(V(2), V(6)), (V(2), V(7)), (V(3), V(6)), (V(5), V(8))];
-        let t = [(V(1), V(6)), (V(1), V(6)), (V(4), V(8)), (V(4), V(9))];
+        let mut t = vec![(V(1), V(6)), (V(1), V(6)), (V(4), V(8)), (V(4), V(9))];
+        cq_load::canonicalize(&mut r);
+        cq_load::canonicalize(&mut t);
         let expected = oracle(&r, &s, &t);
         assert!(!expected.is_empty());
         for run in [binary::run, first::run, smallest::run] {

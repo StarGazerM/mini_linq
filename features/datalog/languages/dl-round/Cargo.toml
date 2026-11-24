@@ -1,8 +1,8 @@
 [package]
 name = "cq-lang-datalog-round"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.85.1"
 license.workspace = true
 publish = false
 
@@ -12,6 +12,7 @@ cq-lang-datalog-storage.workspace = true
 cq-lang-cq.workspace = true
 cq-stage.workspace = true
 cq-syntax.workspace = true
+cq-evidence.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

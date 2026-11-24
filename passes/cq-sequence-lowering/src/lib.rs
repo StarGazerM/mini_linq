@@ -2,13 +2,13 @@
 //!
 //! An authored probe chain
 //! ```text
-//! l = pipe rename L@0 {a -> a};
-//! r = let rename R@1 {a -> a, b -> b};
+//! l = pipe rename L {a -> a};
+//! r = let rename R {a -> a, b -> b};
 //! j = pipe probe first [a] l,r;
 //! out = pipe canon project j keep {b};
 //! return out as answer(b);
 //! ```
-//! becomes (with the unchanged Structures prefix)
+//! becomes (with Physical and Structures supplied separately)
 //! ```text
 //! sequence {
 //!     l = rows l;
@@ -21,16 +21,18 @@
 //! ```
 //! Membership reads use `compact result lookup provider [keys] input`;
 //! the named Physical semi/anti operator supplies the predicate's polarity.
-//! A Probe with a recorded membership projection uses the same flat Compact
-//! shape. Only payload-enumerating lookups introduce an explicit Flatten.
+//! A Probe with a recorded raw complete-row key or membership projection uses
+//! the same flat Compact shape. Only payload-enumerating lookups introduce an
+//! explicit Flatten; Rust provider types do not determine the read protocol.
 
 use cq_lang_sequence::{Definition, OutputProtocol, Program, Sequence, Term};
 use cq_lang_structures::physical::{ModeKind, Operator, symbol_name};
 
-/// Lower every Physical result, retaining only stores already selected by its mode.
-pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
-    let analysis = cq_lang_structures::contract::check(source)?;
-    let physical = &source.physical.program;
+/// Lower separate Physical and Structures programs, retaining only stores selected by Physical modes.
+pub fn compile(physical: &cq_lang_structures::physical::Program, source: &cq_lang_structures::Program) -> syn::Result<Program> {
+    let analysis = cq_lang_structures::contract::check(physical, source)?;
+    let physical_program = physical;
+    let physical = &physical.program;
     let mut definitions = Vec::with_capacity(physical.definitions.len() + 1);
     // Formal rule L-Sequence: One part, Physical retention, explicit lookup expansion and final count store.
     for definition in &physical.definitions {
@@ -84,7 +86,7 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
         if definition.canon.is_some() {
             term = Term::Canon(Box::new(term));
         }
-        if ModeKind::from(&definition.mode) != ModeKind::Pipe {
+        if retained(&analysis, definition) {
             term = Term::Store {
                 capacity: None,
                 inner: Box::new(term),
@@ -111,32 +113,35 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
         },
     });
     let program = Program {
-        structures: source.clone(),
         sequence: Sequence {
             definitions,
+            roots: Default::default(),
             output: Some(OutputProtocol::Count),
         },
         graded: None,
         evidence: Default::default(),
+        representation: cq_lang_sequence::Representation {
+            blocks: cq_lang_sequence::blocks::Execution::record(physical_program, source),
+            ..Default::default()
+        },
     };
-    cq_lang_sequence::contract::check(&program)?;
+    cq_lang_sequence::contract::check(physical_program, source, &program)?;
     Ok(program)
 }
 
 /// Check the supplied lowering's coverage, operators, retention and output
 /// obligations directly. The compiler is not invoked; fresh output names are free.
-pub fn check(source: &cq_lang_structures::Program, target: &Program) -> syn::Result<()> {
-    let analysis = cq_lang_structures::contract::check(source)?;
-    cq_lang_sequence::contract::check(target)?;
+pub fn check(physical: &cq_lang_structures::physical::Program, source: &cq_lang_structures::Program, target: &Program) -> syn::Result<()> {
+    let analysis = cq_lang_structures::contract::check(physical, source)?;
+    cq_lang_sequence::contract::check(physical, source, target)?;
     let invalid = || {
         syn::Error::new_spanned(
             target,
             "L-Sequence: target violates default lowering obligations",
         )
     };
-    let physical = &source.physical.program;
-    if target.structures != *source
-        || target.graded.is_some()
+    let physical = &physical.program;
+    if target.graded.is_some()
         || target.evidence != Default::default()
         || target.sequence.output != Some(OutputProtocol::Count)
         || target.sequence.definitions.len() != physical.definitions.len() + 1
@@ -155,7 +160,7 @@ pub fn check(source: &cq_lang_structures::Program, target: &Program) -> syn::Res
         }
         let term = lowering_body(
             &lowered.term,
-            ModeKind::from(&definition.mode) != ModeKind::Pipe,
+            retained(&analysis, definition),
             definition.canon.is_some(),
         )
         .ok_or_else(invalid)?;
@@ -239,6 +244,17 @@ pub fn check(source: &cq_lang_structures::Program, target: &Program) -> syn::Res
         return Err(invalid());
     }
     Ok(())
+}
+
+/// Physical retention, except STR-RowsByValue: a canon `let` whose canonical
+/// rows record is bound by value is not storage. Like a canon pipe, its
+/// distinct-row build streams into its single reader.
+fn retained(
+    analysis: &cq_lang_structures::Analysis,
+    definition: &cq_lang_structures::physical::Definition,
+) -> bool {
+    ModeKind::from(&definition.mode) != ModeKind::Pipe
+        && !(definition.canon.is_some() && analysis.rows_by_value(&symbol_name(&definition.name)))
 }
 
 fn lowering_body(mut term: &Term, retained: bool, canonical: bool) -> Option<&Term> {

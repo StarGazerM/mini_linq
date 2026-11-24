@@ -1,0 +1,25 @@
+// tpch_q06.query0.vo.expected: expected default-route VO of TPC-H kernel tpch_q06 (query0_main), derived from
+// doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: no evidence recorded
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself at their first ready boundary; membership follows from the bound prefix.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query06 ; relation lineitem (orderkey : i64 [0] , linenumber : i64 [0] , quantity : Decimal [1] , price : Decimal [1] , discount : Decimal [1] , shipdate : Date [2]) ; rows (group , orderkey , linenumber , amount) : - lineitem (orderkey , linenumber , quantity , price , discount , shipdate) , where shipdate >= (first) , where shipdate < (after) , where discount in (discount_low) ..= (discount_high) , where quantity < (quantity_limit) , let amount : i128 = i128 :: from (price . scaled ()) * i128 :: from (discount . scaled ()) capture { let group : i32 = 0 ; } ;
+valuation {
+    // O-Restrict/H-Local: restriction of clause 1 on lineitem@0 heads the scope (H-Local order)
+    restrict lineitem @ 0 where shipdate >= @ (first) ;
+    // O-Restrict/H-Local: restriction of clause 2 on lineitem@0 heads the scope (H-Local order)
+    restrict lineitem @ 0 where shipdate < @ (after) ;
+    // O-Restrict/H-Local: restriction of clause 3 on lineitem@0 heads the scope (H-Local order)
+    restrict lineitem @ 0 where discount between @ (discount_low) and @ (discount_high) ;
+    // O-Restrict/H-Local: restriction of clause 4 on lineitem@0 heads the scope (H-Local order)
+    restrict lineitem @ 0 where quantity < @ (quantity_limit) ;
+    // S-Connected: no connected ready atom (I3 vacuous)
+    lineitem @ 0 (orderkey , linenumber , quantity , price , discount , shipdate) ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let amount : i128 = i128 :: from (price . scaled ()) * i128 :: from (discount . scaled ()) ;
+}

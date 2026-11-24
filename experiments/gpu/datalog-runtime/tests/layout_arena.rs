@@ -1,26 +1,109 @@
-use gpu_datalog_runtime::{concatenate_batches, Buffer, CandidateArena, Column, DeviceLayout, DeviceRuns, Packing, Pool, Result, Run, Word};
+use gpu_datalog_runtime::{
+    concatenate_batches, Buffer, CandidateArena, Column, DeviceRadixRun, Packing, Pool,
+    RadixLayout, RadixRunParams, Result, ScalarTuple, SortedBatch, Word,
+};
 use std::{any::Any, sync::Arc};
+
+const PARAMS: RadixRunParams = RadixRunParams {
+    ratio: 4,
+    radix_bits: 0,
+    merge_tile_rows: 32,
+    block_threads: 256,
+};
+
+#[cfg(feature = "packed-radix")]
+#[test]
+fn packed_publications_survive_merge_permutation_and_delta_replacement() -> Result<()> {
+    type Layout = RadixLayout<(u32, u32), (), u64, u64, ()>;
+    let packed = std::env::var_os("GPU_DATALOG_PACKED_RUN").as_deref() != Some(std::ffi::OsStr::new("0"));
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Layout::derive_packing()?;
+    let mut state = DeviceRadixRun::new_set(pool.clone(), PARAMS, 64)?;
+    let empty = Layout::publish(&state, packing)?;
+    let values: Vec<u64> = (0..36_000u64).map(|i| ((1_000 + i) << 32) | (40_000 - i)).collect();
+    let input = Buffer::from_host(pool.clone(), &values)?;
+    let first = unsafe { SortedBatch::from_sorted(input, values.len())? };
+    unsafe { state.append_sorted(first.clone())?; }
+    let retained = empty.republish(&state)?;
+    assert_eq!(retained.allocated_bytes() < values.len() * size_of::<u64>(), packed);
+    let more: Vec<u64> = (36_000..49_000u64).map(|i| ((1_000 + i) << 32) | 1).collect();
+    let more = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &more)?, more.len())? };
+    unsafe { state.append_sorted(more)?; }
+    let successor = retained.republish(&state)?;
+    drop(state);
+    assert_eq!(successor.len(), 49_000);
+    assert_eq!(retained.to_host()?, values);
+    let permuted = retained.permuted_provider::<(u32, u32)>(&pool, &[1, 0], PARAMS, 256, 64)?;
+    let mut expected: Vec<_> = values.iter().map(|v| v.rotate_right(32)).collect();
+    expected.sort_unstable();
+    assert_eq!(permuted.to_host()?, expected);
+    let adopted = Layout::from_sorted(pool, Layout::derive_packing()?, PARAMS, first.clone(), 64)?;
+    assert_eq!(adopted.to_host()?, values);
+    assert_eq!(adopted.allocated_bytes() < values.len() * size_of::<u64>(), packed);
+    let delta = empty.with_sorted(first.clone(), PARAMS)?;
+    assert_eq!(delta.to_host()?, values);
+    // The replacement shares the immutable batch, even in a packed layout.
+    assert_eq!(delta.with_sorted(first, PARAMS)?.snapshot_id(), delta.snapshot_id());
+    Ok(())
+}
+
+#[cfg(feature = "packed-radix")]
+#[test]
+fn fixed_leaf_cursor_reads_large_payload_offsets() -> Result<()> {
+    type Layout = RadixLayout<(u32, u32), (), u64, u64, ()>;
+    let pool = Pool::new(0, 0, 0)?;
+    // Each full leaf needs eight high-column bits and 32 low-column bits:
+    // 160 payload words. The probes straddle the 16-bit word-offset limit.
+    let words: Vec<_> = (0..106_000u32).map(|i| {
+        (u64::from(i) << 32) | u64::from(i.wrapping_mul(0x9e37_79b9))
+    }).collect();
+    let probes = [0, 255, 256, 409 * 256, 410 * 256 - 1, 410 * 256, 105_999];
+    let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
+    let layout = Layout::from_sorted(pool.clone(), Layout::derive_packing()?, PARAMS, batch, 64)?;
+    assert_eq!(layout.view().keys.run_count, 1);
+    let positions = Buffer::from_host(pool.clone(), &probes)?;
+    let answers = Buffer::<[i64; 4]>::zeroed(pool.clone(), probes.len())?;
+    let module = unsafe { decode_kernel::load(pool.context())? };
+    module.read_slots(pool.stream(), &module.prepare_read_slots(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+        layout.view(), positions.ptr(), probes.len() as u32, answers.ptr())?;
+    for (slot, answer) in probes.into_iter().zip(answers.to_host()?) {
+        let word = words[slot as usize];
+        let (a, b) = ((word >> 32) as i64, word as u32 as i64);
+        assert_eq!(answer, [a, b, a, b]);
+    }
+    Ok(())
+}
 
 #[test]
 fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
-    type Layout = DeviceLayout<(i32,), (u32,)>;
+    type Layout = RadixLayout<(i32, u32), (), u64, u64, ()>;
     let packing = Layout::derive_packing()?;
-    let words = [packing.pack::<u64>(&[-3, 7])?, packing.pack::<u64>(&[9, 2])?];
+    let words = [
+        packing.pack::<u64>(&[-3, 7])?,
+        packing.pack::<u64>(&[9, 2])?,
+    ];
     // SAFETY: uploads initialize sorted unique prefixes and no writer is kept.
-    let empty = unsafe { Run::from_sorted(Buffer::<u64>::from_host_async(pool.clone(), &[])?, 0)? };
-    let run = unsafe { Run::from_sorted(Buffer::from_host_async(pool.clone(), &words)?, 2)? };
-    let layout = Layout::from_runs(pool.clone(), packing.clone(), vec![empty.clone(), run.clone(), empty])?;
+    let empty = unsafe { SortedBatch::from_sorted(Buffer::<u64>::from_host_async(pool.clone(), &[])?, 0)? };
+    let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host_async(pool.clone(), &words)?, 2)? };
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, packing.bits())?;
+    unsafe {
+        state.append_sorted(empty.clone())?;
+        state.append_sorted(batch.clone())?;
+        state.append_sorted(empty)?;
+    }
+    let layout = Layout::publish(&state, packing.clone())?;
     assert_eq!(layout.len(), 2);
-    assert_eq!(layout.view().run_count, 3);
+    assert_eq!(layout.view().keys.run_count, 1);
     assert_eq!(layout.view().field_count, 2);
-    assert_eq!(layout.view().word_bits, 64);
+    assert_eq!(layout.view().bits, 64);
     assert!(Arc::ptr_eq(layout.pool(), &pool));
     layout.validate(&[Column::I32, Column::U32])?;
     assert!(layout.validate(&[Column::U32, Column::I32]).is_err());
-    assert!(Layout::from_runs(pool.clone(), Packing::new(&[32, 32])?, vec![run.clone()]).is_err());
+    assert!(Layout::from_sorted(pool.clone(), Packing::new(&[32, 32])?, PARAMS, batch.clone(), 64).is_err());
     let other = Pool::new(0, 0, 0)?;
-    assert!(Layout::from_runs(other, packing, vec![run]).is_err());
+    assert!(Layout::from_sorted(other, packing, PARAMS, batch, 64).is_err());
+    drop(state);
     let retained = layout.owner();
     let weak = Arc::downgrade(&retained);
     let clone = layout.clone();
@@ -33,19 +116,94 @@ fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
 }
 
 #[test]
+fn republished_layouts_share_fields_and_reuse_unchanged_runs() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    type Layout = RadixLayout<(i32, u32), (), u64, u64, ()>;
+    let packing = Layout::derive_packing()?;
+    let words = [
+        packing.pack::<u64>(&[-3, 7])?,
+        packing.pack::<u64>(&[9, 2])?,
+    ];
+    // SAFETY: uploads initialize sorted unique prefixes and no writer is kept.
+    let empty = || unsafe {
+        SortedBatch::from_sorted(
+            Buffer::<u64>::from_host_async(pool.clone(), &[]).unwrap(),
+            0,
+        )
+    };
+    let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host_async(pool.clone(), &words)?, 2)? };
+    // Ratio two retains the 2-row run when the 1-row run is published.
+    let params = RadixRunParams { ratio: 2, ..PARAMS };
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), params, packing.bits())?;
+    unsafe { state.append_sorted(batch)?; }
+    let layout = Layout::publish(&state, packing.clone())?;
+    // The unchanged state republishes the same retained descriptors.
+    let same = layout.republish(&state)?;
+    assert_eq!(same.view().keys.runs, layout.view().keys.runs);
+    assert_eq!(same.view().fields, layout.view().fields);
+    let next_words = [packing.pack::<u64>(&[12, 8])?];
+    let next_batch = unsafe {
+        SortedBatch::from_sorted(Buffer::from_host_async(pool.clone(), &next_words)?, 1)?
+    };
+    unsafe { state.append_sorted(next_batch)?; }
+    let grown = layout.republish(&state)?;
+    assert_ne!(grown.view().keys.runs, layout.view().keys.runs);
+    assert_eq!(grown.view().fields, layout.view().fields);
+    assert_eq!((grown.len(), grown.view().keys.run_count), (3, 2));
+    assert_eq!(layout.to_rows()?, vec![vec![-3, 7], vec![9, 2]]);
+    // Empty publications do not create runs or invalidate the cached snapshot.
+    unsafe { state.append_sorted(empty()?)?; }
+    let next = grown.republish(&state)?;
+    assert_eq!(next.view().keys.runs, grown.view().keys.runs);
+    let empty_state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, packing.bits())?;
+    let empty_delta = Layout::publish(&empty_state, packing.clone())?;
+    let next_empty = empty_delta.republish(&empty_state)?;
+    assert_eq!(next_empty.view().keys.runs, empty_delta.view().keys.runs);
+    assert_eq!(next_empty.len(), 0);
+    assert!(Layout::publish(&state, Packing::new(&[32, 32])?).is_err());
+    let other_state = DeviceRadixRun::<u64, u64, ()>::new_set(Pool::new(0, 0, 0)?, PARAMS, packing.bits())?;
+    assert!(layout.republish(&other_state).is_err());
+    assert_eq!(grown.to_rows()?, vec![vec![-3, 7], vec![9, 2], vec![12, 8]]);
+    Ok(())
+}
+
+#[test]
+fn resident_words_are_zeroed_once_and_grow() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    let mut arena = CandidateArena::new(pool);
+    let first = arena.resident_words(12)?;
+    assert!(first.len() >= 12);
+    assert!(first.to_host()?.iter().all(|&word| word == 0));
+    assert_eq!(arena.resident_words(first.len())?.ptr(), first.ptr());
+    let grown = arena.resident_words(first.len() + 1)?;
+    assert!(grown.len() > first.len());
+    assert!(grown.to_host()?.iter().all(|&word| word == 0));
+    Ok(())
+}
+
+#[test]
 fn candidate_batches_retain_inputs_and_prevent_arena_reuse() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
-    let packing = Packing::with_columns(&[Column::U64, Column::I64])?;
+    let packing = Packing::with_columns(&[Column::U32, Column::U32, Column::I32, Column::U32])?;
     let mut arena = CandidateArena::new(pool);
     let lease = arena.reserve(packing.clone(), 3)?;
     let first_ptr = lease.buffer().ptr();
-    let values = [packing.pack::<u128>(&[4, -9])?, packing.pack::<u128>(&[u64::MAX as i128, 7])?];
-    let lanes = [values[0] as u64, (values[0] >> 64) as u64,
-        values[1] as u64, (values[1] >> 64) as u64];
+    let values = [
+        packing.pack::<u128>(&[4, 0, -9, 0])?,
+        packing.pack::<u128>(&[u32::MAX as i128, u32::MAX as i128, 7, 0])?,
+    ];
+    let lanes = [
+        values[0] as u64,
+        (values[0] >> 64) as u64,
+        values[1] as u64,
+        (values[1] >> 64) as u64,
+    ];
     // SAFETY: the unpublished lease is the sole writer; upload and consumers
     // use its pool stream. Finish publishes exactly the two initialized words.
-    unsafe { lease.buffer().write_async(&lanes)?; }
-    let input: Arc<dyn Any> = Arc::new(17_u32);
+    unsafe {
+        lease.buffer().write_async(&lanes)?;
+    }
+    let input: Arc<dyn Any + Send + Sync> = Arc::new(17_u32);
     let weak_input = Arc::downgrade(&input);
     let batch = unsafe { lease.finish(2, vec![input])? };
     assert_eq!(batch.len(), 2);
@@ -84,14 +242,16 @@ fn candidate_finish_rejects_uninitialized_capacity_suffix() -> Result<()> {
     Ok(())
 }
 
-fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
+fn concatenate_case<K: ScalarTuple, W: Word + 'static>(packing: Packing) -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
     let mut arena = CandidateArena::new(pool.clone());
     let high = if W::BITS >= 128 { 1u128 << 100 } else { 0 };
     let groups: &[&[u128]] = &[&[high | 1, high | 7], &[], &[high | 7, high | 19]];
     let make_word = |value| {
         let mut word = W::from_u128(value);
-        if W::BITS > 128 { word.set_lane(W::BITS / 64 - 1, 0xa5c7_1329_ef03_6481); }
+        if W::BITS > 128 {
+            word.set_lane(W::BITS / 64 - 1, 0xa5c7_1329_ef03_6481);
+        }
         word
     };
     let mut batches = Vec::new();
@@ -101,7 +261,11 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
         for &word in *group {
             let word = make_word(word);
             for physical in 0..W::BITS / 64 {
-                let lane = if W::MS_FIRST { W::BITS / 64 - 1 - physical } else { physical };
+                let lane = if W::MS_FIRST {
+                    W::BITS / 64 - 1 - physical
+                } else {
+                    physical
+                };
                 lanes.push(word.lane(lane));
             }
         }
@@ -113,9 +277,14 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
         }
     }
     let output = concatenate_batches::<W>(pool.clone(), &packing, &batches)?;
-    assert_eq!(output.to_host()?,
-        [high | 1, high | 7, high | 7, high | 19].map(make_word));
-    assert_eq!(concatenate_batches::<W>(pool.clone(), &packing, &[])?.len(), 0);
+    assert_eq!(
+        output.to_host()?,
+        [high | 1, high | 7, high | 7, high | 19].map(make_word)
+    );
+    assert_eq!(
+        concatenate_batches::<W>(pool.clone(), &packing, &[])?.len(),
+        0
+    );
     let other = Pool::new(0, 0, 0)?;
     assert!(concatenate_batches::<W>(other, &packing, &batches).is_err());
     let different = Packing::new(&[8])?;
@@ -125,76 +294,307 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
     } else {
         assert!(concatenate_batches::<u64>(pool.clone(), &packing, &batches).is_err());
     }
-    let mut accepted = DeviceRuns::<W>::new(pool)?;
-    accepted.admit(&output, output.len())?;
-    let snapshot = accepted.owned_runs();
+    let mut accepted = DeviceRadixRun::<W, u64, ()>::new_set(pool, PARAMS, packing.bits())?;
+    let fresh = unsafe { accepted.fresh(&output, output.len()) }?;
+    // SAFETY: fresh is sorted, unique and absent from the empty accepted state.
+    unsafe { accepted.append_sorted(fresh)? };
+    let snapshot = RadixLayout::<K, (), W, u64, ()>::publish(&accepted, packing)?;
     drop(accepted);
-    let words = snapshot.iter().map(|run| run.buffer().to_host())
-        .collect::<Result<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
+    let words = snapshot.to_host()?;
     assert_eq!(words, [high | 1, high | 7, high | 19].map(make_word));
     Ok(())
 }
 
 #[test]
 fn concatenate_u64_candidates_and_retain_accepted_snapshot() -> Result<()> {
-    concatenate_case::<u64>(Packing::new(&[32, 32])?)
+    concatenate_case::<(u32, u32), u64>(Packing::new(&[32, 32])?)
 }
 
 #[test]
 fn concatenate_u128_candidates_and_retain_accepted_snapshot() -> Result<()> {
-    concatenate_case::<u128>(Packing::new(&[64, 64])?)
+    concatenate_case::<(u32, u32, u32, u32), u128>(Packing::new(&[32; 4])?)
 }
 
 #[test]
 fn concatenate_wide_candidates_and_retain_accepted_snapshot() -> Result<()> {
-    concatenate_case::<[u64; 3]>(Packing::new(&[64; 3])?)?;
-    concatenate_case::<[u64; 4]>(Packing::new(&[64; 4])?)
+    concatenate_case::<(u32, u32, u32, u32, u32, u32), [u64; 3]>(Packing::new(&[32; 6])?)?;
+    concatenate_case::<(u32, u32, u32, u32, u32, u32, u32, u32), [u64; 4]>(Packing::new(&[32; 8])?)
 }
 
 #[cuda_host::cuda_module]
 mod decode_kernel {
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-    use gpu_datalog_runtime::{device, RunsView};
+    use gpu_datalog_runtime::{radix_run::device, RadixLayoutView, Word};
+
+    // DECODE P: diagnostic field inversion and encoded-prefix lookup oracle.
+    #[cuda_device::device]
+    unsafe fn decode<W: Word>(
+        view: RadixLayoutView<W, u64>,
+        rows: u32,
+        output: *mut i64,
+        ranges: *mut u64,
+    ) {
+        let row = thread::index_1d().get() as u32;
+        if row >= rows {
+            return;
+        }
+        unsafe {
+            let (run, position) = device::locate_key(view.keys, row as u64);
+            for column in 0..view.field_count {
+                let value = device::decode_key(view, run, position, column);
+                *output.add((row * view.field_count + column) as usize) = value;
+            }
+            // DECODE I: diagnostic prefix probe decodes then re-encodes a key field; direct encoded bounds would avoid this reorganization.
+            let prefix = [device::decode_key(view, run, position, 0)];
+            let (low, high, valid) = device::encode_prefix(view, prefix.as_ptr(), 1);
+            let (begin, end) = if valid {
+                device::interval(device::run(view.keys, run), low, high)
+            } else {
+                (0, 0)
+            };
+            *ranges.add(row as usize * 2) = begin;
+            *ranges.add(row as usize * 2 + 1) = end;
+        }
+    }
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn decode_datalog_test_layout(view: RunsView, rows: u32, output: *mut i64, ranges: *mut u32) {
-        let row = thread::index_1d().get() as u32;
-        if row >= rows { return; }
-        unsafe {
-            let (run, position) = device::locate(view, row);
-            for column in 0..view.field_count {
-                let value = device::decode(view, run, position, column);
-                *output.add((row * view.field_count + column) as usize) = value;
+    pub fn decode_datalog_test_layout(
+        view: RadixLayoutView<u64, u64>, rows: u32, output: *mut i64, ranges: *mut u64,
+    ) {
+        unsafe { decode(view, rows, output, ranges); }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn decode_datalog_test_wide_layout(
+        view: RadixLayoutView<[u64; 4], u64>, rows: u32, output: *mut i64, ranges: *mut u64,
+    ) {
+        unsafe { decode(view, rows, output, ranges); }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn read_slots(view: RadixLayoutView<u64, u64>, positions: *const u64, count: u32, out: *mut [i64; 4]) {
+        let i = thread::index_1d().get();
+        if i < count as usize {
+            unsafe {
+                let slot = *positions.add(i);
+                let (run, cursor) = device::locate_key(view.keys, slot);
+                *out.add(i) = [device::decode_key(view, run, cursor, 0), device::decode_key(view, run, cursor, 1),
+                    device::decode_key(view, run, slot, 0), device::decode_key(view, run, slot, 1)];
             }
-            let prefix = [device::decode(view, run, position, 0)];
-            let (begin, end) = device::prefix_range(view, run, prefix.as_ptr(), 1);
-            *ranges.add(row as usize * 2) = begin;
-            *ranges.add(row as usize * 2 + 1) = end;
         }
     }
 }
 
 #[test]
+fn runtime_widths_decode_and_encode_signed_prefixes_on_device() -> Result<()> {
+    type Layout = RadixLayout<(i32, u32), (), u64, u64, ()>;
+    let pool = Pool::new(0, 0, 0)?;
+    let module = unsafe { decode_kernel::load(pool.context())? };
+    for bits in [1, 7, 19, 31, 32] {
+        let packing = Layout::derive_packing_with_fields(&[(bits, true), (bits, false)])?;
+        let minimum = -(1_i128 << (bits - 1));
+        let maximum = (1_i128 << (bits - 1)) - 1;
+        let unsigned_maximum = (1_i128 << bits) - 1;
+        let rows = [
+            [minimum, 0],
+            [minimum, unsigned_maximum],
+            [maximum, 0],
+            [maximum, unsigned_maximum],
+        ];
+        let words = rows.iter().map(|row| packing.pack::<u64>(row))
+            .collect::<Result<Vec<_>>>()?;
+        // SAFETY: signed bias makes these four initialized words sorted and unique.
+        let batch = unsafe {
+            SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, rows.len())?
+        };
+        let layout = Layout::from_sorted(pool.clone(), packing, PARAMS, batch, bits * 2)?;
+        let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 2)?;
+        let ranges = Buffer::<u64>::zeroed(pool.clone(), rows.len() * 2)?;
+        // DECODE P: diagnostic reconstruction and re-encoding check runtime field widths.
+        module.decode_datalog_test_layout(
+            pool.stream(),
+            &module.prepare_decode_datalog_test_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+            layout.view(),
+            rows.len() as u32,
+            output.ptr(),
+            ranges.ptr(),
+        )?;
+        assert_eq!(
+            output.to_host()?,
+            rows.into_iter().flatten().map(|value| value as i64).collect::<Vec<_>>(),
+        );
+        assert_eq!(ranges.to_host()?, vec![0, 2, 0, 2, 2, 4, 2, 4]);
+    }
+    Ok(())
+}
+
+#[test]
 fn wide_layout_erased_device_decode_and_lookup() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
-    type Layout = DeviceLayout<(u8,), (i64, u64, u64)>;
+    type Layout = RadixLayout<(u8, i32, u32, u32, u32, u32, u32), (), [u64; 4], u64, ()>;
     let packing = Layout::derive_packing()?;
-    let rows = [[0, i64::MIN as i128, u64::MAX as i128, 7],
-        [0, -1, 0, u64::MAX as i128], [255, i64::MAX as i128, 9, 0]];
-    let words = rows.iter().map(|row| packing.pack::<[u64; 4]>(row)).collect::<Result<Vec<_>>>()?;
+    let rows = [
+        [0, i32::MIN as i128, u32::MAX as i128, 0, 7, 1, 2],
+        [0, -1, 0, u32::MAX as i128, 8, 3, 4],
+        [255, i32::MAX as i128, 9, 0, 9, 5, 6],
+    ];
+    let words = rows
+        .iter()
+        .map(|row| packing.pack::<[u64; 4]>(row))
+        .collect::<Result<Vec<_>>>()?;
     // SAFETY: these uploads are sorted and unique and no writers are retained.
-    let run = unsafe { Run::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
-    let layout = Layout::from_runs(pool.clone(), packing, vec![run])?;
-    assert_eq!(layout.view().word_bits, 256);
-    let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 4)?;
-    let ranges = Buffer::<u32>::zeroed(pool.clone(), rows.len() * 2)?;
+    let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
+    let layout = Layout::from_sorted(pool.clone(), packing, PARAMS, batch, 200)?;
+    assert_eq!(layout.view().bits, 200);
+    let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 7)?;
+    let ranges = Buffer::<u64>::zeroed(pool.clone(), rows.len() * 2)?;
     let module = unsafe { decode_kernel::load(pool.context())? };
-    module.decode_datalog_test_layout(pool.stream(),
-        &module.prepare_decode_datalog_test_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
-        layout.view(), rows.len() as u32, output.ptr(), ranges.ptr())?;
-    assert_eq!(output.to_host()?, rows.into_iter().flatten().map(|value| value as i64).collect::<Vec<_>>());
+    // DECODE P: diagnostic wide-layout launch reconstructs values for host exactness checking.
+    module.decode_datalog_test_wide_layout(
+        pool.stream(),
+        &module.prepare_decode_datalog_test_wide_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+        layout.view(),
+        rows.len() as u32,
+        output.ptr(),
+        ranges.ptr(),
+    )?;
+    assert_eq!(
+        output.to_host()?,
+        rows.into_iter()
+            .flatten()
+            .map(|value| value as i64)
+            .collect::<Vec<_>>()
+    );
     assert_eq!(ranges.to_host()?, vec![0, 2, 0, 2, 2, 3]);
+    Ok(())
+}
+
+#[test]
+fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    type Layout = RadixLayout<(i32, u32), (), u64, u64, ()>;
+    let params = RadixRunParams { ratio: 2, ..PARAMS };
+    let packing = Layout::derive_packing()?;
+    let rows = [[-3, 7], [9, 2], [10, 7]];
+    let words = rows
+        .iter()
+        .map(|row| packing.pack::<u64>(row))
+        .collect::<Result<Vec<_>>>()?;
+    // SAFETY: each initialized batch is sorted, unique and disjoint.
+    let first = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words[..2])?, 2)? };
+    let second = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words[2..])?, 1)? };
+    let empty = unsafe { SortedBatch::from_sorted(Buffer::<u64>::from_host(pool.clone(), &[])?, 0)? };
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), params, packing.bits())?;
+    unsafe {
+        state.append_sorted(first)?;
+        state.append_sorted(empty)?;
+        state.append_sorted(second)?;
+    }
+    let layout = Layout::publish(&state, packing)?;
+    assert_eq!(layout.view().keys.run_count, 2);
+    let before = layout.to_rows()?;
+    assert_eq!(before, vec![vec![-3, 7], vec![9, 2], vec![10, 7]]);
+    let provider = layout.permuted_provider::<(u32, i32)>(&pool, &[1, 0], params, 256, 64)?;
+    assert!(layout
+        .permuted_provider::<(u32, i32)>(&pool, &[1, 0], params, 128, 64)
+        .is_err());
+    assert!(layout
+        .permuted_provider::<(i32, u32)>(&pool, &[1, 0], params, 256, 64)
+        .is_err());
+    // DECODE P: diagnostic retained layout unpack exposes the unchanged post-permutation answer.
+    assert_eq!(
+        layout.to_rows()?,
+        before,
+        "permutation leaves source storage unchanged"
+    );
+    assert!(layout
+        .permuted_provider::<(u32, i32)>(&pool, &[0, 0], params, 256, 64)
+        .is_err());
+    assert!(layout
+        .permuted_provider::<(u32, i32)>(&Pool::new(0, 0, 0)?, &[1, 0], params, 256, 64)
+        .is_err());
+    assert_eq!(provider.view().keys.run_count, 2);
+    let output = Buffer::<i64>::zeroed(pool.clone(), 6)?;
+    let ranges = Buffer::<u64>::zeroed(pool.clone(), 6)?;
+    let view = provider.view();
+    let owner = provider.owner();
+    drop(provider);
+    drop(layout);
+    drop(state);
+    let module = unsafe { decode_kernel::load(pool.context())? };
+    // DECODE P: diagnostic permuted-layout launch reconstructs values for host equality checking.
+    module.decode_datalog_test_layout(
+        pool.stream(),
+        &module.prepare_decode_datalog_test_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+        view,
+        3,
+        output.ptr(),
+        ranges.ptr(),
+    )?;
+    assert_eq!(
+        output.to_host()?,
+        vec![2, 9, 7, -3, 7, 10]
+    );
+    // Prefix intervals are local to each retained run, not one flat allocation.
+    assert_eq!(ranges.to_host()?, vec![0, 1, 1, 2, 0, 1]);
+    drop(owner);
+    Ok(())
+}
+
+#[test]
+fn typed_set_layouts_preserve_recorded_narrow_and_full_word_windows() -> Result<()> {
+    type Layout = RadixLayout<(u32, u32, u32), (), [u64; 3], u64, ()>;
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Layout::derive_packing()?;
+    assert_eq!(packing.bits(), 96);
+    let rows = [[1, u32::MAX as i128, u32::MAX as i128], [2, 0, 0], [u32::MAX as i128, 0, 1]];
+    let words = rows.iter().map(|row| packing.pack::<[u64; 3]>(row))
+        .collect::<Result<Vec<_>>>()?;
+    let batch = unsafe {
+        SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())?
+    };
+    for active_bits in [96, 192] {
+        let empty = Layout::empty(pool.clone(), packing.clone(), PARAMS, active_bits)?;
+        assert_eq!(empty.snapshot().active_bits(), active_bits);
+        let layout = Layout::from_sorted(pool.clone(), packing.clone(), PARAMS, batch.clone(), active_bits)?;
+        assert_eq!(layout.snapshot().active_bits(), active_bits);
+        let successor = empty.with_sorted(batch.clone(), PARAMS)?;
+        assert_eq!(successor.snapshot().active_bits(), active_bits);
+        assert_eq!(successor.to_host()?, words);
+        let unchanged = successor.with_sorted(batch.clone(), PARAMS)?;
+        assert_eq!(unchanged.snapshot_id(), successor.snapshot_id());
+        assert_eq!(unchanged.snapshot().active_bits(), active_bits);
+        gpu_datalog_runtime::reset_work_counters();
+        let before = gpu_datalog_runtime::readback_count();
+        let permuted = layout.permuted_provider::<(u32, u32, u32)>(&pool, &[1, 2, 0], PARAMS, 256, active_bits)?;
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        #[cfg(feature = "radix-counters")]
+        {
+            let work = gpu_datalog_runtime::work_counters();
+            assert_eq!(work.layout.sorts, 1);
+            assert_eq!(work.layout.radix_bits, active_bits as u64);
+            assert_eq!(work.layout.passes, active_bits.div_ceil(8) as u64);
+            assert_eq!(work.offset_materializations, 0);
+        }
+        assert_eq!(permuted.snapshot().active_bits(), active_bits);
+        assert_eq!(permuted.to_rows()?, vec![
+            vec![0, 0, 2], vec![0, 1, u32::MAX as i128], vec![u32::MAX as i128, u32::MAX as i128, 1],
+        ]);
+        // A materialization's recorded choice is independent of its source.
+        let alternate_bits = if active_bits == 96 { 192 } else { 96 };
+        let alternate = layout.permuted_provider::<(u32, u32, u32)>(&pool, &[1, 2, 0], PARAMS, 256, alternate_bits)?;
+        assert_eq!(alternate.snapshot().active_bits(), alternate_bits);
+        assert_eq!(alternate.to_host()?, permuted.to_host()?);
+        assert_eq!(layout.to_host()?, words);
+        assert_eq!(successor.to_rows()?, rows.map(Vec::from));
+    }
+    assert!(Layout::empty(pool.clone(), packing.clone(), PARAMS, 95).is_err());
+    assert!(Layout::from_sorted(pool, packing, PARAMS, batch, 193).is_err());
     Ok(())
 }

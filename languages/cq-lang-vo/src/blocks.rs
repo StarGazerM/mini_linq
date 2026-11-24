@@ -7,6 +7,39 @@ use cq_lang_cq::blocks::Kind;
 use quote::{ToTokens, quote};
 use syn::{Token, token};
 
+mod kw {
+    syn::custom_keyword!(hoisted);
+    syn::custom_keyword!(correlated);
+}
+
+/// Whether arms form an independent relation or consume the current prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    Hoisted,
+    Correlated,
+}
+
+impl syn::parse::Parse for Placement {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::hoisted) {
+            input.parse::<kw::hoisted>()?;
+            Ok(Self::Hoisted)
+        } else {
+            input.parse::<kw::correlated>()?;
+            Ok(Self::Correlated)
+        }
+    }
+}
+
+impl ToTokens for Placement {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.extend(match self {
+            Self::Hoisted => quote!(hoisted),
+            Self::Correlated => quote!(correlated),
+        });
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Branch {
     pub brace: token::Brace,
@@ -15,12 +48,14 @@ pub struct Branch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     pub source: Subatom,
+    pub placement: Placement,
     pub kind: Kind,
     pub branches: Vec<Branch>,
 }
 impl syn::parse::Parse for Block {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let source = input.parse()?;
+        let placement = input.parse()?;
         let mut branches = Vec::new();
         let mut kind = None;
         loop {
@@ -46,6 +81,7 @@ impl syn::parse::Parse for Block {
         }
         Ok(Self {
             source,
+            placement,
             kind: kind.ok_or_else(|| input.error("a valuation block requires two branches"))?,
             branches,
         })
@@ -54,6 +90,7 @@ impl syn::parse::Parse for Block {
 impl ToTokens for Block {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         self.source.to_tokens(tokens);
+        self.placement.to_tokens(tokens);
         for (j, branch) in self.branches.iter().enumerate() {
             if j != 0 {
                 tokens.extend(match self.kind {

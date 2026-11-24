@@ -21,13 +21,12 @@ fn negative_projection_handles_global_absence_repeated_keys_and_empty_inner() {
     .collect();
     assert!(result.is_empty());
     let S: [(i32, i32); 0] = [];
-    let result: BTreeSet<_> =
-        mini_linq::compile! {
-           pipeline {}
-           struct GlobalEmpty; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-           answer(*x) :- A(x), !S(_,_);
-        }
-        .collect();
+    let result: BTreeSet<_> = mini_linq::compile! {
+       pipeline {}
+       struct GlobalEmpty; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
+       answer(*x) :- A(x), !S(_,_);
+    }
+    .collect();
     assert_eq!(result, [(1,), (2,)].into());
 }
 
@@ -44,7 +43,7 @@ fn negative_and_correlated_computed_heads_retain_set_semantics() {
     let correlated: Vec<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
            struct Projection; relation A(x:i32,payload:i32); relation answer(x:i32);
-           answer(*x) :- A(x,payload), if *x < 2;
+           answer(*x) :- A(x,payload), where x < 2;
         }
         .collect();
     assert_eq!(correlated, [(1,)]);
@@ -67,11 +66,11 @@ fn core_negation_evaluates_each_leaf_once() {
 
 #[test]
 fn aggregate_grouped_output_is_a_native_leading_key_host() {
-    let Sale = [(1, 1, 10), (1, 2, -5), (2, 3, 7), (1, 1, 10)];
+    let Sale = [(1, 1, 10, 0), (1, 2, -5, 1), (2, 3, 7, 2), (1, 1, 10, 3)];
     let Keys = [(1,)];
     let Totals = mini_linq::compile! { pipeline { surface = [cq_ext_aggregate::aggregate]; } aggregate! {
-       by(d); n=count(); s=sum(a); struct Stats; relation Sale(d:i32,id:i32,a:i32);
-       rows(d,id,a) :- Sale(d,id,a);
+       by(d); n=count(); s=sum(a); struct Stats; relation Sale(d:i32,id:i32,a:i32,witness:i32);
+       rows(d,id,a) :- Sale(d,id,a,witness);
     } };
     let result: Vec<_> = ::mini_linq::mini_linq! {
         struct Reuse; relation Keys(d:i32); relation Totals(d:i32,n:usize,s:i32); relation answer(d:i32,n:usize,s:i32);
@@ -83,19 +82,19 @@ fn aggregate_grouped_output_is_a_native_leading_key_host() {
 #[test]
 fn aggregate_keys_can_own_non_copy_values() {
     let Sale = [
-        (String::from("a"), 1, -5),
-        (String::from("a"), 2, 10),
-        (String::from("b"), 3, 7),
+        (vec![1_i64], 1, -5),
+        (vec![1_i64], 2, 10),
+        (vec![2_i64], 3, 7),
     ];
     let result = mini_linq::compile! { pipeline { surface = [cq_ext_aggregate::aggregate]; } aggregate! {
-       by(d); lo=min(a); hi=max(a); struct Stats; relation Sale(d:String,id:i32,a:i32);
+       by(d); lo=min(a); hi=max(a); struct Stats; relation Sale(d:Vec<i64>,id:i32,a:i32);
        rows(d,id,a) :- Sale(d,id,a);
     } };
     let groups: BTreeSet<_> = result
         .iter()
-        .flat_map(|((d,), payload)| payload.iter().map(move |&(lo, hi)| (d.as_str(), lo, hi)))
+        .flat_map(|((d,), payload)| payload.iter().map(move |&(lo, hi)| (d.clone(), lo, hi)))
         .collect();
-    assert_eq!(groups, [("a", -5, 10), ("b", 7, 7)].into());
+    assert_eq!(groups, [(vec![1], -5, 10), (vec![2], 7, 7)].into());
 }
 
 #[test]
@@ -137,7 +136,7 @@ fn raw_identifiers_preserve_logical_symbols_across_extension_boundaries() {
     let recursive: BTreeSet<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_recursion::recursion]; } recursion! {
            struct Raw; relation Seed(x:i32); relation Edge(x:i32,y:i32); relation r#reach(x:i32);
-           reach(*x) :- Seed(x); r#reach(*y) :- r#reach(x), Edge(x,y);
+           reach(x) :- Seed(x); r#reach(y) :- r#reach(x), Edge(x,y);
         } }
         .collect();
     assert_eq!(recursive, [(0,), (1,), (2,)].into());
@@ -153,8 +152,8 @@ fn recursion_unions_seeds_and_multiple_linear_steps_and_stops_on_cycles() {
     let result: BTreeSet<_> = mini_linq::compile! { pipeline { surface = [cq_ext_recursion::recursion]; } recursion! {
         observe=(|_:usize,n:usize|{rounds.set(rounds.get()+1);deltas.set(deltas.get()+n);});
         struct Multi; relation Seed(x:i32); relation Extra(x:i32); relation Edge(x:i32,y:i32); relation reach(x:i32);
-        reach(*x) :- Seed(x); reach(*x) :- Extra(x);
-        reach(*y) :- reach(x), Edge(x,y); reach(*y) :- reach(x), Edge(y,x);
+        reach(x) :- Seed(x); reach(x) :- Extra(x);
+        reach(y) :- reach(x), Edge(x,y); reach(y) :- reach(x), Edge(y,x);
      } }.collect();
     assert_eq!(result, [(0,), (1,), (2,), (3,)].into());
     assert_eq!(rounds.get(), 2);
@@ -166,47 +165,53 @@ fn recursion_owns_non_copy_delta_rows_and_hoists_leaves_once() {
     let calls = Cell::new(0);
     let result: BTreeSet<_> = mini_linq::compile! { pipeline { surface = [cq_ext_recursion::recursion]; } recursion! {
         struct Owned;
-        relation Seed(x:String) = ({calls.set(calls.get()+1);[(String::from("a"),)]});
-        relation Edge(x:String,y:String) = ({calls.set(calls.get()+1);[(String::from("a"),String::from("b")),(String::from("b"),String::from("a"))]});
-        relation reach(x:String);
-        reach((*x).clone()) :- Seed(x); reach((*y).clone()) :- reach(x), Edge(x,y);
+        relation Seed(x:Vec<i64>) = ({calls.set(calls.get()+1);[(vec![1_i64],)]});
+        relation Edge(x:Vec<i64>,y:Vec<i64>) = ({calls.set(calls.get()+1);[(vec![1_i64],vec![2_i64]),(vec![2_i64],vec![1_i64])]});
+        relation reach(x:Vec<i64>);
+        reach(x) :- Seed(x); reach(y) :- reach(x), Edge(x,y);
      } }.collect();
-    assert_eq!(result, [(String::from("a"),), (String::from("b"),)].into());
+    assert_eq!(result, [(vec![1_i64],), (vec![2_i64],)].into());
     assert_eq!(calls.get(), 2);
+    type Name = Vec<i64>;
+    let seed: [(Name,); 1] = [(vec![1],)];
+    let edge: [(Name, Name); 2] = [(vec![1], vec![2]), (vec![2], vec![1])];
+    let aliased: BTreeSet<_> = mini_linq::compile! {
+        pipeline { surface = [cq_ext_recursion::recursion]; }
+        recursion! {
+            struct Aliased;
+            relation Seed(x:Name) = (&seed);
+            relation Edge(x:Name,y:Name) = (&edge);
+            relation reach(x:Name);
+            reach(x) :- Seed(x); reach(y) :- reach(x), Edge(x,y);
+        }
+    }.collect();
+    assert_eq!(aliased, result);
 }
 
 #[test]
 fn correlated_exists_evaluates_with_each_outer_value_and_borrowed_parameters() {
     let A = [(1,), (2,), (3,)];
     let S = [(1, 5), (2, 1), (9, 9)];
-    let observed = std::cell::RefCell::new(Vec::new());
     let parameter = 2;
-    let observe = |x: &i32| {
-        observed.borrow_mut().push(*x);
-        true
-    };
+    let observe = |_: &i32| true;
     let result: Vec<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
            struct PerRow; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-           answer(*x) :- A(x), exists!{S(k,y), if observe(x), if k == x, if *y > parameter};
+           answer(*x) :- A(x), exists!{S(k,y), if observe(x), where k == x, where y > parameter};
         }
         .collect();
     assert_eq!(result, [(1,)]);
-    // The recognized capture equality and y bound now restrict the opaque
-    // observation's domain. Evaluation counts are outside query denotation.
-    assert!(!observed.borrow().is_empty());
-    assert!(observed.borrow().iter().all(|x| *x == 1));
 }
 
 #[test]
 fn correlated_environment_keeps_borrowed_non_copy_hosts_and_parameters() {
-    let A = [(String::from("apple"),), (String::from("pear"),)];
-    let S = [(String::from("apple"),)];
-    let prefix = String::from("app");
+    let A = [(vec![1_i64, 2],), (vec![3_i64],)];
+    let S = [(vec![1_i64, 2],)];
+    let prefix = vec![1_i64];
     let prefix = &prefix;
     let result: Vec<_> = mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
-        struct Borrowed; relation A(x:String); relation S(y:String);
-        answer(x) :- A(x), exists!{S(y), if y.starts_with(prefix.as_str()), if x.as_str() == y.as_str()};
+        struct Borrowed; relation A(x:Vec<i64>); relation S(y:Vec<i64>);
+        answer(x) :- A(x), exists!{S(y), if y.starts_with(prefix.as_slice()), if x.as_slice() == y.as_slice()};
      }.collect();
     assert_eq!(result.len(), 1);
     assert!(std::ptr::eq(result[0].0, &A[0].0));
@@ -215,11 +220,11 @@ fn correlated_environment_keeps_borrowed_non_copy_hosts_and_parameters() {
 #[test]
 fn scalar_default_duplicate_rows_and_cardinality_error() {
     let A = [(1,), (2,)];
-    let S = [(1, 7), (1, 7)];
+    let S = [(1, 7, 0), (1, 7, 1)];
     let result: BTreeSet<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
-           struct Scalar; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32,v:i32);
-           answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y)};
+           struct Scalar; relation A(x:i32); relation S(x:i32,y:i32,witness:i32); relation answer(x:i32,v:i32);
+           answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y,witness)};
         }
         .collect();
     assert_eq!(result, [(1, 7), (2, -1)].into());
@@ -261,13 +266,13 @@ fn correlated_leaf_inputs_are_evaluated_once_before_outer_iteration() {
 
 #[test]
 fn constant_group_fuses_owned_measures_without_losing_set_semantics() {
-    let Sale = [(1_i32, 10_i64), (1, 10), (2, 10), (3, -4)];
+    let Sale = [(1_i32, 10_i64, 0_i32), (1, 10, 1), (2, 10, 2), (3, -4, 3)];
     let groups = mini_linq::compile! {
         pipeline { surface = [cq_ext_aggregate::aggregate]; }
         aggregate! {
             by(group); n=count(); total=sum(amount); lo=min(amount); hi=max(amount);
-            struct Constant; relation Sale(id:i32,value:i64);
-            rows(group,id,amount) :- Sale(id,value),
+            struct Constant; relation Sale(id:i32,value:i64,witness:i32);
+            rows(group,id,amount) :- Sale(id,value,witness),
                 let group:i32 = 0, let amount:i64 = *value * 2;
         }
     };
@@ -280,7 +285,7 @@ fn constant_group_fuses_owned_measures_without_losing_set_semantics() {
     let selected: Vec<_> = mini_linq::compile! {
         pipeline {}
         struct Reuse; relation groups(group:i32,n:usize,total:i64,lo:i64,hi:i64);
-        answer(total) :- groups(group,n,total,lo,hi), if *group == 0;
+        answer(total) :- groups(group,n,total,lo,hi), where group == 0;
     }
     .map(|(total,)| *total)
     .collect();

@@ -2,8 +2,8 @@
 //!
 //! A program appends `sequence { name = term; ... }` and an optional
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
-//! Optional `evidence { ... }` records estimates and author-asserted key premises;
-//! see [`Evidence`] and [`EvidenceFact`] for their distinct correctness contracts.
+//! Optional evidence records source-preserving planning estimates.
+//! Input uniqueness follows from the IO set contract and Physical transfer.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
 //! `partition_k[keys](parts)`, `fold`, `group`, `canon`, `store`, `union` and
 //! `choose`, or references to earlier definitions. A key partition reads a named
@@ -15,7 +15,11 @@
 //! takes its capacity from that store. `reserve_previous` is arena-terminal only:
 //! the last validated count is an initial capacity hint (zero on first use),
 //! never a bound; full counter and BE-Abort checks and overflow replay precede
-//! publication. Codec and provider premises are analysis obligations, not syntax.
+//! publication. The optional statement `roots spread;`, after the definitions
+//! and before `output`, records the root partition policy of every fold-free
+//! dispatch (EXT-SeqRoots, GPU-RootSpread): root tiles are sized at launch to
+//! fill the machine's resident blocks, never larger than the declared tile.
+//! Codec and provider premises are analysis obligations, not syntax.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,15 +29,21 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
+pub mod bounds;
+pub mod blocks;
 pub mod contract;
 mod evidence;
+pub mod gpu;
 mod grading;
 mod resources;
+pub mod task_execution;
 
 pub use contract::check_rewrite;
 pub use cq_lang_structures as structures;
-pub use evidence::{Evidence, EvidenceFact, Selectivity};
+pub use evidence::{Evidence, EvidenceFact, EvidenceSource, Selectivity};
+pub mod stats;
 pub use grading::check_grading;
+use structures::Capability;
 
 mod kw {
     syn::custom_keyword!(sequence);
@@ -59,24 +69,107 @@ mod kw {
     syn::custom_keyword!(len);
     syn::custom_keyword!(workers);
     syn::custom_keyword!(output);
+    syn::custom_keyword!(roots);
+    syn::custom_keyword!(spread);
     syn::custom_keyword!(reserve);
     syn::custom_keyword!(reserve_previous);
     syn::custom_keyword!(bounded);
+    syn::custom_keyword!(representation);
+    syn::custom_keyword!(identity);
+    syn::custom_keyword!(encoded);
+    syn::custom_keyword!(blocks);
 }
 
-/// A complete Structures program and its sequence refinement.
+/// A sequence refinement of separately supplied Physical and Structures programs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
-    pub structures: cq_lang_structures::Program,
     pub sequence: Sequence,
     pub graded: Option<Graded>,
     pub evidence: Evidence,
+    pub representation: Representation,
+}
+
+// DESIGN contract7-representation
+// Owns recorded `representation { identity, encoded }` facts; absent columns remain unknown.
+// Contract 7, STR-Repr/BE-RustRepresentation; source: doc/PLANNING-REDESIGN.md Architecture.
+// Source: doc/STORAGE.md §§1,4,9; doc/formal/CONFORMANCE.md BE-RustRepresentation.
+// DO NOT infer identity, codecs, widths or preserved operations from Rust type spelling.
+// Device Rust needs identity for every read column plus closed captures; encoded comparisons use `where`.
+// Width/preserved-op and grouped-offset facts remain storage work in Plan P4-P6, not printer guesses.
+/// Target-recorded device column representations; missing columns are unknown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Representation {
+    pub identity: BTreeSet<String>,
+    pub encoded: BTreeSet<String>,
+    pub blocks: blocks::Execution,
+}
+
+impl Parse for Representation {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::representation>()?;
+        let body;
+        braced!(body in input);
+        let mut result = Self::default();
+        while !body.is_empty() {
+            if body.peek(kw::blocks) {
+                result.blocks = body.parse()?;
+                continue;
+            }
+            let columns = if body.peek(kw::identity) {
+                body.parse::<kw::identity>()?;
+                &mut result.identity
+            } else {
+                body.parse::<kw::encoded>()?;
+                &mut result.encoded
+            };
+            let names;
+            bracketed!(names in body);
+            for name in Punctuated::<Ident, Token![,]>::parse_terminated(&names)? {
+                columns.insert(cq_syntax::symbol_name(&name));
+            }
+            body.parse::<Token![;]>()?;
+        }
+        Ok(result)
+    }
+}
+
+impl ToTokens for Representation {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        if self.identity.is_empty() && self.encoded.is_empty() && self.blocks.is_empty() {
+            return;
+        }
+        let identity = self
+            .identity
+            .iter()
+            .map(|name| Ident::new(name, Span::call_site()));
+        let encoded = self
+            .encoded
+            .iter()
+            .map(|name| Ident::new(name, Span::call_site()));
+        let blocks = &self.blocks;
+        tokens.extend(quote! { representation {
+            identity [#(#identity),*]; encoded [#(#encoded),*];
+            #blocks
+        } });
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sequence {
     pub definitions: Vec<Definition>,
+    pub roots: Roots,
     pub output: Option<OutputProtocol>,
+}
+
+/// Root partition policy of the program's dispatches (EXT-SeqRoots).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Roots {
+    /// The declared distributed tile, or one part covering the source.
+    #[default]
+    Declared,
+    /// Root tiles sized at launch from the resident block count, at most the
+    /// declared tile (one block of rows when undeclared). Fold-free dispatches only.
+    Spread,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +213,44 @@ pub enum Term {
     Union(Vec<Term>),
 }
 
+/// Stable constructor ordinals for recorded lookup decisions. Addresses are
+/// invocation-local indexes only; analysis stores ordinals, never addresses.
+pub(crate) fn lookup_slots(sequence: &Sequence) -> BTreeMap<*const Term, usize> {
+    fn visit(term: &Term, slots: &mut BTreeMap<*const Term, usize>) {
+        if matches!(term, Term::Lookup { .. }) {
+            slots.insert(term, slots.len());
+        }
+        match term {
+            Term::Map(_, inner)
+            | Term::Compact(_, inner)
+            | Term::Flatten(inner)
+            | Term::Fold(_, inner)
+            | Term::Group(_, inner)
+            | Term::Canon(inner)
+            | Term::Tile { inner, .. }
+            | Term::PartitionK { inner, .. }
+            | Term::Lookup { inner, .. }
+            | Term::Store { inner, .. } => visit(inner, slots),
+            Term::Choose(arms) => {
+                for (_, arm) in arms {
+                    visit(arm, slots);
+                }
+            }
+            Term::Union(arms) => {
+                for arm in arms {
+                    visit(arm, slots);
+                }
+            }
+            Term::Rows(_) | Term::Ref(_) => {}
+        }
+    }
+    let mut slots = BTreeMap::new();
+    for definition in &sequence.definitions {
+        visit(&definition.term, &mut slots);
+    }
+    slots
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Monoid {
     Count,
@@ -145,6 +276,8 @@ pub enum Guard {
     Ge(Len, usize),
     /// Target-wide available workers; a uniform scheduling parameter, not a size.
     WorkersLt(usize),
+    /// Advice-only scalar read from a completed, immutable build publication.
+    Statistic(stats::Guard),
     Else,
 }
 
@@ -163,6 +296,8 @@ pub struct Grade {
 /// A target-supplied machine tree, not an additional language construct.
 #[derive(Clone, Debug)]
 pub struct Machine {
+    /// Native GPU launch policy; absent on non-GPU machines.
+    pub gpu: Option<gpu::Machine>,
     pub name: Ident,
     /// Preferred per-lane item count; the planner also considers one item.
     pub items: usize,
@@ -181,6 +316,8 @@ pub struct Machine {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelNode {
     pub name: Ident,
+    /// Whether this level executes host-compiled Rust rather than device Rust.
+    pub host_rust: bool,
     pub collaborative: bool,
     pub dynamic: bool,
     /// Fixed distributing width, or `None` for dynamically sized levels.
@@ -224,59 +361,85 @@ pub struct ResourceUsage {
     pub capacity_bytes: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Capability {
-    Exact,
-    Range,
-    Membership,
-    Ordered,
-}
-
-/// Ordered target tokens used to discharge planner obligations.
+/// Ordered target catalog: token declarations and the read levels at which
+/// this target supports each declared token (PL-Catalog).
 ///
-/// Catalogs contain syntax and capabilities only, never target implementations.
-/// Candidate order breaks ties. Levels are explicit absolute machine paths;
+/// Catalogs contain declarations and levels only, never target implementations.
+/// Entries are keyed by token id (and, for a routed token, its inner token);
+/// entry order breaks ties. Levels are explicit absolute machine paths;
 /// an empty level list permits no read. Provider levels govern consumption,
 /// not construction: building from host rows does not license host reads.
+/// A program declaration of a token the catalog declares must equal it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
-    pub providers: Vec<ProviderToken>,
+    pub declarations: Vec<structures::Declaration>,
+    pub providers: Vec<CatalogEntry>,
     pub codecs: Vec<CodecToken>,
-    pub canons: Vec<CanonToken>,
 }
 
-/// An authored provider type whose reads are supported at the listed levels.
-///
-/// In token patterns, `_` matches any type or const argument and `'_` any lifetime.
-/// Matching never replaces the author's provider type.
+/// A supported provider instance shape (token and inner tokens) with its
+/// default spelling, readable at the listed levels. An entry that lists no
+/// inner instance covers its token over any inner instance (a nested trie);
+/// an entry that lists one covers only that inner token (a routed pair).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProviderToken {
-    pub ty: syn::Type,
-    pub capabilities: Vec<Capability>,
-    /// Provider-authored Structures optimizations, independent of execution
-    /// levels and contiguous-range read capabilities.
-    pub supports: Vec<structures::ProviderCapability>,
+pub struct CatalogEntry {
+    pub provider: structures::Provider,
     pub levels: Vec<Vec<String>>,
-    /// Accepted scalar row elements; `None` leaves the element type unrestricted.
-    pub elements: Option<Vec<syn::Type>>,
+}
+
+impl CatalogEntry {
+    /// Whether this entry supports a recorded instance (PL-Catalog), by token id only.
+    pub fn covers(&self, instance: &structures::Provider) -> bool {
+        fn covers(entry: &structures::Provider, instance: &structures::Provider) -> bool {
+            entry.token == instance.token
+                && match (&entry.inner, &instance.inner) {
+                    (None, _) => true,
+                    (Some(entry), Some(instance)) => covers(entry, instance),
+                    (Some(_), None) => false,
+                }
+        }
+        covers(&self.provider, instance)
+    }
+}
+
+impl Catalog {
+    pub fn declaration(&self, token: &Ident) -> Option<&structures::Declaration> {
+        self.declarations
+            .iter()
+            .find(|declaration| declaration.token == *token)
+    }
+
+    /// Declared facts of a catalog instance shape, applying STR-Routed.
+    pub fn facts(&self, provider: &structures::Provider) -> Option<structures::Facts> {
+        structures::provider::facts(|token| self.declaration(token), provider)
+    }
+
+    /// The first entry supporting this recorded instance.
+    pub fn entry(&self, provider: &structures::Provider) -> Option<&CatalogEntry> {
+        self.providers.iter().find(|entry| entry.covers(provider))
+    }
+
+    /// Add a declaration and an entry of its default instance at `levels`.
+    pub fn register(&mut self, declaration: structures::Declaration, levels: Vec<Vec<String>>) {
+        self.providers.push(CatalogEntry {
+            provider: declaration.instance(),
+            levels,
+        });
+        if self.declaration(&declaration.token).is_none() {
+            self.declarations.push(declaration);
+        }
+    }
 }
 
 /// A value-refinement token; `ordered` certifies monotone encoding.
+/// `codec_id` is the declaration-table identity (`None`: identity representation).
+/// The opaque `codec` payload is retained only for printing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodecToken {
-    pub ty: syn::Type,
+    pub codec: Option<syn::Type>,
+    pub codec_id: Option<cq_lang_structures::CodecId>,
     pub ordered: bool,
     pub levels: Vec<Vec<String>>,
-}
-
-/// A canonicalization token supported at the listed execution levels.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CanonToken {
-    pub ty: syn::Type,
-    pub levels: Vec<Vec<String>>,
-    /// Packed equality-key capability, checked against codec bounds at setup.
-    /// `None` denotes a provider without a fixed packed-width limit.
-    pub max_packed_bits: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -298,6 +461,8 @@ pub enum Tiling {
 /// A dispatch derived from the grading, including its failure path to host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dispatch {
+    /// Checked target launch/publication steps, printed with the dispatch.
+    pub gpu: Option<gpu::Execution>,
     pub outer_store: String,
     pub members: Vec<String>,
     pub inner_stores: Vec<String>,
@@ -314,19 +479,30 @@ pub struct Dispatch {
 /// Runtime premises recorded for discharge by target traits and translations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Obligation {
+    /// The exact declaration-table codec identity of these columns.
+    /// `codec` is an opaque printing payload; `None` denotes identity.
     Codec {
         columns: Vec<String>,
         ordered: bool,
+        codec: Option<syn::Type>,
+        codec_id: Option<cq_lang_structures::CodecId>,
     },
     Provider {
         provider: String,
         keys: Vec<String>,
         capability: Capability,
-        ty: syn::Type,
+        instance: structures::Provider,
     },
+    /// The canon boundary owned by Sequence definition `result` reads this
+    /// checked canonical reference; `None` is the returned answer boundary,
+    /// whose recorded identity index is `answer_index` (Structures
+    /// `head_dedup`). `level` is the boundary's graded execution level,
+    /// recorded by grading (`None` before grading).
     Canon {
         result: String,
-        ty: Option<syn::Type>,
+        canonical: Option<structures::CanonSource>,
+        answer_index: Option<structures::Provider>,
+        level: Option<Vec<String>>,
     },
     Failure {
         dispatch: usize,
@@ -362,7 +538,6 @@ pub enum Publication {
 /// Checked facts consumed by rewrites and target translations.
 #[derive(Clone, Debug)]
 pub struct Analysis {
-    pub structures: cq_lang_structures::Analysis,
     /// Physical result denoted by each definition, when it is a row result.
     pub results: BTreeMap<String, String>,
     pub lengths: BTreeMap<String, Len>,
@@ -374,18 +549,30 @@ pub struct Analysis {
     /// Checked host-merged partial-fold modes for Group constructors in preorder,
     /// grouped by owning definition. Ref uses retain their producer's entries.
     pub partial_groups: BTreeMap<String, Vec<bool>>,
+    /// BE-PrefixBound: checked cardinality/key facts, indexed by Physical result.
+    pub prefix_bounds: BTreeMap<String, bounds::Bound>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
     /// Publication ownership, derived once from checked provenance and consumers.
     pub publications: BTreeMap<String, Publication>,
+    pub task_execution: task_execution::Execution,
+    pub gpu_bindings: gpu::bindings::Bindings,
+    /// Concrete GPU carrier storage, ordered key-codec recipes with their
+    /// bounds sources, and packed-key equality granularity.
+    pub gpu_publications: BTreeMap<String, gpu::publication::PublicationRecord>,
     /// Pure Rows/Ref/Store provenance, before any support-equal reheading.
     pub host_sources: BTreeMap<String, String>,
     /// Borrowable base provenance of Tile inputs, in constructor preorder.
     pub host_tiles: BTreeMap<String, Vec<Option<String>>>,
-    /// Native routed-provider representation: result -> provider ordinal -> inner type.
-    /// Only the canonical cq_storage sharded ABI is admitted here.
-    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>,
+    /// Native routed-provider representation: result -> provider ordinal -> the
+    /// recorded inner instance of its routed token (STR-Routed).
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, structures::Provider>>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
+    /// BE-NativeBind requirements of actually checked result readers.
+    pub lookup_capabilities:
+        BTreeMap<(String, structures::ReaderRef<String>, Vec<String>), Capability>,
+    /// Physical reader chosen for each Lookup constructor in program preorder.
+    pub lookup_readers: BTreeMap<usize, structures::ReaderRef<String>>,
     /// Providers evaluated directly by each named definition, excluding Ref
     /// dependencies and support-equal Map reheadings.
     pub provider_reads: BTreeMap<String, BTreeSet<String>>,
@@ -395,14 +582,31 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>,
     pub output: Option<(String, OutputProtocol)>,
     pub obligations: Vec<Obligation>,
-    /// Planning estimates and explicit author-asserted key premises.
+    /// Source-preserving planning advice, never uniqueness premises.
     pub evidence: Evidence,
+    pub representation: Representation,
+}
+
+impl Analysis {
+    /// Rust row expressions require identity representations for every read column.
+    /// Closed captures are evaluated by the host and do not read encoded rows.
+    /// An unannotated computed binding has no authored device result layout.
+    pub fn rust_requires_host(
+        &self,
+        physical: &cq_lang_structures::physical::Analysis,
+        operator: &cq_lang_structures::physical::Operator,
+    ) -> bool {
+        matches!(operator, cq_lang_structures::physical::Operator::Bind(bind)
+            if bind.annotation.is_none())
+            || physical
+                .rust_reads(operator)
+                .is_some_and(|reads| !reads.is_subset(&self.representation.identity))
+    }
 }
 
 impl Parse for Program {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         Ok(Self {
-            structures: input.parse()?,
             sequence: input.parse()?,
             graded: if input.peek(kw::graded) {
                 Some(input.parse()?)
@@ -414,6 +618,11 @@ impl Parse for Program {
             } else {
                 Evidence::default()
             },
+            representation: if input.peek(kw::representation) {
+                input.parse()?
+            } else {
+                Representation::default()
+            },
         })
     }
 }
@@ -421,13 +630,13 @@ impl Parse for Program {
 impl ToTokens for Program {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
-            structures,
             sequence,
             graded,
             evidence,
+            representation,
         } = self;
         let evidence = (!evidence.facts.is_empty()).then_some(evidence);
-        tokens.extend(quote! { #structures #sequence #graded #evidence });
+        tokens.extend(quote! { #sequence #graded #evidence #representation });
     }
 }
 
@@ -437,9 +646,18 @@ impl Parse for Sequence {
         let body;
         braced!(body in input);
         let mut definitions = Vec::new();
+        let mut roots = Roots::Declared;
         let mut output = None;
         while !body.is_empty() {
-            if body.peek(kw::output) && !body.peek2(Token![=]) {
+            if body.peek(kw::roots) && !body.peek2(Token![=]) {
+                body.parse::<kw::roots>()?;
+                body.parse::<kw::spread>()?;
+                body.parse::<Token![;]>()?;
+                roots = Roots::Spread;
+                if !(body.is_empty() || body.peek(kw::output) && !body.peek2(Token![=])) {
+                    return Err(body.error("roots must follow every definition, before output"));
+                }
+            } else if body.peek(kw::output) && !body.peek2(Token![=]) {
                 body.parse::<kw::output>()?;
                 output = Some(body.parse()?);
                 body.parse::<Token![;]>()?;
@@ -452,6 +670,7 @@ impl Parse for Sequence {
         }
         Ok(Self {
             definitions,
+            roots,
             output,
         })
     }
@@ -460,11 +679,14 @@ impl Parse for Sequence {
 impl ToTokens for Sequence {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let definitions = &self.definitions;
+        let roots = (self.roots == Roots::Spread).then(|| quote! { roots spread; });
         let output = self
             .output
             .as_ref()
             .map(|protocol| quote! { output #protocol; });
-        tokens.extend(quote! { sequence { #(#definitions)* #output } });
+        tokens.extend(quote! { sequence {
+            #(#definitions)* #roots #output
+        } });
     }
 }
 
@@ -744,6 +966,9 @@ impl Parse for Guard {
             input.parse::<Token![<]>()?;
             return Ok(Self::WorkersLt(parse_usize(input)?));
         }
+        if input.peek(stats::kw::stat) {
+            return input.parse().map(Self::Statistic);
+        }
         let len = input.parse()?;
         let lookahead = input.lookahead1();
         if lookahead.peek(Token![<]) {
@@ -773,6 +998,7 @@ impl ToTokens for Guard {
                 let threshold = integer(*threshold);
                 quote! { workers < #threshold }
             }
+            Self::Statistic(guard) => quote! { #guard },
             Self::Else => quote! { else },
         });
     }
@@ -852,16 +1078,21 @@ impl ToTokens for OutputProtocol {
     }
 }
 
-impl cq_stage::Language for Program {
-    fn context(&self) -> cq_stage::Context {
-        cq_stage::Language::context(&self.structures)
+impl<'a> cq_stage::Annotation<(&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program)> for Program {
+    fn parse(input: ParseStream<'_>, _base: (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program)) -> syn::Result<Self> {
+        <Self as Parse>::parse(input)
     }
 
-    fn check(&self) -> syn::Result<()> {
-        contract::check(self).map(|_| ())
+    fn check(&self, (physical, structures): (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program)) -> syn::Result<()> {
+        contract::check(physical, structures, self).map(|_| ())
     }
 
-    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+    fn check_rewrite(
+        (source_physical, source_structures): (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program),
+        source: &Self,
+        (target_physical, target_structures): (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program),
+        target: &Self,
+    ) -> syn::Result<()> {
+        check_rewrite(source_physical, source_structures, source, target_physical, target_structures, target)
     }
 }

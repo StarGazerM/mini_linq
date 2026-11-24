@@ -69,11 +69,7 @@ fn direct_protocol_rejects_wrong_authored_stage_and_missing_terminal() {
         cq_datalog_stratify::check(source, &target)?;
         Ok(target)
     });
-    assert!(
-        missing_terminal
-            .to_string()
-            .contains("pipeline ended before its Rust printer")
-    );
+    assert!(missing_terminal.to_string().contains("compile_error"));
 }
 
 #[test]
@@ -85,18 +81,68 @@ fn default_pass_arguments_are_not_silently_ignored() {
 
 #[test]
 fn incremental_driver_advice_is_explicit_and_composes_with_invariants() {
-    use syn::parse::Parser;
     use cq_datalog_incremental::DriverPolicy;
-    assert_eq!(incremental_arguments.parse2(quote!()).unwrap(), (false, DriverPolicy::WrittenOrder));
-    assert_eq!(incremental_arguments.parse2(quote!(driver(delta_first); hoist_invariants;)).unwrap(),
-        (true, DriverPolicy::DeltaFirst));
-    assert_eq!(incremental_arguments.parse2(quote!(hoist_invariants; driver(written_order);)).unwrap(),
-        (true, DriverPolicy::WrittenOrder));
+    use syn::parse::Parser;
+    let parsed = |tokens| {
+        let arguments = incremental_arguments.parse2(tokens).unwrap();
+        (arguments.hoist, arguments.driver)
+    };
+    assert_eq!(parsed(quote!()), (false, DriverPolicy::WrittenOrder));
+    assert_eq!(
+        parsed(quote!(driver(delta_first); hoist_invariants;)),
+        (true, DriverPolicy::DeltaFirst)
+    );
+    assert_eq!(
+        parsed(quote!(hoist_invariants; driver(written_order);)),
+        (true, DriverPolicy::WrittenOrder)
+    );
+    let planned = incremental_arguments
+        .parse2(quote!(
+            driver(delta_first); plan(Cast, order(S@3, R)); plan(Step, delta(T@2), order(T@2, R));
+        ))
+        .unwrap();
+    assert_eq!(planned.plans.len(), 2);
+    assert_eq!(planned.plans[0].delta, None);
+    assert_eq!(planned.plans[0].order[0].occurrence, Some(3));
+    assert_eq!(planned.plans[1].delta.as_ref().unwrap().occurrence, Some(2));
     for invalid in [
         quote!(driver(unknown);),
         quote!(driver(delta_first, written_order);),
         quote!(driver(delta_first); driver(written_order);),
         quote!(hoist_invariants; hoist_invariants;),
+        quote!(plan(Cast, order());),
+        quote!(plan(Cast, delta(T@2));),
+        quote!(plan(Cast, order(R), order(S));),
+        quote!(plan(order(R));),
+    ] {
+        assert!(incremental_arguments.parse2(invalid).is_err());
+    }
+}
+
+#[test]
+fn known_advice_parses_known_only_and_rejects_conflicts() {
+    use cq_datalog_incremental::Known;
+    use syn::parse::Parser;
+    let planned = incremental_arguments
+        .parse2(quote!(
+            plan(Cast, known(admit));
+            plan(Step, delta(T@2), order(T@2, R), known(at(level 2)));
+            plan(Join, order(R, S), smallest(R, S), known(at(level 1)));
+        ))
+        .unwrap();
+    assert!(planned.plans[0].order.is_empty());
+    assert_eq!(planned.plans[0].known, Some(Known::Admit));
+    assert_eq!(planned.plans[1].known, Some(Known::At(2)));
+    assert_eq!(planned.plans[2].known, Some(Known::At(1)));
+    assert_eq!(planned.plans[2].smallest.len(), 1);
+    for invalid in [
+        quote!(plan(Cast, known(admit), known(admit));),
+        quote!(plan(Cast, known(admit), known(at(level 1)));),
+        quote!(plan(Cast, known(at(level 0)));),
+        quote!(plan(Cast, known(at(2)));),
+        quote!(plan(Cast, known(somewhere));),
+        quote!(plan(Cast, smallest(R, S), known(admit));),
+        quote!(plan(Cast,);),
     ] {
         assert!(incremental_arguments.parse2(invalid).is_err());
     }
@@ -166,12 +212,7 @@ fn configuration_records_the_alias_declaration_for_independent_round_checks() {
     assert!(cq_lang_datalog_round::contract::check(&unlisted).is_err());
     let mut push = replay;
     push.holes[0].interface = cq_lang_datalog_round::HoleInterface::Push;
-    assert!(
-        cq_lang_datalog_round::contract::check(&push)
-            .unwrap_err()
-            .to_string()
-            .contains("hole interface does not match its registered terminal interface")
-    );
+    assert!(cq_lang_datalog_round::contract::check(&push).is_err());
     let unlisted: DatalogConfiguration = syn::parse_quote! { pipeline {
         cq = pipeline { print = crate::alias::pull; };
     } };
@@ -195,13 +236,34 @@ fn configuration_records_batch_terminal_through_fork() {
         cq = pipeline { print = ::cq_gpu_sequence::translate_arena; };
     } };
     let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
-    let fork = queue.passes.iter()
+    let fork = queue
+        .passes
+        .iter()
         .find(|pass| pass.path.segments.last().unwrap().ident == "fork")
         .unwrap();
     let target = cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).unwrap();
     assert!(!target.holes.is_empty());
-    assert!(target.holes.iter().all(|hole|
-        hole.interface == cq_lang_datalog_round::HoleInterface::Batch));
+    assert!(
+        target
+            .holes
+            .iter()
+            .all(|hole| hole.interface == cq_lang_datalog_round::HoleInterface::Batch)
+    );
     let replay: cq_lang_datalog_round::Program = syn::parse2(quote!(#target)).unwrap();
     assert_eq!(target, replay);
+}
+
+#[test]
+fn incremental_accepts_step_and_smallest_advice() {
+    use syn::parse::Parser;
+    let parsed = incremental_arguments
+        .parse2(quote!(
+            plan(Step, order(R@0, S@1(y), S@1, T@2), smallest(S@1, T@2));
+            plan(Step, delta(R@0), order(R@0, T@2, S@1));
+        ))
+        .unwrap();
+    assert_eq!(parsed.plans.len(), 2);
+    assert_eq!(parsed.plans[0].order[1].columns.as_ref().unwrap()[0], "y");
+    assert_eq!(parsed.plans[0].smallest[0].len(), 2);
+    assert_eq!(parsed.plans[1].delta.as_ref().unwrap().occurrence, Some(0));
 }

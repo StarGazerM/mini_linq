@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h13.rs, query literal 1.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Zeros ; relation Customer (c_custkey : i64) ; relation CountedCustomers (customer_key : i64 , order_count : usize) ; relation answer (customer_key : i64) ; answer (customer_key) :- Customer (customer_key) , ! CountedCustomers (customer_key , _) ;

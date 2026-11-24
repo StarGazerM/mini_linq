@@ -1,0 +1,23 @@
+program h04 {
+    input Orders(o_orderkey: i64, o_orderdate: Date) = table(orders);
+    input Lineitem(l_orderkey: i64, l_commitdate: Date, l_receiptdate: Date) = table(lineitem);
+    operand start: Date = date { Date::load("1993-07-01").expect("authored ISO date") };
+    operand end: Date = date { Date::load("1993-10-01").expect("authored ISO date") };
+    stage s0 {
+        inputs { Orders = Orders; Lineitem = Lineitem; }
+        captures [start, end];
+        evidence {}
+        cq {
+            struct Query;
+            relation Orders(o_orderkey: i64, o_orderdate: Date);
+            relation Lineitem(l_orderkey: i64, l_commitdate: Date, l_receiptdate: Date);
+            relation answer(order_key: i64);
+            answer(order_key) :-
+                Orders(order_key, order_date), where order_date >= start && order_date < end,
+                Lineitem(order_key, commit_date, receipt_date), where commit_date < receipt_date;
+        }
+    }
+    terminal {
+        from s0 project [column(0)] dictionaries [];
+    }
+}

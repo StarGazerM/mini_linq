@@ -1,7 +1,7 @@
 //! # cq-planners
 //!
-//! An external CQ→RA′ planner on the public `cq-stage` protocol. This standalone
-//! workspace contains a planner library, its protocol macro, the public
+//! An external CQ→RA′ planner on the public `cq-stage` protocol. This feature
+//! group contains a planner library, its protocol macro, the public
 //! `cq-planners` facade, and a test-only Rust refinement driver. Core dependencies
 //! use a version and a local path; the external gate replaces those paths with
 //! packaged dependencies.
@@ -58,7 +58,7 @@
 //! ```
 //!
 //! Every invocation normalizes CQ, calls `cq-order`, calls `cq-reduce`, then
-//! elaborates the recorded valuation with `cq-elaborate`. Public correspondence
+//! elaborates the recorded valuation with `cq-relational-lowering`. Public correspondence
 //! checks validate each boundary. The emitted RA′ contains the chosen operator
 //! graph and opaque Rust chain. Later passes consume that written graph.
 //!
@@ -86,7 +86,9 @@
 //! It does not move predicates or bindings to make that connection.
 //!
 //! For library consumers, `Planner::ALL` lists the eleven choices.
-//! `compile_valuation(&cq, planner)` returns complete VO text and
+//! `compile_valuation(&cq, planner)` returns `(normalized_cq, valuation)`: the
+//! normalized source and standalone VO remain separate programs. VO prints only
+//! its valuation; readers and checkers receive CQ explicitly.
 //! `compile(&cq, planner)` returns RA′. `check_valuation(&cq, &vo, planner)` checks
 //! coverage, granularity, written-order obligations and complete tree reductions.
 //! It accepts admissible free rankings without rerunning the selector.
@@ -137,7 +139,7 @@
 //! External CQ→RA′ planning passes.
 //!
 //! [`order!`] consumes CQ with the cq-stage queue protocol and emits complete
-//! RA′ text. [`compile_valuation`] exposes the chosen VO text for inspection.
+//! RA′ text. [`compile_valuation`] exposes the normalized CQ and chosen VO for inspection.
 //! Every choice is recorded there; subsequent passes receive only written IR.
 //! Core body blocks `{ B1 } | { B2 }` union answers and `{ B1 } else { B2 }`
 //! select the first nonempty arm. Two nonempty branches are required; nesting

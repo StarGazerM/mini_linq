@@ -1,8 +1,8 @@
 [package]
 name = "cq-datalog-macros"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.85.1"
 license.workspace = true
 publish = false
 
@@ -11,6 +11,8 @@ proc-macro = true
 
 [features]
 hoist-invariants = []
+phase-timing = ["cq-datalog-configuration/phase-timing"]
+planner-calibration = ["cq-datalog-print-rounds/planner-calibration"]
 
 [dependencies]
 cq-datalog-configuration.workspace = true
@@ -26,6 +28,8 @@ cq-datalog-storage.workspace = true
 cq-datalog-fork.workspace = true
 cq-datalog-print-rounds.workspace = true
 cq-stage.workspace = true
+cq-lang-physical.workspace = true
+cq-rewrite-passes.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

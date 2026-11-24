@@ -29,16 +29,20 @@ struct Checker<'a> {
     definitions: BTreeMap<String, usize>,
     physical: BTreeMap<String, &'a cq_lang_structures::physical::Definition>,
     physical_facts: &'a cq_lang_structures::physical::Analysis,
+    identity: &'a BTreeSet<String>,
     roots: Vec<usize>,
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
-    lengths: &'a BTreeMap<String, Len>,
+    stores: &'a BTreeMap<String, Len>,
     partial_groups: &'a BTreeMap<String, Vec<bool>>,
     group_cursors: Vec<usize>,
     results: &'a BTreeMap<String, String>,
     tilings: BTreeMap<String, Vec<crate::Tiling>>,
     parts: BTreeMap<String, Option<usize>>,
     range_reads: BTreeSet<(String, Vec<String>)>,
+    lookup_slots: BTreeMap<*const Term, usize>,
+    lookup_readers: &'a BTreeMap<usize, cq_lang_structures::ReaderRef<String>>,
+    range_lookups: BTreeSet<(String, cq_lang_structures::ReaderRef<String>, Vec<String>)>,
     publication: Option<usize>,
     publication_tile: Option<&'a Term>,
 }
@@ -46,14 +50,17 @@ struct Checker<'a> {
 /// Check placement, then derive dispatch boundaries and runtime failure obligations.
 /// A successful check records a required failure channel; it does not certify an
 /// emitter's implementation of that channel.
-pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analysis> {
-    crate::contract::Checker::default().check_grading(program, machine)
+pub fn check_grading(physical: &crate::structures::physical::Program, structures: &crate::structures::Program, program: &Program, machine: &Machine) -> syn::Result<Analysis> {
+    crate::contract::Checker::default().check_grading(physical, structures, program, machine)
 }
 
 pub(crate) fn check_grading_in(
+    physical: &crate::structures::physical::Program,
+    structures: &crate::structures::Program,
     program: &Program,
     machine: &Machine,
     mut analysis: Analysis,
+    structure_analysis: &crate::structures::Analysis,
 ) -> syn::Result<Analysis> {
     // Formal rule BE-Abort: every below-host dispatch records a channel to the
     // distinguished host root, to be discharged by the target's emitter/runtime.
@@ -150,31 +157,31 @@ pub(crate) fn check_grading_in(
         analysis.levels.insert(name, levels[level].path.clone());
         grades.push(level);
     }
-    let physical = program
-        .structures
-        .physical
-        .program
-        .definitions
+    let physical_definitions = physical.program.definitions
         .iter()
         .map(|definition| (symbol_name(&definition.name), definition))
         .collect();
     let mut checker = Checker {
         program,
-        physical_facts: &analysis.structures.physical,
+        physical_facts: &structure_analysis.physical,
+        identity: &analysis.representation.identity,
         levels,
         grades,
         definitions,
-        physical,
+        physical: physical_definitions,
         roots: Vec::with_capacity(program.sequence.definitions.len()),
         nodes: Vec::new(),
         collectives: Vec::new(),
-        lengths: &analysis.lengths,
+        stores: &analysis.stores,
         partial_groups: &analysis.partial_groups,
         group_cursors: vec![0; program.sequence.definitions.len()],
         results: &analysis.results,
         tilings: BTreeMap::new(),
         parts: BTreeMap::new(),
         range_reads: BTreeSet::new(),
+        lookup_slots: crate::lookup_slots(&program.sequence),
+        lookup_readers: &analysis.lookup_readers,
+        range_lookups: BTreeSet::new(),
         publication: None,
         publication_tile: None,
     };
@@ -189,9 +196,37 @@ pub(crate) fn check_grading_in(
         )?;
         checker.roots.push(root);
     }
+    checker.check_merge_inputs(&analysis.shapes)?;
     analysis.dispatches = checker.dispatches()?;
+    // Formal rule PL-Distinct: record each canon boundary's graded level, the
+    // level of the dispatch publishing its owner (else the owner's own grade).
+    for obligation in &mut analysis.obligations {
+        let Obligation::Canon { result, level, .. } = obligation else {
+            continue;
+        };
+        let graded = analysis
+            .dispatches
+            .iter()
+            .find(|dispatch| dispatch.members.contains(result))
+            .map(|dispatch| &dispatch.level)
+            .or_else(|| analysis.levels.get(result.as_str()));
+        let Some(graded) = graded else {
+            return Err(syn::Error::new(
+                physical.program.returned.span(),
+                format!("BE-Canon: canon boundary `{result}` has no graded level"),
+            ));
+        };
+        *level = Some(graded.clone());
+    }
     analysis.collectives = checker.collectives;
     analysis.tilings = checker.tilings;
+    for key in checker.range_lookups {
+        if let Some(capability) = analysis.lookup_capabilities.get_mut(&key)
+            && *capability != crate::Capability::Ordered
+        {
+            *capability = crate::Capability::Range;
+        }
+    }
     for key in checker.range_reads {
         if let Some(capability) = analysis.capabilities.get_mut(&key) {
             if *capability != crate::Capability::Ordered {
@@ -213,13 +248,26 @@ pub(crate) fn check_grading_in(
             }
         }
     }
+    crate::contract::check_native_grading(structure_analysis, &analysis)?;
     for (dispatch, unit) in analysis.dispatches.iter().enumerate() {
         analysis.obligations.push(Obligation::Failure {
             dispatch,
             channel: unit.failure_channel.clone(),
         });
     }
-    // Formal rule BE-Resource: each dispatch's target layout fits its level's resource capacity.
+    if let Some(gpu) = &machine.gpu {
+        let executions = crate::gpu::derive(physical, structure_analysis, program, &analysis, gpu)?;
+        for (dispatch, execution) in analysis.dispatches.iter_mut().zip(executions) {
+            dispatch.gpu = Some(execution);
+        }
+        crate::gpu::check(program, &analysis)?;
+        // Publication codecs copy the column bounds sources recorded by bindings.
+        analysis.gpu_bindings = (gpu.bindings)(physical, structures, program, structure_analysis, &analysis)?;
+        analysis.gpu_publications = crate::gpu::publication::derive(physical, program, structure_analysis, &analysis)?;
+        crate::gpu::publication::check(physical, program, structure_analysis, &analysis, &analysis.gpu_publications)?;
+        analysis.gpu_bindings.realization = (gpu.realize)(physical, structures, program, structure_analysis, &analysis)?;
+    }
+    // Check the target layout of the recorded resource demands against capacity.
     for dispatch in &analysis.dispatches {
         let Some(level) = checker
             .levels
@@ -237,7 +285,7 @@ pub(crate) fn check_grading_in(
                 "BE-Resource: a bounded machine resource needs a target layout model",
             )
         })?;
-        let shape = crate::resources::dispatch_shape(program, &analysis, dispatch, machine)?;
+        let shape = crate::resources::dispatch_shape(physical, structures, structure_analysis, program, &analysis, dispatch, machine)?;
         let required_bytes = layout(&shape).map_err(|errors| {
             let mut annotated = None;
             for error in errors {
@@ -272,6 +320,8 @@ pub(crate) fn check_grading_in(
             },
         );
     }
+    analysis.task_execution = crate::task_execution::analyze(physical, structure_analysis, program, &analysis);
+    crate::blocks::check_task_covers(physical, structures, program, structure_analysis, &analysis)?;
     Ok(analysis)
 }
 
@@ -311,6 +361,62 @@ impl<'a> Checker<'a> {
 
     fn name(&self, owner: usize) -> String {
         symbol_name(&self.program.sequence.definitions[owner].name)
+    }
+
+    // Formal rule BE-MergeInput: partition ancestry cannot stand in for a
+    // complete ordered provider; only a flat host publication closes it.
+    fn check_merge_inputs(&self, shapes: &BTreeMap<String, Vec<Len>>) -> syn::Result<()> {
+        use crate::structures::physical::Operator;
+        let mut partial = Vec::with_capacity(self.nodes.len());
+        let mut results: Vec<Option<&Ident>> = Vec::with_capacity(self.nodes.len());
+        for (index, node) in self.nodes.iter().enumerate() {
+            let input_partial = node.inputs.iter().any(|&input| partial[input]);
+            let source = node.inputs.first().and_then(|&input| results[input]);
+            let result = match node.term {
+                Term::Rows(name) | Term::Map(name, _) | Term::Compact(name, _)
+                | Term::Group(name, _) => Some(name),
+                Term::Lookup { .. } => self.lookup_readers
+                    .get(&self.lookup_slots[&(node.term as *const Term)])
+                    .and_then(|reader| match reader {
+                        crate::structures::ReaderRef::Result(name) => {
+                            self.physical.get(name).map(|definition| &definition.name)
+                        }
+                        _ => None,
+                    }),
+                _ => source,
+            };
+            if input_partial {
+                let mut current = match node.term {
+                    Term::Map(name, _) | Term::Compact(name, _) => Some(name),
+                    Term::Lookup { .. } => result,
+                    _ => None,
+                };
+                while let Some(name) = current {
+                    if source == Some(name) {
+                        break;
+                    }
+                    let Some(definition) = self.physical.get(&symbol_name(name)) else {
+                        break;
+                    };
+                    if matches!(definition.operator, Operator::Merge(..)) {
+                        return Err(self.error(node.owner,
+                            "BE-MergeInput: evaluate the complete ordered merge before tiling its output"));
+                    }
+                    if matches!(node.term, Term::Lookup { .. }) {
+                        break;
+                    }
+                    current = definition.operator.input();
+                }
+            }
+            let closes_partition = self.roots[node.owner] == index
+                && node.level == 0
+                && matches!(node.term, Term::Store { .. })
+                && shapes.get(&self.name(node.owner)).is_some_and(|shape| shape.len() == 1);
+            partial.push(!closes_partition
+                && (input_partial || matches!(node.term, Term::Tile { .. } | Term::PartitionK { .. })));
+            results.push(result);
+        }
+        Ok(())
     }
 
     fn reference(&self, name: &Ident, owner: usize, level: usize) -> syn::Result<usize> {
@@ -411,11 +517,7 @@ impl<'a> Checker<'a> {
         }
         if separated_store
             && transfer_producer != Some(0)
-            && let Term::Store {
-                capacity: None,
-                inner,
-            } = term
-            && self.unknown_length(inner)
+            && matches!(self.stores.get(&self.name(owner)), Some(Len::Unknown(None)))
         {
             return Err(self.error(
                 owner,
@@ -452,12 +554,12 @@ impl<'a> Checker<'a> {
                 inputs.push(source);
             }
             Term::Rows(name) => {
-                if level != 0 {
+                if !self.levels[level].model.host_rust {
                     self.total_physical(name, None)?;
                 }
             }
             Term::Map(name, inner) | Term::Compact(name, inner) => {
-                if level != 0 {
+                if !self.levels[level].model.host_rust {
                     self.total_physical(name, self.physical_result(inner).as_deref())?;
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
@@ -465,7 +567,7 @@ impl<'a> Checker<'a> {
             Term::Lookup {
                 provider, inner, ..
             } => {
-                if level != 0 {
+                if !self.levels[level].model.host_rust {
                     self.total_physical(provider, None)?;
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
@@ -613,6 +715,16 @@ impl<'a> Checker<'a> {
                         Guard::Lt(length, _) | Guard::Ge(length, _) => {
                             self.uniform_length(length, owner, level)?
                         }
+                        Guard::Statistic(read) => {
+                            if level != 0 {
+                                return Err(self.error(owner, "BE-StatsRead: host scalar reads cannot execute in a device or worker scope"));
+                            }
+                            self.uniform_length(
+                                &Len::Input(symbol_name(&read.ready)),
+                                owner,
+                                level,
+                            )?
+                        }
                         Guard::WorkersLt(_) | Guard::Else => true,
                     };
                     branch_uniform &= guard_uniform;
@@ -690,6 +802,16 @@ impl<'a> Checker<'a> {
             } => {
                 let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
                 keys.sort();
+                if let Some(reader) = self
+                    .lookup_readers
+                    .get(&self.lookup_slots[&(term as *const Term)])
+                {
+                    self.range_lookups.insert((
+                        symbol_name(provider),
+                        reader.clone(),
+                        keys.clone(),
+                    ));
+                }
                 self.range_reads.insert((symbol_name(provider), keys));
                 self.require_ranges(inner);
             }
@@ -718,41 +840,6 @@ impl<'a> Checker<'a> {
                 }
             }
             Term::Store { .. } | Term::Rows(_) => {}
-        }
-    }
-    fn unknown_length(&self, term: &Term) -> bool {
-        fn fixed_key_cover(term: &Term) -> bool {
-            match term {
-                Term::PartitionK { .. } => true,
-                Term::Choose(arms) => {
-                    !arms.is_empty() && arms.iter().all(|(_, arm)| fixed_key_cover(arm))
-                }
-                _ => false,
-            }
-        }
-        match term {
-            Term::Ref(name) => matches!(
-                self.lengths.get(&symbol_name(name)),
-                Some(Len::Unknown(None))
-            ),
-            Term::Lookup { .. } => true,
-            Term::Tile { inner, .. }
-            | Term::Store {
-                capacity: None,
-                inner,
-            } => self.unknown_length(inner),
-            Term::Union(arms) => arms.iter().any(|arm| self.unknown_length(arm)),
-            Term::Choose(arms) => {
-                // Nested choices still select one fixed cover of previously
-                // published rows, so no arm needs an unknown-sized allocation.
-                if fixed_key_cover(term) {
-                    return false;
-                }
-                // The contract records joins of unequal branch lengths.
-                arms.iter().any(|(_, arm)| self.unknown_length(arm))
-                    || arms.windows(2).any(|pair| pair[0].1 != pair[1].1)
-            }
-            _ => false,
         }
     }
     fn collective(
@@ -870,10 +957,8 @@ impl<'a> Checker<'a> {
     }
 
     fn total_physical(&self, result: &Ident, stop: Option<&str>) -> syn::Result<()> {
-        // Formal rule BE-Partial: opaque Bind/Guard code is host-only.
-        // IF-Parameter discharges closed fragments once before dispatch.
-        // Stop at explicit map inputs and checked Sequence stores, whose
-        // opaque results have already been evaluated.
+        // Formal rule BE-RustRepresentation: Rust reads identity row columns.
+        // Stop at explicit map inputs and checked Sequence stores.
         let mut pending = vec![symbol_name(result)];
         let mut visited = BTreeSet::new();
         while let Some(name) = pending.pop() {
@@ -890,12 +975,14 @@ impl<'a> Checker<'a> {
             let Some(definition) = self.physical.get(&name) else {
                 continue;
             };
-            if self.physical_facts.opaque(&definition.operator)
-                && !self.physical_facts.capturable(&definition.operator)
+            if self
+                .physical_facts
+                .rust_reads(&definition.operator)
+                .is_some_and(|reads| !reads.is_subset(self.identity))
             {
                 return Err(syn::Error::new(
                     result.span(),
-                    "BE-Partial: opaque Physical Rust must be evaluated at host before dispatch",
+                    "BE-RustRepresentation: Rust reading encoded columns must run at host",
                 ));
             }
             pending.extend(definition.operator.operands().into_iter().map(symbol_name));
@@ -1006,6 +1093,7 @@ impl<'a> Checker<'a> {
                 .iter()
                 .find_map(|&owner| self.parts.get(&self.name(owner)).copied().flatten());
             result.push(Dispatch {
+                gpu: None,
                 outer_store: domains.into_iter().next().expect("one domain was checked"),
                 members: owners.into_iter().map(|owner| self.name(owner)).collect(),
                 inner_stores: stores.into_iter().map(|owner| self.name(owner)).collect(),

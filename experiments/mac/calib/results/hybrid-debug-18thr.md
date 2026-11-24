@@ -1,3 +1,5 @@
+> Point-in-time debug measurement: exact run date/source revision not recorded in [raw data](hybrid-debug-18thr.json); preserved by `9426e27b`, 2026-10-23. Not re-measured since in the retained evidence; use the [dated hybrid suite](hybrid-2026-10-23.md) for the standard configuration, not these oversubscription diagnostics.
+
 | op | proc | thr | footprint | GB/s | ns/item | median ms | gpu ms | notes |
 |---|---|---:|---:|---:|---:|---:|---:|---|
 | seq_read | cpu | 18 | 1 GiB | 101.2 | 0.08 | 10.610 | - | elem_bytes=8 n_items=134217728 partner=gpu:seq_read:1073741824 partner_threads=1 slowdown=1.676 solo_gbps=169.644 solo_median_ms=6.329 unroll=8 |

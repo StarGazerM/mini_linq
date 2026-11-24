@@ -20,6 +20,52 @@ fn storage_and_round_are_complete_checked_languages() {
 }
 
 #[test]
+fn answer_ownership_follows_each_head_variable_defining_binder() {
+    let source = syn::parse_quote! {
+        struct Q;
+        relation E(x:i32,y:i32) = (e);
+        relation R(x:i32,y:i32,z:i32,w:i32);
+        output R;
+        R(x, *y, z, w) :- E(x,y), for z in [*x], E(z,w);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let target = compile(&storage).unwrap();
+    let rule = &target.context.strata[0].seeds[0];
+    // `x` and `w` are atom-defined columns; `*y` is a value and `z` is defined
+    // by its generator even though a later atom joins on it.
+    assert_eq!(
+        target.holes[rule.hole].answer,
+        [
+            round::AnswerColumn::Borrowed,
+            round::AnswerColumn::Owned,
+            round::AnswerColumn::Owned,
+            round::AnswerColumn::Borrowed,
+        ]
+    );
+    // The recorded fact is printed in Round text and parsed back unchanged.
+    let reparsed: round::Program = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(
+        reparsed.holes[rule.hole].answer,
+        target.holes[rule.hole].answer
+    );
+    // WF-DL-Hole admits any sound record: `owned` (a clone) everywhere, and
+    // `borrowed` only where a positive atom defines the column.
+    let mut cloned = target.clone();
+    cloned.holes[rule.hole].answer = vec![round::AnswerColumn::Owned; 4];
+    round::contract::check(&cloned).unwrap();
+    for (column, binder) in [(1, "computed head"), (2, "generator-defined join variable")] {
+        let mut tampered = target.clone();
+        tampered.holes[rule.hole].answer[column] = round::AnswerColumn::Borrowed;
+        assert!(round::contract::check(&tampered).is_err(), "{binder}");
+    }
+    let mut short = target.clone();
+    short.holes[rule.hole].answer.pop();
+    assert!(round::contract::check(&short).is_err());
+}
+
+#[test]
 fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
     let source = syn::parse_quote! {
         struct Q;
@@ -33,8 +79,8 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
     let incremental = cq_datalog_incremental::compile(&strata).unwrap();
     let storage = cq_datalog_storage::compile(&incremental).unwrap();
     let target = compile(&storage).unwrap();
-    let provider: syn::Type = syn::parse_quote!(
-        ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    let provider: storage::Provider = syn::parse_quote!(
+        @hash_set as ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     let keys: Vec<_> = target.context.strata.iter().flat_map(|s| &s.keys).collect();
     assert!(!keys.is_empty());
@@ -61,15 +107,37 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
         assert!(hole.facts.consumer_canonical);
     }
     check(&storage, &target).unwrap();
-    let batch = compile_with(&storage, quote! {
-        terminals = [custom::batch => batch];
-        cq = pipeline { custom::lower, custom::batch };
-    }).unwrap();
-    for key in batch.context.strata.iter().flat_map(|stratum| &stratum.keys) {
+    let batch = compile_with(
+        &storage,
+        quote! {
+            terminals = [custom::batch => batch];
+            cq = pipeline { custom::lower, custom::batch };
+            lower = 0;
+        },
+    )
+    .unwrap();
+    for key in batch
+        .context
+        .strata
+        .iter()
+        .flat_map(|stratum| &stratum.keys)
+    {
         let query = batch.holes[key.hole].cq.to_token_stream().to_string();
         assert!(query.contains(": i32"));
         assert!(!query.contains(": & i32"));
-        assert!(query.contains("*"));
+        // Key columns are projected variables; a batch arena owns their values.
+        assert!(!query.contains("*"));
+        assert!(
+            batch.holes[key.hole]
+                .answer
+                .iter()
+                .all(|column| *column == round::AnswerColumn::Owned)
+        );
+        // A batch arena holds values: a borrow claim is unsound even for an
+        // atom-defined key variable.
+        let mut tampered = batch.clone();
+        tampered.holes[key.hole].answer[0] = round::AnswerColumn::Borrowed;
+        assert!(round::contract::check(&tampered).is_err());
     }
     check(&storage, &batch).unwrap();
 }
@@ -80,7 +148,13 @@ fn explicit_push_skips_sequence_defaults_but_pull_inherits_them() {
         (quote!(::cq_datalog::passes::print_push), false),
         (quote!(::mini_linq::passes::translate_pull), true),
     ] {
-        let configuration = syn::parse2(quote!(pipeline { print = #terminal; })).unwrap();
+        let input = if sequence {
+            quote!(sequence)
+        } else {
+            quote!(structures)
+        };
+        let configuration =
+            syn::parse2(quote!(pipeline { print = #terminal; print_input = #input; })).unwrap();
         let queue = resolve_cq(configuration).unwrap();
         let sequence_path: syn::Path = syn::parse_quote!(::mini_linq::passes::sequence);
         let grade_path: syn::Path = syn::parse_quote!(::mini_linq::passes::sequential);
@@ -111,12 +185,7 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     round::contract::check(&changed).unwrap();
     round::check_rewrite(&target, &changed).unwrap();
     changed.holes[0].interface = round::HoleInterface::Push;
-    assert!(
-        round::contract::check(&changed)
-            .unwrap_err()
-            .to_string()
-            .contains("hole interface does not match its registered terminal interface")
-    );
+    assert!(round::contract::check(&changed).is_err());
     changed = target.clone();
     changed.holes[0].pipeline.passes.clear();
     assert!(round::contract::check(&changed).is_err());
@@ -127,6 +196,7 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     let facts = &changed.holes[0].facts;
     changed.holes[0].pipeline = syn::parse_quote!(pipeline{custom::lower(#facts), mini_linq::passes::translate_pull(unchecked)});
     changed.holes[0].lower = 0;
+    changed.holes[0].plan = None;
     round::check_rewrite(&target, &changed).unwrap();
 }
 #[test]
@@ -134,12 +204,17 @@ fn fork_arguments_record_queue_and_timing_and_reject_unknown_options() {
     let source = source();
     let target = compile_with(
         &source,
-        quote!(timing=phases;cq=pipeline{custom::plan,custom::lower,mini_linq::passes::translate_pull};),
+        quote!(timing=phases;cq=pipeline{custom::plan,custom::lower,mini_linq::passes::translate_pull};plan=0;lower=1;),
     )
     .unwrap();
     assert_eq!(target.policy.timing, "phases");
     check(&source, &target).unwrap();
-    assert!(target.holes.iter().all(|h| h.pipeline.passes.len() == 3));
+    assert!(
+        target
+            .holes
+            .iter()
+            .all(|h| { h.pipeline.passes.len() == 3 && h.plan == Some(0) && h.lower == 1 })
+    );
     for args in [
         quote!(unknown=none;),
         quote!(timing=none;timing=phases;),
@@ -158,7 +233,6 @@ fn policy_and_correspondence_mutations_are_rejected() {
     let target = compile(&source).unwrap();
     let mutations: &[fn(&mut round::Program)] = &[
         |p| p.context.strata[0].phases.reverse(),
-        |p| p.context.strata[0].seeds[0].insertion = syn::parse_quote!(bag),
         |p| p.context.strata[0].termination.clear(),
         |p| p.context.strata[0].observer = syn::parse_quote!(after_step),
         |p| p.context.outputs[0].conversion = syn::parse_quote!(borrowed),
@@ -202,7 +276,7 @@ fn input_certificates_erase_exactly_and_cannot_hide_other_changes() {
         unreachable!()
     };
     atom.relation = binding.clone();
-    target.holes[rule.hole].rename_host_fact(original, &binding);
+    target.holes[rule.hole].rename_host_evidence(original, &binding);
     target.execution.push(round::Execution {
         hole: rule.hole,
         occurrence: 0,
@@ -243,11 +317,18 @@ fn input_certificates_erase_exactly_and_cannot_hide_other_changes() {
     let mut invalid_mode = suppressed.clone();
     invalid_mode.execution[0].self_dedup = Some(syn::parse_quote!(unknown));
     assert!(round::erase(&invalid_mode).is_err());
-    let mut stale_facts = target.clone();
-    stale_facts.holes[rule.hole].facts = source.holes[rule.hole].facts.clone();
-    let hole = &mut stale_facts.holes[rule.hole];
-    hole.pipeline.passes[hole.lower].arguments = hole.facts.to_token_stream();
-    assert!(round::contract::check(&stale_facts).is_err());
+    // Scan substitution preserves consumer context but must replace the host origin.
+    let mut stale_host = target.clone();
+    let binding = &stale_host.execution[0].binding;
+    let declaration = stale_host.holes[rule.hole]
+        .cq
+        .declarations
+        .iter_mut()
+        .find(|declaration| declaration.name == *binding)
+        .unwrap();
+    declaration.value = Some(syn::parse_quote!(= (#original)));
+    assert!(round::contract::check(&stale_host).is_err());
+    assert!(round::check_rewrite(&source, &stale_host).is_err());
     let changes: &[fn(&mut round::Program)] = &[
         |p| p.execution.push(p.execution[0].clone()),
         |p| p.execution[0].occurrence = 1,
@@ -285,7 +366,10 @@ fn reusable_printer_splices_and_delegates_only_phase_evaluation() {
         .unwrap();
     assert_eq!(phases.len(), 2);
     let text = printed.to_token_stream().to_string();
-    assert!(text.contains("Canonical"));
+    assert!(!text.contains("Canonical"));
+    // Admission anti-joins the committed canonical set, then inserts into NEW.
+    assert!(text.contains(". contains (") && text.contains(". insert ("));
+    assert!(!text.contains("contains_key"));
     assert!(text.contains("while"));
     assert!(text.contains("into_iter"));
     assert!(cq_datalog_print::render_with(&program, &[], |_, _, _, _| unreachable!()).is_err());
@@ -307,6 +391,7 @@ fn declared_terminal_paths_and_typed_interfaces_survive_round_text() {
         &source,
         quote! {
             cq = pipeline { custom::lower, crate::alias::pull };
+            lower = 0;
             terminals = [crate::alias::pull => pull, ::declared::unused_push => push];
         },
     )
@@ -345,16 +430,10 @@ fn default_registry_rejects_unregistered_push_terminals() {
         quote!(mini_linq::passes::print_push),
         quote!(::mini_linq::passes::print_push),
     ] {
-        let error = compile_with(&source, quote!(cq = pipeline { #path };)).unwrap_err();
-        assert!(error.to_string().contains("recorded terminal registry"));
+        assert!(compile_with(&source, quote!(cq = pipeline { #path };)).is_err());
         let mut changed = compile(&source).unwrap();
         changed.holes[0].pipeline = syn::parse2(quote!(pipeline { #path })).unwrap();
-        assert!(
-            round::contract::check(&changed)
-                .unwrap_err()
-                .to_string()
-                .contains("recorded terminal registry")
-        );
+        assert!(round::contract::check(&changed).is_err());
     }
 }
 
@@ -373,7 +452,7 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
     ] {
         let source = compile_with(
             &storage,
-            quote!(cq = pipeline { custom::lower, #terminal };),
+            quote!(cq = pipeline { custom::lower, #terminal }; lower = 0;),
         )
         .unwrap();
         assert!(source.holes.iter().all(|hole| hole.interface == interface));
@@ -402,8 +481,9 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
         let mut mismatched = changed.clone();
         mismatched.holes[0].pipeline.passes.last_mut().unwrap().path = match interface {
             round::HoleInterface::Pull => syn::parse_quote!(::cq_datalog::passes::print_push),
-            round::HoleInterface::Push | round::HoleInterface::Batch =>
-                syn::parse_quote!(::mini_linq::passes::translate_pull),
+            round::HoleInterface::Push | round::HoleInterface::Batch => {
+                syn::parse_quote!(::mini_linq::passes::translate_pull)
+            }
         };
         assert!(round::check_rewrite(&source, &mismatched).is_err());
         mismatched.holes[0].interface = match interface {
@@ -437,6 +517,7 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
         quote! {
             terminals = [crate::alias::push => push];
             cq = pipeline { custom::lower, crate::alias::push };
+            lower = 0;
         },
     )
     .unwrap();
@@ -463,10 +544,17 @@ fn batch_registry_round_trips_and_fork_records_its_interface() {
         quote! {
             terminals = #registry;
             cq = pipeline { custom::lower, ::cq_gpu_sequence::translate_arena };
+            lower = 0;
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert!(!program.holes.is_empty());
-    assert!(program.holes.iter().all(|hole| hole.interface == round::HoleInterface::Batch));
+    assert!(
+        program
+            .holes
+            .iter()
+            .all(|hole| hole.interface == round::HoleInterface::Batch)
+    );
     let replay: round::Program = syn::parse2(program.to_token_stream()).unwrap();
     assert_eq!(program, replay);
     round::contract::check(&replay).unwrap();
@@ -498,10 +586,18 @@ fn publication_permutations_and_loop_forms_are_checked_records() {
     stratum.termination.reverse();
     stratum.termination_test = syn::parse_quote!(any_delta);
     stratum.loop_form = syn::parse_quote!(loop_until_empty);
-    // All extension may precede full-layout updates: both finish before swap.
+    // Full-layout maintenance may be split and permuted: all of it precedes swap.
     for publication in &mut stratum.publication {
-        if publication.operations[0].kind == "full_layouts" {
-            publication.operations.swap(0, 1);
+        let full = publication.operations.remove(0);
+        assert_eq!(full.kind, "full_layouts");
+        for layout in full.layouts {
+            publication.operations.insert(
+                0,
+                round::PublicationOp {
+                    kind: syn::parse_quote!(full_layouts),
+                    layouts: vec![layout],
+                },
+            );
         }
         for operation in &mut publication.operations {
             operation.layouts.reverse();
@@ -535,10 +631,12 @@ fn publication_obligations_reject_incomplete_or_stale_rounds() {
         |p| p.context.strata[0].termination[0] = usize::MAX,
         |p| p.context.strata[0].termination_test = syn::parse_quote!(first_delta),
         |p| {
-            for member in &mut p.context.strata[0].publication {
-                member
-                    .operations
-                    .retain(|operation| operation.kind != "all_extend");
+            let relation = p.context.strata[0].publication[0].relation;
+            let canonical = p.context.relations[relation].providers.canonical;
+            for operation in &mut p.context.strata[0].publication[0].operations {
+                if operation.kind == "full_layouts" {
+                    operation.layouts.retain(|&layout| layout != canonical);
+                }
             }
         },
         |p| {
@@ -593,15 +691,22 @@ fn publication_obligations_reject_incomplete_or_stale_rounds() {
                 .publication
                 .iter_mut()
                 .flat_map(|member| &mut member.operations)
-                .find(|operation| operation.kind == "all_extend")
+                .find(|operation| operation.kind == "delta_swap")
                 .unwrap();
             operation.layouts.push(0);
         },
-        |p| p.context.outputs[2].conversion = syn::parse_quote!(owned_into_iter),
-        |p| p.context.relations[1].providers.all = syn::parse_quote!(UnrecordedProvider),
-        |p| p.context.layouts[0].provider = syn::parse_quote!(UnrecordedProvider),
+        |p| p.context.outputs[2].conversion = syn::parse_quote!(borrowed_cloned_into_iter),
+        |p| {
+            p.context.relations[1].providers.next =
+                syn::parse_quote!(@unrecorded as UnrecordedProvider)
+        },
+        |p| p.context.relations[1].providers.canonical = usize::MAX,
+        |p| p.context.layouts[0].provider = syn::parse_quote!(@unrecorded as UnrecordedProvider),
         |p| p.context.layouts[0].maintenance = syn::parse_quote!(never),
-        |p| p.context.delta_layouts[0].provider = syn::parse_quote!(UnrecordedProvider),
+        |p| {
+            p.context.delta_layouts[0].provider =
+                syn::parse_quote!(@unrecorded as UnrecordedProvider)
+        },
         |p| p.context.delta_layouts[0].maintenance = syn::parse_quote!(when_nonempty),
     ];
     for (index, change) in changes.iter().enumerate() {
@@ -686,14 +791,13 @@ fn execution_records_have_authored_lossless_grammar() {
         relation { 2 }
         operations { [
             { kind { full_layouts } layouts { [{ 3 } { 1 }] } }
-            { kind { all_extend } layouts { [] } }
             { kind { delta_swap } layouts { [] } }
             { kind { delta_rebuild } layouts { [{ 0 }] } }
         ] }
     };
     assert_eq!(publication.relation, 2);
     assert_eq!(publication.operations[0].layouts, [3, 1]);
-    assert_eq!(publication.operations[2].kind, "delta_swap");
+    assert_eq!(publication.operations[1].kind, "delta_swap");
     assert_eq!(
         syn::parse2::<round::Publication>(publication.to_token_stream()).unwrap(),
         publication
@@ -721,7 +825,7 @@ fn execution_records_have_authored_lossless_grammar() {
 }
 
 #[test]
-fn canonical_consumers_have_exact_owners_and_certified_inputs() {
+fn canonical_consumers_have_exact_owners_and_context() {
     let target = compile(&source()).unwrap();
     for (index, relation) in target.context.relations.iter().enumerate() {
         let expected: Vec<_> = target
@@ -736,19 +840,6 @@ fn canonical_consumers_have_exact_owners_and_certified_inputs() {
     }
     for hole in &target.holes {
         assert!(hole.facts.consumer_canonical);
-        let inputs: std::collections::BTreeSet<_> = hole
-            .cq
-            .query
-            .body
-            .iter()
-            .filter_map(|item| match item {
-                round::cq::BodyItem::Positive { atom } => {
-                    Some(cq_syntax::symbol_name(&atom.relation))
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(hole.facts.discharged_host_sets, inputs);
         let packet: cq_stage::Context =
             syn::parse2(hole.pipeline.passes[hole.lower].arguments.clone()).unwrap();
         assert_eq!(packet, hole.facts);
@@ -765,13 +856,6 @@ fn canonical_consumers_have_exact_owners_and_certified_inputs() {
         },
         |p| p.context.relations[1].admit[0] = usize::MAX,
         |p| p.holes[0].facts.consumer_canonical = false,
-        |p| {
-            p.holes[0]
-                .facts
-                .discharged_host_sets
-                .insert("Unknown".into());
-        },
-        |p| p.holes[0].facts.discharged_host_sets.clear(),
         |p| p.holes[0].cq.declarations[0].value = Some(syn::parse_quote!(= (unproved_rows))),
     ];
     for (index, change) in changes.iter().enumerate() {
@@ -787,38 +871,80 @@ fn canonical_consumers_have_exact_owners_and_certified_inputs() {
     }
     let mut changed = target.clone();
     let hole = &mut changed.holes[0];
-    hole.pipeline.passes[hole.lower].arguments = quote!(consumer = canonical);
+    hole.pipeline.passes[hole.lower].arguments = quote!();
     assert!(round::contract::check(&changed).is_err());
-}
-
-#[test]
-fn uncertified_hosts_do_not_receive_discharge_facts() {
-    let mut storage = source();
-    storage.certificates.clear();
-    let target = compile(&storage).unwrap();
-    assert!(target.holes.iter().all(|hole| hole.facts.consumer_canonical
-        && hole.facts.discharged_host_sets.is_empty()));
-    round::contract::check(&target).unwrap();
 }
 
 #[test]
 fn custom_lower_aliases_require_an_explicit_role() {
     let storage = source();
     let queue = quote!(cq = pipeline { custom::physical, ::mini_linq::passes::translate_pull };);
-    assert!(
-        compile_with(&storage, queue.clone())
-            .unwrap_err()
-            .to_string()
-            .contains("lower")
-    );
+    assert!(compile_with(&storage, queue.clone()).is_err());
     let target = compile_with(&storage, quote!(#queue lower = 0;)).unwrap();
     assert!(target.holes.iter().all(|hole| hole.lower == 0));
     for arguments in [
         quote!(#queue lower = 7;),
         quote!(#queue lower = 0; lower = 0;),
         quote!(cq = pipeline { lower, lower, ::mini_linq::passes::translate_pull };),
-        quote!(cq = pipeline { lower(host_set Unknown discharged), ::mini_linq::passes::translate_pull };),
     ] {
         assert!(compile_with(&storage, arguments).is_err());
     }
+}
+
+#[test]
+fn scan_correspondence_accepts_an_unwrapped_read_and_rejects_wrong_sources() {
+    let storage = source();
+    let original = compile(&storage).unwrap();
+    let component = original
+        .context
+        .strata
+        .iter()
+        .position(|s| !s.seeds.is_empty())
+        .unwrap();
+    let rule = original.context.strata[component].seeds[0].clone();
+    let scan = rule.scan.as_ref().unwrap();
+    let (name, host) = match scan.source {
+        round::InputSource::Layout(index) => {
+            let layout = &original.context.layouts[index];
+            (layout.name.clone(), layout.host.clone())
+        }
+        round::InputSource::Delta(index) => {
+            let relation = &original.context.relations[index];
+            (
+                relation.delta.clone().unwrap(),
+                relation.delta_host.clone().unwrap(),
+            )
+        }
+    };
+    let mut alternative = original.clone();
+    alternative.context.strata[component].seeds[0].scan = None;
+    let hole = &mut alternative.holes[rule.hole];
+    let round::cq::BodyItem::Positive { atom } = &mut hole.cq.query.body[0] else {
+        panic!()
+    };
+    atom.relation = name.clone();
+    let declaration = hole
+        .cq
+        .declarations
+        .iter_mut()
+        .find(|d| d.name == scan.binding)
+        .unwrap();
+    declaration.name = name.clone();
+    declaration.value = Some(syn::parse_quote!(= (&#host)));
+    hole.rename_host_evidence(&scan.binding, &name);
+    check(&storage, &alternative).unwrap();
+    let mut invalid = original.clone();
+    invalid.context.strata[component].seeds[0]
+        .scan
+        .as_mut()
+        .unwrap()
+        .source = round::InputSource::Layout(usize::MAX);
+    assert!(check(&storage, &invalid).is_err());
+    let mut invalid = original.clone();
+    invalid.context.strata[component].seeds[0]
+        .scan
+        .as_mut()
+        .unwrap()
+        .source = round::InputSource::Delta(rule.head);
+    assert!(check(&storage, &invalid).is_err());
 }

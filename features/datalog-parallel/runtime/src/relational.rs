@@ -381,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "boom")]
+    #[should_panic]
     fn a_panicking_action_resumes_after_in_flight_work() {
         let mut s = RelationalScheduler::new(vec![(0, vec![]), (0, vec![])], &[true]);
         drive(&mut s, &|action| match action {

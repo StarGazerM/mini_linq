@@ -4,13 +4,13 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 #[test]
-fn retains_integral_host_without_changing_graph_or_keys() {
+fn retains_host_without_changing_graph_or_keys() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
-        p = pipe canon probe first [x] s,r;
+        p = let canon probe first [x] s,r;
         return p as answer(x,y);
     }};
     let actual = build_host_reads(&source, TokenStream::new()).unwrap();
@@ -20,14 +20,12 @@ fn retains_integral_host_without_changing_graph_or_keys() {
     ir::check_rewrite(&source, &actual).unwrap();
     assert_eq!(build_host_reads(&actual, quote!(r)).unwrap(), actual);
     let selected = cq_structure_selection::compile(&actual).unwrap();
-    let selected = cq_rewrite_passes::sorted_runs(&selected, TokenStream::new()).unwrap();
-    let facts = cq_testkit::structures::contract::check(&selected).unwrap();
+    let selected = cq_rewrite_passes::sorted_runs(&actual, &selected, TokenStream::new()).unwrap();
+    let facts = cq_testkit::structures::contract::check(&actual, &selected).unwrap();
     assert!(facts.built.contains_key("r"));
     assert!(
-        !facts
-            .fallbacks
-            .keys()
-            .any(|(host, reader, _)| host == "r" && reader != "scan")
+        !facts.fallbacks.keys().any(|(host, reader, _)| host == "r"
+            && !matches!(reader, cq_lang_structures::ReaderRef::Scan))
     );
 }
 
@@ -35,9 +33,9 @@ fn retains_integral_host_without_changing_graph_or_keys() {
 fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {b -> y};
-        joined = pipe canon probe first [] l,r;
+        l = pipe rename L {a -> x};
+        r = pipe rename R {b -> y};
+        joined = let canon probe first [] l,r;
         return joined as answer(x,y);
     }};
     let target = build_host_reads(&source, quote!(r)).unwrap();
@@ -48,35 +46,37 @@ fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
     assert_eq!(target.program.definitions[2], source.program.definitions[2]);
     ir::check_rewrite(&source, &target).unwrap();
     let selected = cq_structure_selection::compile(&target).unwrap();
-    cq_testkit::structures::contract::check(&selected).unwrap();
+    cq_testkit::structures::contract::check(&target, &selected).unwrap();
 }
 
 #[test]
-fn skips_non_integral_and_lazy_membership() {
-    for source in [
-        syn::parse_quote! { physical {
-            relation L(a:String); relation R(a:String);
-            l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
-            s = pipe semi eager [x] l,r; return s as answer(x);
-        }},
-        syn::parse_quote! { physical {
-            relation L(a:i64); relation R(a:i64);
-            l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
-            s = pipe semi lazy [x] l,r; return s as answer(x);
-        }},
-    ] {
-        assert_eq!(
-            build_host_reads(&source, TokenStream::new()).unwrap(),
-            source
-        );
-        assert!(build_host_reads(&source, quote!(r)).is_err());
-    }
+fn retains_nonintegral_hosts_but_skips_lazy_membership() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:Vec<i64>); relation R(a:Vec<i64>);
+        l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
+        s = pipe semi eager [x] l,r; return s as answer(x);
+    }};
+    let mut expected = source.clone();
+    expected.program.definitions[1].mode = ir::Mode::Let(Default::default());
+    assert_eq!(
+        build_host_reads(&source, TokenStream::new()).unwrap(),
+        expected
+    );
+    assert_eq!(build_host_reads(&source, quote!(r)).unwrap(), expected);
+
+    let lazy: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(a:i64);
+        l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
+        s = pipe semi lazy [x] l,r; return s as answer(x);
+    }};
+    assert_eq!(build_host_reads(&lazy, TokenStream::new()).unwrap(), lazy);
+    assert!(build_host_reads(&lazy, quote!(r)).is_err());
 }
 
 #[test]
-fn public_pipeline_preserves_duplicates_until_canon() {
-    let left = [(1i64,), (2,), (1,)];
-    let right = [(1i64, 8i64), (1, 9), (2, 7), (1, 8)];
+fn public_pipeline_preserves_set_input_answers() {
+    let left = [(1i64,), (2,)];
+    let right = [(1i64, 8i64), (1, 9), (2, 7)];
     let mut answer: Vec<_> = mini_linq::compile! {
         pipeline {
             physical = [cq_rewrites::build_host_reads];

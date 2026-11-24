@@ -1,8 +1,9 @@
 //! Strict row-oriented datasets shared by MiniLinq and DuckDB.
 //!
 //! A dataset directory contains one headerless integer CSV file per declared
-//! input and a small, deterministic manifest. Raw duplicate rows are retained:
-//! both MiniLinq and the SQL oracle apply input set semantics after loading.
+//! input and a small, deterministic manifest. Raw duplicate rows are retained
+//! for metadata and the SQL oracle; `schema::Inputs` canonicalizes them before
+//! constructing any MiniLinq host.
 
 use std::collections::BTreeSet;
 use std::error::Error as StdError;
@@ -352,8 +353,9 @@ impl Dataset {
         Ok(dataset)
     }
 
-    /// Validate rows already decoded by a declaration-generated loader.
-    /// Only the manifest is read here; relation files are not read a second time.
+    /// Validate raw rows already decoded from bounded source batches.
+    /// Collected relation loaders canonicalize instead and cannot stand in for
+    /// the raw stream recorded in this manifest. Relation files are not reread.
     pub fn from_loaded_schema(
         schema: &[cq::RelationDecl],
         directory: impl AsRef<Path>,

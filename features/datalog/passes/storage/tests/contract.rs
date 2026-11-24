@@ -132,13 +132,16 @@ fn authored_constant_keys_are_optional_but_new_variables_and_wildcards_are_not_k
     for index in 0..2 {
         let mut missing_constant = source.clone();
         missing_constant.layouts[index].key -= 1;
+        respell(&mut missing_constant, index);
         check_rewrite(&source, &missing_constant).unwrap();
     }
     let mut repeated = source.clone();
     repeated.layouts[0].key = 2;
+    respell(&mut repeated, 0);
     assert!(contract::check(&repeated).is_err());
     let mut wildcard = source.clone();
     wildcard.layouts[1].key = 3;
+    respell(&mut wildcard, 1);
     assert!(contract::check(&wildcard).is_err());
 }
 
@@ -184,9 +187,11 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
         columns: vec![1, 0],
         key: 0,
         provider: syn::parse_quote!(
-            ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
+            @hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
         ),
+        hasher: cq_lang_datalog_storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(admitted_rows),
+        protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
     alternate.reads[0].index = index;
     alternate.reads[0].columns = vec![1, 0];
@@ -196,15 +201,13 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
     // Layout storage order is not an IR obligation when bindings are updated.
     let count = alternate.layouts.len();
     alternate.layouts.reverse();
-    for certificate in &mut alternate.certificates {
-        if certificate.kind == "layout" {
-            certificate.index = count - 1 - certificate.index;
-        }
-    }
     for read in &mut alternate.reads {
         if read.kind == "full" {
             read.index = count - 1 - read.index;
         }
+    }
+    for provider in &mut alternate.providers {
+        provider.canonical = count - 1 - provider.canonical;
     }
     alternate.reads.reverse();
     check_rewrite(&original, &alternate).unwrap();
@@ -216,9 +219,11 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
         columns: vec![1, 0],
         key: 0,
         provider: syn::parse_quote!(
-            ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
+            @hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
         ),
+        hasher: cq_lang_datalog_storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(replace_each_run),
+        protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
     check_rewrite(&original, &alternate).unwrap();
 }
@@ -252,6 +257,68 @@ fn every_read_must_serve_exactly_its_positive_occurrence() {
 }
 
 #[test]
+fn negations_record_a_checked_set_key_provider_and_hasher() {
+    use cq_lang_datalog_storage::{Hasher, LayoutProtocol, provider};
+    let original = authored(INCREMENTAL);
+    assert!(!original.negations.is_empty());
+    for negative in &original.negations {
+        assert_eq!(
+            negative.provider,
+            syn::parse_quote!(@hash_set as ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+        );
+        assert_eq!(negative.hasher, Hasher::Fx);
+    }
+    let tokens = original.to_token_stream();
+    assert_eq!(syn::parse2::<Program>(tokens).unwrap(), original);
+    // Legal alternatives: the keyed hasher, and a declared verbatim set token.
+    let mut keyed = original.clone();
+    keyed.negations[0].provider = syn::parse_quote!(@hash_set as ::cq_storage::HashSet<_>);
+    keyed.negations[0].hasher = Hasher::Keyed;
+    check_rewrite(&original, &keyed).unwrap();
+    let mut authored_set = original.clone();
+    authored_set.tokens.push(provider::declared(
+        "custom_set",
+        provider::Spelling::Verbatim,
+        Some(LayoutProtocol::Set),
+        provider::Admission::None,
+        false,
+        provider::TaskHasher::Fx,
+        &[provider::HostRead::Membership],
+        &[],
+    ));
+    authored_set.negations[0].provider = syn::parse_quote!(@custom_set as ::my::KeySet<_>);
+    authored_set.negations[0].hasher = Hasher::None;
+    check_rewrite(&original, &authored_set).unwrap();
+    // Illegal records: spelling, hasher, token and protocol must agree.
+    let mutations: &[fn(&mut Program)] = &[
+        |p| p.negations[0].hasher = Hasher::Keyed,
+        |p| p.negations[0].hasher = Hasher::None,
+        |p| {
+            p.negations[0].provider.ty =
+                syn::parse_quote!(::std::collections::HashSet<(i32,), ::cq_storage::HashState>)
+        },
+        |p| p.negations[0].provider.token = syn::parse_quote!(undeclared),
+        |p| {
+            p.negations[0].provider = syn::parse_quote!(
+                @hash_map as ::std::collections::HashMap<_, ::std::vec::Vec<()>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+            )
+        },
+        |p| {
+            p.negations[0].provider = syn::parse_quote!(@rows_vec as ::std::vec::Vec<_>);
+            p.negations[0].hasher = Hasher::None;
+        },
+    ];
+    for (index, mutate) in mutations.iter().enumerate() {
+        let mut changed = original.clone();
+        mutate(&mut changed);
+        assert!(
+            contract::check(&changed).is_err(),
+            "key-set mutation {index}"
+        );
+    }
+}
+
+#[test]
 fn rust_bindings_are_available_only_after_their_written_clause() {
     let original = authored(
         "struct Q; relation E(x:i32,y:i32)=(e); relation R(x:i32); output R;
@@ -268,9 +335,11 @@ fn rust_bindings_are_available_only_after_their_written_clause() {
         columns: vec![1, 0],
         key: 2,
         provider: syn::parse_quote!(
-            ::std::collections::HashMap<(i32, i32,), ::std::vec::Vec<()>, ::cq_storage::HashState>
+            @hash_map as ::std::collections::HashMap<(i32, i32,), ::std::vec::Vec<()>, ::cq_storage::HashState>
         ),
+        hasher: cq_lang_datalog_storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(admitted_rows),
+        protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
     alternate.reads[1].index = index;
     alternate.reads[1].columns = vec![1, 0];
@@ -308,18 +377,19 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
         |p| p.layouts[0].maintenance = syn::parse_quote!(replace_each_run),
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(append),
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(admitted_rows),
-        |p| p.providers[2].next = syn::parse_quote!(custom::DifferentRows),
-        |p| p.providers[0].all = syn::parse_quote!(custom::UnusedRows),
-        |p| p.providers[0].seen = syn::parse_quote!(custom::UnusedSeen),
+        |p| p.providers[2].next = syn::parse_quote!(@rows_vec as custom::DifferentRows),
+        |p| p.providers[2].canonical = usize::MAX,
+        |p| p.providers[2].canonical = p.providers[0].canonical,
         |p| {
-            p.providers[0].delta = syn::parse_quote!(custom::UnusedRows);
-            p.providers[0].next = syn::parse_quote!(custom::UnusedRows);
+            let reach = p.providers[2].canonical;
+            p.layouts[reach].key -= 1;
         },
-        |p| p.providers[0].all_init = syn::parse_quote!(custom::empty()),
+        |p| {
+            p.providers[0].delta = syn::parse_quote!(@rows_vec as custom::UnusedRows);
+            p.providers[0].next = syn::parse_quote!(@rows_vec as custom::UnusedRows);
+        },
         |p| p.providers[0].delta_init = syn::parse_quote!(custom::empty()),
         |p| p.providers[0].next_init = syn::parse_quote!(custom::empty()),
-        |p| p.providers[2].canonical_name = syn::parse_quote!(UnusedCanonical),
-        |p| p.providers[2].canonical_set = syn::parse_quote!(custom::UnusedSet<R>),
         |p| {
             let mut extra = p.layouts[0].clone();
             extra.maintenance = syn::parse_quote!(omit);
@@ -347,21 +417,46 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
 fn opaque_providers_and_initializers_are_not_whitelisted() {
     let original = authored(INCREMENTAL);
     let mut alternate = original.clone();
-    let provider = &mut alternate.providers[0];
-    provider.canonical_name = syn::parse_quote!(OrderedCanonical);
-    provider.canonical_set = syn::parse_quote!(::std::collections::BTreeSet<R>);
+    // Opaque providers are authored verbatim tokens with declared facts.
+    let canonical = alternate.providers[2].canonical;
+    for (name, protocol) in [
+        ("custom_delta", None),
+        ("ordered_set", Some(alternate.layouts[canonical].protocol)),
+        (
+            "ordered_map",
+            Some(cq_lang_datalog_storage::LayoutProtocol::GroupedMap),
+        ),
+    ] {
+        alternate
+            .tokens
+            .push(cq_lang_datalog_storage::provider::declared(
+                name,
+                cq_lang_datalog_storage::provider::Spelling::Verbatim,
+                protocol,
+                cq_lang_datalog_storage::provider::Admission::None,
+                false,
+                cq_lang_datalog_storage::provider::TaskHasher::Fx,
+                &[],
+                &[],
+            ));
+    }
     let provider = &mut alternate.providers[2];
-    provider.all = syn::parse_quote!(custom::Rows<(i32, i32,)>);
-    provider.seen = syn::parse_quote!(::std::collections::BTreeSet<(i32, i32,)>);
-    provider.delta = syn::parse_quote!(custom::Delta<(i32, i32,)>);
-    provider.next = syn::parse_quote!(custom::Delta<(i32, i32,)>);
-    provider.all_init = syn::parse_quote!(custom::Rows::empty());
+    provider.delta = syn::parse_quote!(@custom_delta as custom::Delta<(i32, i32,)>);
+    provider.next = syn::parse_quote!(@custom_delta as custom::Delta<(i32, i32,)>);
     provider.delta_init = syn::parse_quote!(custom::Delta::empty());
     provider.next_init = syn::parse_quote!(custom::Delta::empty());
-    alternate.layouts[0].provider =
-        syn::parse_quote!(::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>);
-    alternate.delta_layouts[0].provider =
-        syn::parse_quote!(::std::collections::BTreeMap<(i32,), ::std::vec::Vec<(i32,)>>);
+    alternate.layouts[canonical].provider = syn::parse_quote!(
+        @ordered_set as ::std::collections::BTreeMap<(i32, i32,), ::std::vec::Vec<()>>
+    );
+    alternate.layouts[0].provider = syn::parse_quote!(
+        @ordered_map as ::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>
+    );
+    alternate.delta_layouts[0].provider = syn::parse_quote!(
+        @ordered_map as ::std::collections::BTreeMap<(i32,), ::std::vec::Vec<(i32,)>>
+    );
+    alternate.layouts[canonical].hasher = cq_lang_datalog_storage::Hasher::None;
+    alternate.layouts[0].hasher = cq_lang_datalog_storage::Hasher::None;
+    alternate.delta_layouts[0].hasher = cq_lang_datalog_storage::Hasher::None;
     check_rewrite(&original, &alternate).unwrap();
     cq_datalog_storage::check(&original.incremental, &alternate).unwrap();
     let replay: Program = syn::parse2(alternate.to_token_stream()).unwrap();
@@ -374,12 +469,10 @@ fn provider_records_reject_missing_or_malformed_fields() {
     let source = authored(INCREMENTAL);
     let provider = source.providers[0].to_token_stream().to_string();
     for malformed in [
-        provider.replacen("canonical_name", "unknown", 1),
-        provider.replacen("canonical_set", "unknown", 1),
-        provider.replacen("all_init", "unknown", 1),
+        provider.replacen("canonical", "unknown", 1),
         provider.replacen("delta_init", "unknown", 1),
         provider.replacen("next_init", "unknown", 1),
-        provider.replacen("canonical_set {", "canonical_set { 123", 1),
+        provider.replacen("canonical {", "canonical { x", 1),
     ] {
         assert!(syn::parse_str::<cq_lang_datalog_storage::Providers>(&malformed).is_err());
     }
@@ -393,51 +486,23 @@ fn provider_records_reject_missing_or_malformed_fields() {
     }
 }
 
-#[test]
-fn canonical_host_certificates_require_structural_provenance() {
-    let original = authored(INCREMENTAL);
-    assert!(!original.certificates.is_empty());
-    let changes: &[fn(&mut Program)] = &[
-        |p| p.certificates.push(p.certificates[0].clone()),
-        |p| p.certificates[0].kind = syn::parse_quote!(unknown),
-        |p| p.certificates[0].index = usize::MAX,
-        |p| p.certificates[0].source = syn::parse_quote!(admission),
-        |p| p.certificates[0].columns.clear(),
-        |p| {
-            p.certificates
-                .iter_mut()
-                .find(|c| c.kind == "layout")
-                .unwrap()
-                .columns = vec![0]
-        },
-        |p| {
-            p.certificates
-                .iter_mut()
-                .find(|c| c.kind == "layout")
-                .unwrap()
-                .source = syn::parse_quote!(delta)
-        },
-        |p| p.certificates.retain(|c| c.kind != "all"),
-        |p| {
-            p.certificates
-                .iter_mut()
-                .find(|c| c.kind == "negation")
-                .unwrap()
-                .source = syn::parse_quote!(provider)
-        },
-    ];
-    for (index, change) in changes.iter().enumerate() {
-        let mut changed = original.clone();
-        change(&mut changed);
-        assert!(
-            contract::check(&changed).is_err(),
-            "certificate mutation {index}"
-        );
-    }
-    let mut uncertified = original.clone();
-    uncertified.certificates.clear();
-    contract::check(&uncertified).unwrap();
-    check_rewrite(&original, &uncertified).unwrap();
-    let replay: Program = syn::parse2(original.to_token_stream()).unwrap();
-    assert_eq!(replay.certificates, original.certificates);
+/// Respell a base-token layout after its key changed: the token's spelling of
+/// the new key/payload schema (a full-key set becomes a grouped map).
+fn respell(program: &mut Program, index: usize) {
+    use cq_lang_datalog_storage::provider;
+    let layout = &mut program.layouts[index];
+    let declaration = program
+        .incremental
+        .strata
+        .source
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == layout.relation)
+        .unwrap();
+    let (key, payload) =
+        cq_lang_datalog_storage::layout_schema(declaration, &layout.columns, layout.key);
+    let token = provider::hash_map();
+    layout.protocol = cq_lang_datalog_storage::LayoutProtocol::GroupedMap;
+    layout.provider.ty = provider::spell(&token, &key, &payload, layout.hasher).unwrap();
+    layout.provider.token = token.token;
 }

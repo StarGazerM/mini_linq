@@ -12,6 +12,7 @@ use cq_lang_vo::{Reduction, Step};
 use cq_reduce::{Options, Reductions};
 use quote::quote;
 use std::collections::BTreeSet;
+use syn::parse::Parser;
 
 const TREE: Options = Options {
     semijoins: Reductions::Tree,
@@ -32,8 +33,8 @@ fn coarse(source: &cq::Program) -> valuation::Program {
         let columns = atom.variables();
         quote!(#relation @ #clause (#(#columns),*);)
     });
-    let program = &source;
-    syn::parse2(quote! { #program valuation { #(#steps)* } }).unwrap()
+    (|input: syn::parse::ParseStream| valuation::Program::parse(input, source))
+        .parse2(quote! { valuation { #(#steps)* } }).unwrap()
 }
 
 /// The reducer's `reduce … with …` steps as `(target, support)` clauses, all
@@ -68,9 +69,9 @@ type ReductionsSchedule = Vec<(usize, usize)>;
 fn schedule(text: &str) -> (JoinTree, ReductionsSchedule) {
     let source: cq::Program = syn::parse_str(text).unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
-    let plan = cq_reduce::compile(&coarse(&normal), &TREE)
+    let plan = cq_reduce::compile(&normal, &coarse(&normal), &TREE)
         .expect("YA scheduling exercise must emit complete legal reductions");
-    cq_reduce::check(&coarse(&normal), &plan, &TREE).unwrap();
+    cq_reduce::check(&normal, &coarse(&normal), &plan, &TREE).unwrap();
     let tree = Analysis::of(&normal)
         .join_tree
         .expect("every fixture is acyclic");
@@ -214,5 +215,5 @@ fn a_cyclic_query_has_no_schedule() {
         relation E(a:i32,b:i32);
         answer(x) :- E(x,y), E(y,z), E(z,x);
     };
-    assert!(cq_reduce::compile(&coarse(&source), &TREE).is_err());
+    assert!(cq_reduce::compile(&source, &coarse(&source), &TREE).is_err());
 }

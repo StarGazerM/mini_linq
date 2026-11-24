@@ -1,43 +1,54 @@
 //! Narrow RA-to-RA certificates for reduction absorption and dead expansion.
 //!
-//! The ordinary schedule contract preserves independent witness wiring. This
-//! additional proof checks actual named-definition substitutions instead of
-//! relaxing that contract or identifying witnesses by occurrence number.
+//! The ordinary schedule contract preserves independent witness wiring.
+//! Absorption and forward dead expansion prove named-definition substitutions.
+//! The inverse dead-expansion certificate also compares independently named
+//! programs, but only after source-side demand certifies each exposed support.
+//! None of these proofs merges independently projected witnesses.
 
-use super::{Kind, Schedule};
+use super::{Atoms, Kind, Structure};
 use crate::{Operator, Program, symbol_name};
 use std::collections::{HashMap, HashSet};
 
-pub(super) fn check(source: &Program, target: &Program, schedule: &Schedule) -> bool {
-    check_absorption(source, target, schedule) || check_dead_expansion(source, target, schedule)
+pub(super) fn check(
+    source: &Program,
+    target: &Program,
+    schedule: &Structure,
+    atoms: &mut Atoms,
+) -> bool {
+    check_absorption(source, target, atoms)
+        || check_dead_expansion(source, target, schedule, atoms)
+        || check_inverse_dead_expansion(schedule, target, atoms)
 }
 
-/// Supply an independently checked inverse of the dead-expansion law to the
-/// VO schedule checker. This uses only the supplied target, never elaboration
-/// or planner choices. Existential support equalities remain scoped until an
-/// actual natural-join witness has been proved equivalent to that target.
-pub(super) fn check_expanded(source: &Schedule, target: &Program) -> bool {
+/// Compare independently named programs through the inverse of dead expansion.
+/// Every exposed support is first certified by the forward law's source-side
+/// demand check; the final structural comparison still preserves witness wiring.
+fn check_inverse_dead_expansion(
+    source: &Structure,
+    target: &Program,
+    atoms: &mut Atoms,
+) -> bool {
     if source.nodes.iter().any(|node| {
         !matches!(
             node.kind,
             Kind::Unit | Kind::Atom(_) | Kind::Project | Kind::Join(_) | Kind::Select
         )
     }) || target.plan.definitions.iter().any(|definition| {
-        matches!(
+        !matches!(
             definition.operator,
-            Operator::Bind(_)
-                | Operator::Guard(_)
-                | Operator::Anti(_)
-                | Operator::Union(_)
-                | Operator::Group(_)
+            Operator::Unit(_)
+                | Operator::Rename(_)
+                | Operator::Project(_)
+                | Operator::NaturalJoin(_)
+                | Operator::Semijoin(_)
+                | Operator::Select(_)
         )
     }) {
         return false;
     }
     let mut expanded = target.clone();
-    // Start outside support subtrees: exposing an outer semijoin's hidden
-    // columns can restore primary access to the exact named support, without
-    // flattening independent witnesses into one occurrence-wide equality.
+    // Expose outer supports first, without merging independent witnesses.
     for index in (0..expanded.plan.definitions.len()).rev() {
         let Operator::Semijoin(join) = &expanded.plan.definitions[index].operator else {
             continue;
@@ -50,13 +61,12 @@ pub(super) fn check_expanded(source: &Schedule, target: &Program) -> bool {
         }));
         let previous =
             std::mem::replace(&mut expanded.plan.definitions[index].operator, replacement);
-        let Ok(schedule) = Schedule::from_program(&expanded) else {
+        let Ok(schedule) = Structure::from_program(&expanded, atoms) else {
             expanded.plan.definitions[index].operator = previous;
             continue;
         };
-        // The expanded program is the SOURCE of the forward set identity.
-        // This catches new implicit downstream keys that did not exist in the
-        // supplied target's headings, as well as selections and output.
+        // Demand belongs to the expanded SOURCE of the forward identity:
+        // newly introduced downstream join keys must not become invisible.
         let demand = source_demand(&expanded, &schedule);
         let left = schedule.nodes[index].operands[0];
         if demand[index]
@@ -66,106 +76,119 @@ pub(super) fn check_expanded(source: &Schedule, target: &Program) -> bool {
             expanded.plan.definitions[index].operator = previous;
             continue;
         }
-        if super::compare(source, &schedule).is_ok() {
+        if source.check(&schedule).is_ok() {
             return true;
         }
     }
     false
 }
 
-fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> bool {
+// Formal rule RA-Absorb: Certify linear key-retaining pipes to a current named support witness, independent of serialization order.
+fn check_absorption(source: &Program, target: &Program, atoms: &mut Atoms) -> bool {
     if source.plan.output != target.plan.output {
         return false;
     }
-    // from_program emits exactly one schedule node per named definition.
-    let indices: HashMap<_, _> = source
+    let targets: HashMap<_, _> = target
         .plan
         .definitions
         .iter()
-        .enumerate()
-        .map(|(index, definition)| (symbol_name(&definition.result), index))
+        .map(|d| (symbol_name(&d.result), d))
         .collect();
-    let mut negative = vec![false; schedule.nodes.len()];
-    let mut opaque = vec![false; schedule.nodes.len()];
-    for (index, node) in schedule.nodes.iter().enumerate() {
-        if matches!(node.kind, Kind::Anti(_)) {
-            negative[node.operands[1]] = true;
+    let mut current = source.clone();
+    loop {
+        if current.plan.definitions.len() == targets.len()
+            && current.plan.definitions.iter().all(|d| {
+                targets.get(&symbol_name(&d.result)) == Some(&d)
+            })
+        {
+            return true;
         }
-        opaque[index] = matches!(node.kind, Kind::Rust(_) | Kind::Group(_))
-            || dependencies(node).any(|input| opaque[input]);
-    }
-    for (index, node) in schedule.nodes.iter().enumerate().rev() {
-        if negative[index] {
-            for input in dependencies(node) {
-                negative[input] = true;
-            }
-        }
-    }
-    let mut retained = vec![false; schedule.nodes.len()];
-    for definition in &target.plan.definitions {
-        let Some(&index) = indices.get(&symbol_name(&definition.result)) else {
+        let Ok(schedule) = Structure::from_program(&current, atoms) else {
             return false;
         };
-        retained[index] = true;
-    }
-    let proof = Proof {
-        schedule,
-        negative,
-        opaque,
-        retained,
-    };
-    let mut remaining = target.plan.definitions.iter().peekable();
-    let mut substituted = false;
-    for (index, definition) in source.plan.definitions.iter().enumerate() {
-        let Some(other) = remaining
-            .peek()
-            .filter(|other| definition.result == other.result)
-        else {
-            // Only a bypassed semijoin can become dead: its base is retained,
-            // and its support is still witnessed by the consumer's lineage.
-            // The already-checked target contract proves no live reference to
-            // this omitted definition remains.
-            if !matches!(definition.operator, Operator::Semijoin(_))
-                || proof.negative[index]
-                || proof.opaque[index]
-            {
-                return false;
+        let mut uses = vec![(0, 0); schedule.nodes.len()];
+        let mut negative = vec![false; schedule.nodes.len()];
+        let mut opaque = vec![false; schedule.nodes.len()];
+        for (i, node) in schedule.nodes.iter().enumerate() {
+            for input in dependencies(node) {
+                uses[input].0 += 1;
+                uses[input].1 = i;
             }
-            continue;
-        };
-        if definition.operator != other.operator {
-            if proof.negative[index] {
-                return false;
+            if matches!(node.kind, Kind::Anti(_)) {
+                negative[node.operands[1]] = true;
             }
-            let (left, right) = match (&definition.operator, &other.operator) {
-                (Operator::Semijoin(_), Operator::Semijoin(b)) => (&b.left, &b.right),
-                (Operator::NaturalJoin(_), Operator::NaturalJoin(b)) => (&b.left, &b.right),
-                _ => return false,
-            };
-            let (Some(&left), Some(&right)) = (
-                indices.get(&symbol_name(left)),
-                indices.get(&symbol_name(right)),
-            ) else {
-                return false;
-            };
-            let node = &schedule.nodes[index];
-            // Replay the two local identities in order; the left substitution
-            // must be justified by the target RHS, not a removed restriction.
-            if !proof.absorbed(node.operands[1], right, node.operands[0])
-                || !proof.absorbed(node.operands[0], left, right)
-            {
-                return false;
-            }
-            substituted = true;
+            opaque[i] = matches!(node.kind, Kind::Group(_) | Kind::Rust(_))
+                || dependencies(node).any(|input| opaque[input]);
         }
-        remaining.next();
+        let output = current
+            .plan
+            .definitions
+            .iter()
+            .position(|d| d.result == current.plan.output.input)
+            .unwrap();
+        uses[output].0 += 1;
+        uses[output].1 = schedule.nodes.len();
+        for (i, node) in schedule.nodes.iter().enumerate().rev() {
+            if negative[i] {
+                for input in dependencies(node) {
+                    negative[input] = true;
+                }
+            }
+        }
+        let proof = Proof {
+            schedule: &schedule,
+            negative,
+            grouped: opaque,
+            retained: current
+                .plan
+                .definitions
+                .iter()
+                .map(|d| targets.contains_key(&symbol_name(&d.result)))
+                .collect(),
+        };
+        // The target names the eliminated reductions; the certificate proves
+        // their identities, without calling or comparing with the producer.
+        let Some(index) = (0..schedule.nodes.len()).rev().find(|&i| {
+            !proof.retained[i]
+                && !proof.negative[i]
+                && !proof.grouped[i]
+                && (proof.linear_absorption(i, &uses) || proof.direct_absorption(i, output))
+        }) else {
+            return false;
+        };
+        let base = current.plan.definitions[schedule.nodes[index].operands[0]].result.clone();
+        apply_rewrite(&mut current, index, Rewrite::Bypass(base));
+        let mut live = vec![false; schedule.nodes.len()];
+        live[output] = true;
+        for i in (0..schedule.nodes.len()).rev() {
+            if live[i] {
+                for input in dependencies(&schedule.nodes[i]) {
+                    let input = if input == index {
+                        schedule.nodes[index].operands[0]
+                    } else {
+                        input
+                    };
+                    live[input] = true;
+                }
+            }
+        }
+        let mut i = 0;
+        current.plan.definitions.retain(|_| {
+            let keep = live[i];
+            i += 1;
+            keep
+        });
     }
-    substituted && remaining.next().is_none()
 }
 
 /// This certificate does not relax the ordinary schedule contract. It replays
 /// only independently proved local set laws, then requires the exact target.
-fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule) -> bool {
+fn check_dead_expansion(
+    source: &Program,
+    target: &Program,
+    schedule: &Structure,
+    atoms: &mut Atoms,
+) -> bool {
     // Opaque execution and block/negative ancestry are outside these set laws.
     if source.plan.output.head != target.plan.output.head
         || source.plan.definitions.iter().any(|definition| {
@@ -208,7 +231,7 @@ fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule)
         let proof = Proof {
             schedule: &current_schedule,
             negative: vec![false; current_schedule.nodes.len()],
-            opaque: vec![false; current_schedule.nodes.len()],
+            grouped: vec![false; current_schedule.nodes.len()],
             retained: current
                 .plan
                 .definitions
@@ -274,7 +297,7 @@ fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule)
         };
         apply_rewrite(&mut current, index, rewrite);
         prune_unreachable(&mut current, &retained);
-        let Ok(next_schedule) = Schedule::from_program(&current) else {
+        let Ok(next_schedule) = Structure::from_program(&current, atoms) else {
             return false;
         };
         current_schedule = next_schedule;
@@ -285,7 +308,7 @@ fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule)
 
 /// Demand is computed from the SOURCE, including keys of every later join.
 /// Target heading validity alone cannot detect an erased implicit equality.
-fn source_demand(source: &Program, schedule: &Schedule) -> Vec<HashSet<String>> {
+fn source_demand(source: &Program, schedule: &Structure) -> Vec<HashSet<String>> {
     let mut demand = vec![HashSet::new(); schedule.nodes.len()];
     if let Some(output) = schedule.output {
         demand[output].extend(schedule.nodes[output].heading.keys().cloned());
@@ -440,19 +463,93 @@ fn dependencies(node: &super::Node) -> impl Iterator<Item = usize> + '_ {
 }
 
 struct Proof<'a> {
-    schedule: &'a Schedule,
+    schedule: &'a Structure,
     negative: Vec<bool>,
-    opaque: Vec<bool>,
+    grouped: Vec<bool>,
     retained: Vec<bool>,
 }
 
 impl Proof<'_> {
+    // Formal rule RA-AbsorbDirect: Certify simultaneous bypass of every direct absorbing use of a shared reduction.
+    fn direct_absorption(&self, reduction: usize, output: usize) -> bool {
+        let node = &self.schedule.nodes[reduction];
+        if reduction == output || !matches!(node.kind, Kind::Join(true)) {
+            return false;
+        }
+        let support = node.operands[1];
+        let keys: Vec<_> = self.schedule.nodes[node.operands[0]]
+            .heading
+            .keys()
+            .filter(|key| self.schedule.nodes[support].heading.contains_key(*key))
+            .collect();
+        let mut used = false;
+        for consumer in &self.schedule.nodes {
+            if consumer.correlation == Some(reduction) || consumer.domain == Some(reduction) {
+                return false;
+            }
+            for (side, &input) in consumer.operands.iter().enumerate() {
+                if input != reduction {
+                    continue;
+                }
+                if !matches!(consumer.kind, Kind::Join(_))
+                    || !self.contained(consumer.operands[1 - side], support, &keys, false)
+                {
+                    return false;
+                }
+                used = true;
+            }
+        }
+        used
+    }
+
+    fn linear_absorption(&self, reduction: usize, uses: &[(usize, usize)]) -> bool {
+        let node = &self.schedule.nodes[reduction];
+        if !matches!(node.kind, Kind::Join(true)) {
+            return false;
+        }
+        let support = node.operands[1];
+        let keys: Vec<_> = self.schedule.nodes[node.operands[0]]
+            .heading
+            .keys()
+            .filter(|key| self.schedule.nodes[support].heading.contains_key(*key))
+            .collect();
+        let mut previous = reduction;
+        loop {
+            if keys
+                .iter()
+                .any(|key| !self.schedule.nodes[previous].heading.contains_key(*key))
+            {
+                return false;
+            }
+            let (1, consumer) = uses[previous] else { return false };
+            let Some(next) = self.schedule.nodes.get(consumer) else {
+                return false;
+            };
+            match next.kind {
+                Kind::Join(semi) => {
+                    let side = usize::from(next.operands[0] != previous);
+                    if self.contained(next.operands[1 - side], support, &keys, false) {
+                        return true;
+                    }
+                    if semi && side == 1 {
+                        return false;
+                    }
+                }
+                Kind::Select => {}
+                _ => return false,
+            }
+            previous = consumer;
+        }
+    }
+
+    // The separate dead-expansion certificate retains its local support law;
+    // general reduction absorption is certified by linear_absorption above.
     fn absorbed(&self, mut reduced: usize, replacement: usize, other: usize) -> bool {
         while reduced != replacement {
             let node = &self.schedule.nodes[reduced];
             if !matches!(node.kind, Kind::Join(true))
                 || self.negative[reduced]
-                || self.opaque[reduced]
+                || self.grouped[reduced]
                 // A surviving restricted row still supplies correlated
                 // projected witnesses. All its consumers must keep that
                 // same row rather than partially bypass its restrictions.

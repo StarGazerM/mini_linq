@@ -13,7 +13,7 @@ macro_rules! mutual {
             A(*x) :- E(x);
             A(*x) :- B(x);
             A(*x) :- A(x);
-            B(*x + 1) :- A(x), if *x < 5;
+            B(*x + 1) :- A(x), where x < 5;
         }
     };
 }
@@ -65,7 +65,10 @@ fn sequential_facade_schedules_refine_unscheduled_mutual_recursion() {
         })
         .unwrap();
         check_refinement(base, || {
+            // Relational progress has no global phases; keep the fork untimed
+            // even when `phase-timing` makes timed rounds the default.
             mutual!(&rows;
+                fork = cq_datalog::passes::fork(timing = none;);
                 round = [cq_datalog_schedule::schedule(relational, per_hole)];
             )
             .collect::<BTreeSet<_>>()

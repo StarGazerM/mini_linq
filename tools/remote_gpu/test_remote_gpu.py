@@ -1,0 +1,493 @@
+#!/usr/bin/env python3
+"""Offline tests: no RunPod calls, SSH connections, or GPU execution."""
+import contextlib
+import hashlib
+import io
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shlex
+import signal
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import bundle as bundle_builder
+import data_manifest
+import pod_gate
+import seed_volume
+import session
+
+_pod_bench_spec = importlib.util.spec_from_file_location(
+    'pod_bench', Path(__file__).resolve().parents[2] /
+    'experiments/gpu/compare/pod_bench_2026_11_02.py')
+pod_bench = importlib.util.module_from_spec(_pod_bench_spec)
+_pod_bench_spec.loader.exec_module(pod_bench)
+
+
+class MirrorTests(unittest.TestCase):
+    def test_mirror_switches_only_owned_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('one', 'two'):
+                (root / name / 'source').mkdir(parents=True)
+                (root / name / 'manifest.json').write_text('{}')
+            link = root / 'worktree'
+            pod_gate.mirror(link, root / 'one/source')
+            pod_gate.mirror(link, root / 'two/source')
+            self.assertEqual(link.resolve(), root / 'two/source')
+            ordinary = root / 'existing'
+            ordinary.mkdir()
+            with self.assertRaises(RuntimeError):
+                pod_gate.mirror(ordinary, root / 'one/source')
+
+    def test_data_manifest_covers_all_six_roots(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in data_manifest.ROOTS:
+                (root / name).mkdir(parents=True)
+                (root / name / 'file').write_bytes(name.encode())
+            output = root / 'SHA256SUMS'
+            with patch.object(sys, 'argv', ['make', str(output), str(root)]):
+                data_manifest.main()
+            lines = output.read_text().splitlines()
+            self.assertEqual(len(lines), 6)
+            self.assertTrue(all(line.split('  ')[1].endswith('/file') for line in lines))
+
+    def test_verified_marker_never_redownloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / 'SHA256SUMS'
+            manifest.write_text('trusted\n')
+            revision = 'a' * 40
+            identity = json.dumps(dict(repo='owner/data', revision=revision,
+                manifest=hashlib.sha256(manifest.read_bytes()).hexdigest()), sort_keys=True)
+            (root / ('.seeded-' + revision)).write_text(identity)
+            with patch.object(sys, 'argv', ['seed', 'owner/data', revision, str(manifest), str(root)]), \
+                 patch.object(subprocess, 'run', side_effect=AssertionError('must not download')):
+                seed_volume.main()
+
+
+class BundleTests(unittest.TestCase):
+    def test_no_tests_builds_only_binaries_and_emits_no_gate(self):
+        self.exercise_bundle(no_tests=True)
+
+    def test_full_gate_separates_counter_harnesses_from_defaults(self):
+        self.exercise_bundle(no_tests=False)
+
+    def exercise_bundle(self, no_tests):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / 'experiments/gpu'
+            target = workspace / 'target'
+            target.mkdir(parents=True)
+            (root / 'fixture.txt').write_text('runtime source')
+            names = ['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu']
+            (target / 'bench-check').write_bytes(b'host checker fixture')
+            for name in set(names + bundle_builder.PACKAGES):
+                (target / name).write_bytes(b'executable fixture')
+            metadata = dict(target_directory=str(target), packages=[
+                dict(id=name, name=name, manifest_path=str(workspace / name / 'Cargo.toml'), targets=[])
+                for name in sorted(set(names + bundle_builder.PACKAGES))])
+            archive_manifest = {}
+            oxide_commands = []
+            host_commands = []
+
+            def check_output(argv, **kwargs):
+                if argv[0] == 'git':
+                    return 'commit\n' if 'rev-parse' in argv else b'fixture.txt\0'
+                if argv[0] == 'cargo':
+                    return json.dumps(metadata)
+                if argv[0] == 'ldd':
+                    return 'libc.so.6 => /lib/libc.so.6 (0x0)\n'
+                raise AssertionError(argv)
+
+            def run(argv, **kwargs):
+                if 'oxide' in argv:
+                    oxide_commands.append(argv)
+                    testing = argv[argv.index('oxide') + 1] == 'test'
+                    selected = [argv[i + 1] for i, arg in enumerate(argv) if arg == '-p'] if testing else names
+                    counters = '--features' in argv
+                    if counters:
+                        self.assertEqual(selected, ['gpu-datalog-runtime'])
+                        self.assertEqual(argv[argv.index('--features') + 1],
+                                         'gpu-datalog-runtime/radix-counters')
+                    for name in selected:
+                        executable = target / (name + ('-counters' if counters else ''))
+                        executable.write_bytes(b'counter harness' if counters else b'default executable')
+                        kwargs['stdout'].write(json.dumps(dict(reason='compiler-artifact',
+                            package_id=name, profile=dict(test=testing),
+                            executable=str(executable), target=dict(name=name))) + '\n')
+                elif 'cargo' in argv and 'build' in argv:
+                    host_commands.append(argv)
+                    self.assertEqual(kwargs['cwd'], root)
+                    self.assertNotIn('CUDA_HOME', kwargs['env'])
+                    self.assertNotIn('LIBRARY_PATH', kwargs['env'])
+                    self.assertEqual(kwargs['env']['CARGO_BUILD_JOBS'], '6')
+                    self.assertIn('--locked', argv)
+                    self.assertEqual(argv[:3], ['flock', '-s', '/tmp/mini_linq-timing.lock'])
+                    kwargs['stdout'].write(json.dumps(dict(reason='compiler-artifact',
+                        executable=str(target / 'bench-check'), target=dict(name='bench-check'))) + '\n')
+                elif argv[0] == 'tar':
+                    stage = Path(argv[argv.index('-C') + 1])
+                    archive_manifest.update(json.loads((stage / 'manifest.json').read_text()))
+                    self.assertEqual((stage / 'source/fixture.txt').read_text(), 'runtime source')
+                    if not no_tests:
+                        steps = {step['name']: step for step in archive_manifest['steps']}
+                        defaults = steps['crates']['commands']
+                        counters = steps['radix-counters']['commands']
+                        self.assertIn('cq-gpu-runtime', {command['package'] for command in defaults})
+                        self.assertEqual([command['package'] for command in counters], ['gpu-datalog-runtime'])
+                        for command in defaults:
+                            self.assertEqual((stage / command['argv'][0]).read_bytes(), b'default executable')
+                        self.assertEqual((stage / counters[0]['argv'][0]).read_bytes(), b'counter harness')
+                    Path(argv[argv.index('-cf') + 1]).write_bytes(b'archive fixture')
+                elif argv[0] not in ('flock', 'python3'):
+                    raise AssertionError(argv)
+                return subprocess.CompletedProcess(argv, 0)
+
+            options = ['--no-tests'] if no_tests else []
+            with patch.object(sys, 'argv', ['bundle', str(root), str(root / 'bundle.tar.zst'), *options]), \
+                 patch.object(subprocess, 'check_output', side_effect=check_output), \
+                 patch.object(subprocess, 'run', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                bundle_builder.main()
+            self.assertEqual(len(oxide_commands), 1 if no_tests else 3)
+            self.assertEqual(len(host_commands), 1)
+            if no_tests:
+                self.assertEqual(archive_manifest['tests'], [])
+                self.assertEqual(archive_manifest['steps'], [])
+            else:
+                self.assertEqual(len(archive_manifest['tests']), len(bundle_builder.PACKAGES))
+            self.assertEqual(set(archive_manifest['binaries']), set(names + ['bench-check']))
+            self.assertEqual([build['name'] for build in archive_manifest['builds']],
+                ['binaries-build', 'bench-check-build'] if no_tests else
+                ['crates-build', 'radix-counters-build', 'binaries-build', 'bench-check-build'])
+
+    def test_doop_samples_require_tuple_check_and_isolate_warmup(self):
+        class Bundle:
+            def key(self, binary, configuration):
+                return binary + ':' + configuration
+
+        class Checker:
+            def __init__(self):
+                self.plans = []
+                self.checked = []
+
+            def plan(self, key, reference, ordinal):
+                self.plans.append((key, reference, ordinal))
+                return dict(mode='full' if ordinal == 0 else 'sampled',
+                            seed=123, sample_size=1000, sample=ordinal)
+
+            env = staticmethod(pod_bench.Checker.env)
+
+            def check(self, key, reference, ordinal, witness):
+                self.checked.append((key, reference, ordinal, witness))
+                if witness.read_text() != 'actual tuples':
+                    raise RuntimeError('tuple membership mismatch')
+                return {'mode': 'full' if ordinal == 0 else 'sampled'}
+
+        checker = Checker()
+        with tempfile.TemporaryDirectory() as directory:
+            witness = Path(directory) / 'actual.json'
+
+            def producer(bundle, dataset, env):
+                self.assertEqual(env['BENCH_CHECK_WITNESS'], str(witness))
+                witness.write_text('actual tuples')
+                return dict(witness_seconds=0.25, relation_counts={'Answer': 1001})
+
+            with patch.object(pod_bench, 'doop', side_effect=producer):
+                for pair in (-1, 0, 1):
+                    result = pod_bench.doop_sample(Bundle(), 'xalan', checker, 'reference', pair, witness)
+                    self.assertGreaterEqual(result['validation_seconds'], 0.25)
+                    self.assertFalse(witness.exists())
+            self.assertEqual(len(checker.checked), 3)
+            self.assertNotEqual(checker.plans[0][0], checker.plans[1][0])
+            self.assertEqual(checker.plans[1][0], checker.plans[2][0])
+            self.assertEqual([plan[2] for plan in checker.plans], [0, 0, 1])
+
+            def corrupt_producer(bundle, dataset, env):
+                witness.write_text('wrong tuples with matching counts')
+                return dict(witness_seconds=0.0, relation_counts={'Answer': 1001})
+
+            with patch.object(pod_bench, 'doop', side_effect=corrupt_producer), \
+                 self.assertRaisesRegex(RuntimeError, 'tuple membership mismatch'):
+                pod_bench.doop_sample(Bundle(), 'xalan', checker, 'reference', 2, witness)
+
+    def test_pod_runner_rejects_full_gate_without_tests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'manifest.json').write_text(json.dumps(dict(commit='test', steps=[])))
+            with patch.object(sys, 'argv', ['pod-gate', '--bundle', str(root),
+                    '--results', str(root / 'results')]), \
+                 patch.object(subprocess, 'check_output', side_effect=AssertionError('must reject before GPU checks')), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                pod_gate.main()
+            self.assertEqual(error.exception.code, 2)
+
+
+class BenchmarkTests(unittest.TestCase):
+    def test_pod_child_resources_are_per_pid_and_capture_large_streams(self):
+        class Bundle:
+            env = os.environ.copy()
+
+        bundle = Bundle()
+        real_wait4 = os.wait4
+        observed = []
+
+        def wait4(pid, options):
+            result = real_wait4(pid, options)
+            self.assertEqual(result[0], pid)
+            observed.append(result[2])
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            bundle.worktree = Path(directory)
+            (bundle.worktree / 'experiments/gpu').mkdir(parents=True)
+            with patch.object(pod_bench, 'tenants', return_value=''), \
+                 patch.object(pod_bench, 'gpu_state', return_value='offline'), \
+                 patch.object(pod_bench.os, 'wait4', side_effect=wait4):
+                for code in (0, 7):
+                    script = ('import sys\n'
+                              'data = bytearray(4 * 1024 * 1024)\n'
+                              'sys.stdout.write(\"o\" * 262144)\n'
+                              'sys.stderr.write(\"e\" * 262144)\n'
+                              f'sys.exit({code})\n')
+                    result = pod_bench.run(bundle, [sys.executable, '-c', script], allowed=(0, 7))
+                    self.assertEqual(result['exit_code'], code)
+                    self.assertEqual(result['stdout'], 'o' * 262144)
+                    self.assertEqual(result['stderr'], 'e' * 262144)
+                    usage = observed[-1]
+                    self.assertEqual(result['resources'], {
+                        'scope': 'benchmark child process (wait4)',
+                        'minor_page_faults': usage.ru_minflt,
+                        'major_page_faults': usage.ru_majflt,
+                        'peak_rss_kib': usage.ru_maxrss,
+                        'peak_rss_units': 'KiB (Linux ru_maxrss)'})
+                    self.assertGreater(result['resources']['peak_rss_kib'], 0)
+                with self.assertRaisesRegex(RuntimeError, 'failed 9: failure detail'):
+                    pod_bench.run(bundle, [sys.executable, '-c',
+                                          'import sys; sys.stderr.write("failure detail"); sys.exit(9)'])
+        self.assertEqual(len(observed), 3)
+
+    def test_python_argv_resolves_only_bundled_source(self):
+        manifest = dict(files={'source/driver.py': 'hash'}, binaries={'bench': 'bin/bench'})
+        bundle = Path('/bundle')
+        self.assertEqual(pod_gate.benchmark_argv(bundle, manifest,
+                         ['python3', 'source/driver.py', 'literal ; $value']),
+                         ['python3', '/bundle/source/driver.py', 'literal ; $value'])
+        self.assertEqual(pod_gate.benchmark_argv(bundle, manifest, ['bench', 'arg']),
+                         ['/bundle/bin/bench', 'arg'])
+        for argv in [[], ['python3'], ['python3', '/source/driver.py'],
+                     ['python3', 'source/../driver.py'], ['python3', 'source/missing.py']]:
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                pod_gate.benchmark_argv(bundle, manifest, argv)
+
+    def test_python_runner_preserves_bundle_environment_and_literal_argv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory)
+            (bundle / 'source').mkdir()
+            script = bundle / 'source/driver.py'
+            script.write_text('import json,os,sys\n'
+                'from pathlib import Path\n'
+                'Path(sys.argv[1]).write_text(json.dumps(dict(argv=sys.argv[2:], '
+                'bundle=os.environ["BUNDLE_DIR"], bundles=json.loads(os.environ["BUNDLE_DIRS"]), '
+                'gpu=os.environ["CUDA_VISIBLE_DEVICES"])))\n')
+            worktree = bundle / 'worktree'
+            (worktree / 'experiments/gpu').mkdir(parents=True)
+            (bundle / 'manifest.json').write_text(json.dumps(dict(
+                commit='test', worktree=str(worktree), binaries={},
+                files={'source/driver.py': hashlib.sha256(script.read_bytes()).hexdigest()})))
+            results = bundle / 'results'
+            siblings = [str(bundle), str(bundle.parent / 'bundle-1')]
+            literal = '; touch NOT_A_SHELL_COMMAND'
+            real_is_dir = Path.is_dir
+            with patch.object(sys, 'argv', ['pod-gate', '--bundle', str(bundle),
+                    '--results', str(results), '--existing-mirrors', '--bench', 'python3',
+                    'source/driver.py', '{results}/driver.json', literal]), \
+                 patch.dict(os.environ, {'BUNDLE_DIRS': json.dumps(siblings)}), \
+                 patch.object(subprocess, 'check_output', side_effect=lambda argv, **kwargs:
+                     'CUDA Version: 13.0' if argv == ['nvidia-smi'] else '0, 8.9\n'), \
+                 patch.object(Path, 'is_dir', lambda path:
+                     str(path) in ('/data/tpch-gpu', '/data/doop-bench/doop-data') or real_is_dir(path)):
+                self.assertEqual(pod_gate.main(), 0)
+            recorded = json.loads((results / 'driver.json').read_text())
+            self.assertEqual(recorded, dict(argv=[literal], bundle=str(bundle), bundles=siblings, gpu='0'))
+
+    def test_gate_indices_validate_before_provisioning(self):
+        self.assertEqual(session.gate_bundle_indices('all', 2), {0, 1})
+        self.assertEqual(session.gate_bundle_indices('none', 2), set())
+        self.assertEqual(session.gate_bundle_indices('0,2', 3), {0, 2})
+        for value in ('', '-1', '2', '0,x'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                session.gate_bundle_indices(value, 2)
+
+
+class SessionTests(unittest.TestCase):
+    def exercise(self, mode, options=(), bundle_count=1, benchmark_only=False, reject_gate=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key, token, bundle, manifest = [root / name for name in ['key', 'token', 'bundle.tar.zst', 'SHA256SUMS']]
+            for path in [key, Path(str(key) + '.pub'), token, bundle, manifest]:
+                path.write_text('private-test-token' if path == token else 'fixture')
+            bundles = [bundle]
+            for index in range(1, bundle_count):
+                extra = root / f'bundle-{index}.tar.zst'
+                extra.write_text('fixture')
+                bundles.append(extra)
+            executed = []
+            deletes, handlers, timer = [], {}, {}
+
+            def check_output(argv, **kwargs):
+                if argv[0] == 'hf':
+                    return '{"user":"tester"}'
+                if argv[0] == 'tar':
+                    return json.dumps(dict(binaries={'cq-gpu-tpch': 'bin/cq-gpu-tpch'},
+                        files={'source/driver.py': 'hash'}, steps=[] if benchmark_only else [{'name': 'crates'}]))
+                if argv[:3] == ['runpodctl', 'pod', 'create'] and '--help' in argv:
+                    return '--min-cuda-version --network-volume-id --wait-timeout --env'
+                raise AssertionError(argv)
+
+            def run(argv, **kwargs):
+                if argv[:3] == ['runpodctl', 'pod', 'delete']:
+                    deletes.append(argv[-1])
+                    return subprocess.CompletedProcess(argv, 0, '{}', '')
+                raise AssertionError(argv)
+
+            class Timer:
+                def __init__(self, seconds, callback):
+                    self.assert_seconds = seconds
+                    timer['callback'] = callback
+                    timer['seconds'] = seconds
+                def start(self):
+                    pass
+                def cancel(self):
+                    timer['cancelled'] = True
+
+            class Process:
+                pid = 12345
+                returncode = 0
+                def __init__(self, argv, **kwargs):
+                    self.argv = argv
+                    executed.append(argv)
+                def poll(self):
+                    return None
+                def communicate(self, **kwargs):
+                    argv = self.argv
+                    if argv[:3] == ['runpodctl', 'pod', 'create']:
+                        # Mimic a pod response containing its environment; the
+                        # persisted create log must discard the secret.
+                        return '{"id":"test-pod","env":{"HF_TOKEN":"private-test-token"}}', ''
+                    if argv[:3] == ['runpodctl', 'ssh', 'info']:
+                        return '{"ip":"127.0.0.1","port":2222}', ''
+                    if argv[0] == 'ssh' and 'seed_volume.sh' in argv[-1]:
+                        if mode == 'failure':
+                            self.returncode = 1
+                        elif mode == 'interrupt':
+                            handlers[signal.SIGINT](signal.SIGINT, None)
+                            self.returncode = -15
+                        elif mode == 'cap':
+                            timer['callback']()
+                            self.returncode = -15
+                    return '', ''
+
+            argv = ['session', '--volume', 'volume', '--data-center', 'DC', '--gpu-ids', 'GPU',
+                    '--revision', 'a' * 40, '--data-manifest', str(manifest), '--ssh-key', str(key),
+                    *options, *map(str, bundles)]
+            with patch.object(sys, 'argv', argv), \
+                 patch.dict(os.environ, {'HF_TOKEN_PATH': str(token)}), \
+                 patch.object(session, '__file__', str(root / 'tools/remote_gpu/session.py')), \
+                 patch.object(subprocess, 'check_output', side_effect=check_output), \
+                 patch.object(subprocess, 'run', side_effect=run), \
+                 patch.object(subprocess, 'Popen', Process), \
+                 patch.object(session.threading, 'Timer', Timer), \
+                 patch.object(signal, 'signal', side_effect=lambda sig, handler: handlers.update({sig: handler})), \
+                 patch.object(os, 'killpg'), contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                if reject_gate:
+                    with self.assertRaises(SystemExit) as error:
+                        session.main()
+                    self.assertEqual(error.exception.code, 2)
+                    self.assertEqual(executed, [])
+                    self.assertEqual(timer, {})
+                    return None, None
+                code = session.main()
+            self.assertEqual(deletes, ['test-pod'])
+            self.assertEqual(timer['seconds'], 3600)
+            self.assertTrue(timer['cancelled'])
+            logs = list((root / 'target/remote-gpu').glob('*/session.json'))
+            state = json.loads(logs[0].read_text())
+            self.assertTrue(state['deleted'])
+            for log in logs[0].parent.iterdir():
+                if log.is_file():
+                    self.assertNotIn('private-test-token', log.read_text())
+            self.executed = executed
+            return code, state
+
+    def test_success_deletes(self):
+        code, state = self.exercise('success')
+        self.assertEqual(code, 0)
+        self.assertEqual(state['not_run'], [])
+
+    def test_failed_seed_deletes_and_reports_unrun_gate(self):
+        code, state = self.exercise('failure')
+        self.assertEqual(code, 1)
+        self.assertEqual(state['not_run'], ['0/gate'])
+        self.assertEqual(state['running'], 'seed')
+
+    def test_ctrl_c_deletes(self):
+        code, state = self.exercise('interrupt')
+        self.assertEqual(code, 1)
+
+    def test_hard_cap_deletes_mid_step(self):
+        code, state = self.exercise('cap')
+        self.assertEqual(code, 1)
+        self.assertTrue(state['capped'])
+
+    def test_selective_gate_keeps_python_benches_and_sibling_paths(self):
+        code, state = self.exercise('success', options=[
+            '--gate-bundles', '0', '--bench', 'python3 source/driver.py --results {results}'],
+            bundle_count=2)
+        self.assertEqual(code, 0)
+        self.assertEqual(state['completed'], ['seed', '0/gate', '0/bench-0', '1/bench-0'])
+        self.assertEqual(state['gate_bundles'], [0])
+        self.assertEqual([Path(path).name for path in state['bundle_dirs']], ['bundle-0', 'bundle-1'])
+        calls = [shlex.split(argv[-1]) for argv in self.executed
+                 if argv[0] == 'ssh' and '/tools/pod_gate.sh' in argv[-1]]
+        self.assertEqual(len(calls), 3)
+        for argv in calls:
+            self.assertEqual(argv[:2], ['env', 'BUNDLE_DIRS=' + json.dumps(state['bundle_dirs'])])
+        benches = [argv for argv in calls if '--bench' in argv]
+        self.assertEqual(len(benches), 2)
+        for argv in benches:
+            position = argv.index('--bench')
+            self.assertEqual(argv[position + 1:position + 4], ['python3', 'source/driver.py', '--results'])
+            self.assertNotIn('{results}', argv[-1])
+
+    def test_none_skips_every_gate_but_runs_named_benchmarks(self):
+        code, state = self.exercise('success', options=[
+            '--gate-bundles', 'none', '--bench', 'cq-gpu-tpch output.json'], bundle_count=2)
+        self.assertEqual(code, 0)
+        self.assertEqual(state['completed'], ['seed', '0/bench-0', '1/bench-0'])
+        self.assertEqual(state['gate_bundles'], [])
+
+    def test_default_still_gates_all_bundles(self):
+        code, state = self.exercise('success', bundle_count=2)
+        self.assertEqual(code, 0)
+        self.assertEqual(state['completed'], ['seed', '0/gate', '1/gate'])
+
+    def test_benchmark_only_archive_is_rejected_before_provisioning(self):
+        self.exercise('success', benchmark_only=True, reject_gate=True)
+
+    def test_benchmark_only_archive_runs_when_gate_is_excluded(self):
+        code, state = self.exercise('success', benchmark_only=True, options=[
+            '--gate-bundles', 'none', '--bench', 'cq-gpu-tpch output.json'])
+        self.assertEqual(code, 0)
+        self.assertEqual(state['completed'], ['seed', '0/bench-0'])
+
+
+if __name__ == '__main__':
+    unittest.main()

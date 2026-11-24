@@ -1,84 +1,101 @@
 use crate::{Result, Word};
-use cuda_core::{CudaEvent, DeviceBuffer, DeviceCopy, LaunchConfig1D};
-use gpu_device_columns::{Buffer, Pool};
+use cuda_core::{DeviceCopy, LaunchConfig1D};
+use gpu_device_columns::{Buffer, MemoryResource, Pool};
 use rccl_cub::{DeviceSliceRead, DeviceSliceWrite};
-use std::{cmp::Reverse, collections::BinaryHeap, sync::Arc};
+use std::sync::Arc;
 
 /// A borrowed kernel ABI. Its owner must outlive all stream-ordered reads.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct RunView<W: Word> {
+pub(crate) struct RunView<W: Word> {
     pub ptr: *const W,
     pub len: usize,
 }
 // SAFETY: this C-layout descriptor contains only a device pointer and length.
 unsafe impl<W: Word> DeviceCopy for RunView<W> {}
 
-/// Find the half-open index interval for the inclusive value interval [lo, hi].
-/// This also handles the maximum word without overflowing `hi + 1`.
-/// # Safety
-/// `view` must describe initialized, sorted words readable on this device.
-#[inline(always)]
-pub unsafe fn range<W: Word>(view: RunView<W>, lo: W, hi: W) -> (usize, usize) {
-    let mut begin = 0;
-    let mut end = view.len;
-    while begin < end {
-        let mid = begin + (end - begin) / 2;
-        if unsafe { &*view.ptr.add(mid) }.compare(&lo).is_lt() { begin = mid + 1; } else { end = mid; }
-    }
-    let first = begin;
-    end = view.len;
-    while begin < end {
-        let mid = begin + (end - begin) / 2;
-        if !unsafe { &*view.ptr.add(mid) }.compare(&hi).is_gt() { begin = mid + 1; } else { end = mid; }
-    }
-    (first, begin)
-}
 
 /// Cheap shared ownership of an immutable sorted, unique initialized prefix.
 #[derive(Clone)]
-pub struct Run<W: Word> {
+pub struct SortedBatch<W: Word> {
     buffer: Arc<Buffer<W>>,
     rows: usize,
 }
-impl<W: Word> Run<W> {
+impl<W: Word> SortedBatch<W> {
     /// # Safety
     /// The prefix must be initialized, sorted and unique on its pool's stream.
     /// No alias may mutate its words for the lifetime of this run or its clones.
     pub unsafe fn from_sorted(buffer: Buffer<W>, rows: usize) -> Result<Self> {
-        if rows > buffer.len() { return Err("run length exceeds buffer capacity".into()); }
+        if rows > buffer.len() {
+            return Err("run length exceeds buffer capacity".into());
+        }
         // An empty immutable prefix need not keep its entire rejected candidate
         // allocation alive. Releasing it is stream ordered and copies no rows.
         let buffer = if rows == 0 && !buffer.is_empty() {
             let pool = buffer.pool().clone();
             drop(buffer);
             unsafe { Buffer::uninitialized(pool, 0)? }
-        } else { buffer };
+        } else {
+            buffer
+        };
         let buffer = Arc::new(buffer);
         // SAFETY: the caller publishes an immutable initialized prefix.
-        let buffer = if rows == buffer.len() { buffer } else {
+        let buffer = if rows == buffer.len() {
+            buffer
+        } else {
             Arc::new(unsafe { Buffer::shared_slice(buffer, 0, rows)? })
         };
         Ok(Self { buffer, rows })
     }
-    pub fn len(&self) -> usize { self.rows }
-    pub fn is_empty(&self) -> bool { self.rows == 0 }
+    pub fn len(&self) -> usize {
+        self.rows
+    }
+    pub fn is_empty(&self) -> bool {
+        self.rows == 0
+    }
     /// Initialized packed-row bytes, excluding retained spare capacity.
-    pub fn live_bytes(&self) -> usize { self.rows * std::mem::size_of::<W>() }
+    pub fn live_bytes(&self) -> usize {
+        self.rows * std::mem::size_of::<W>()
+    }
     /// Full backing allocation retained by this run, including a sliced suffix.
     /// Clones and layouts may retain the same allocation; do not sum aliases.
-    pub fn allocated_bytes(&self) -> usize { self.buffer.allocated_bytes() }
+    pub fn allocated_bytes(&self) -> usize {
+        self.buffer.allocated_bytes()
+    }
     pub fn reserved_capacity(&self) -> usize {
         self.allocated_bytes() / std::mem::size_of::<W>()
     }
-    pub fn buffer(&self) -> &Buffer<W> { &self.buffer }
-    pub fn view(&self) -> RunView<W> { RunView { ptr: self.buffer.ptr(), len: self.rows } }
+    pub fn buffer(&self) -> &Buffer<W> {
+        &self.buffer
+    }
+    pub(crate) fn shared_buffer(&self) -> Result<Buffer<W>> {
+        // SAFETY: the owner retains this immutable initialized prefix.
+        unsafe { Buffer::shared_slice(self.buffer.clone(), 0, self.rows) }
+    }
+    /// `len` rows from `start` of the same immutable prefix, retaining it.
+    pub(crate) fn shared_range(&self, start: usize, len: usize) -> Result<Buffer<W>> {
+        if start.checked_add(len).is_none_or(|end| end > self.rows) {
+            return Err("run range exceeds its rows".into());
+        }
+        // SAFETY: the owner retains this immutable initialized prefix.
+        unsafe { Buffer::shared_slice(self.buffer.clone(), start, len) }
+    }
+    pub(crate) fn view(&self) -> RunView<W> {
+        RunView {
+            ptr: self.buffer.ptr(),
+            len: self.rows,
+        }
+    }
 }
 // SAFETY: the retained immutable buffer owns the reported initialized prefix.
-unsafe impl<W: Word> cuda_host::KernelSliceArg for Run<W> {
+unsafe impl<W: Word> cuda_host::KernelSliceArg for SortedBatch<W> {
     type Elem = W;
-    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr { self.buffer.cu_deviceptr() }
-    fn len(&self) -> usize { self.rows }
+    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
+        self.buffer.cu_deviceptr()
+    }
+    fn len(&self) -> usize {
+        self.rows
+    }
 }
 
 // Only unpublished output storage implements the writable kernel ABI.
@@ -86,365 +103,745 @@ struct Output<W: Word>(Buffer<W>);
 // SAFETY: this affine wrapper owns the entire allocation.
 unsafe impl<W: Word> cuda_host::KernelSliceArg for Output<W> {
     type Elem = W;
-    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr { self.0.cu_deviceptr() }
-    fn len(&self) -> usize { self.0.len() }
+    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
+        self.0.cu_deviceptr()
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 // SAFETY: mutable access is exclusive and output is unpublished until launch.
 unsafe impl<W: Word> cuda_host::KernelSliceArgMut for Output<W> {}
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct AdmissionTimings {
-    pub sort_unique_ms: f32,
-    pub anti_join_ms: f32,
-    pub merge_ms: f32,
-}
-struct Timing { events: [CudaEvent; 4] }
-impl Timing {
-    fn new(pool: &Pool) -> Result<Self> {
-        let event = || pool.context().new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT));
-        Ok(Self { events: [event()?, event()?, event()?, event()?] })
-    }
-    fn record(&self, phase: usize, pool: &Pool) -> Result<()> { Ok(self.events[phase].record(pool.stream())?) }
-    fn elapsed(&self) -> Result<AdmissionTimings> {
-        Ok(AdmissionTimings {
-            sort_unique_ms: self.events[0].elapsed_ms(&self.events[1])?,
-            anti_join_ms: self.events[1].elapsed_ms(&self.events[2])?,
-            merge_ms: self.events[2].elapsed_ms(&self.events[3])?,
-        })
-    }
-}
+/// Rows given to one RCCL radix sort. RCCL accepts a single CUB Policy800
+/// portion, `2^28 - 1` rounded down to its tile size; this stays below that
+/// for every tile of at most `2^20` items.
+pub(crate) const SORT_PORTION_ROWS: usize = (1 << 28) - (1 << 20);
 
-/// Formal rule DL-DeviceRuns: admission subtracts all accepted immutable runs;
-/// each appended delta is unique and disjoint, and merging preserves their union.
-///
-/// Each nonempty admission downloads only the candidate unique count and, when
-/// accepted state is nonempty, the fresh count. There are no row readbacks.
-/// Empty batches need neither download. `to_host` and opt-in `last_timings` are
-/// explicit diagnostic synchronization paths, never used by admission.
-pub struct DeviceRuns<W: Word, S = ()> {
-    pool: Arc<Pool>,
-    accepted: Vec<Run<W>>,
-    rows: usize,
-    module: run_kernels::LoadedModule,
-    timing_enabled: bool,
-    timing: Option<Timing>,
-    schema: std::marker::PhantomData<fn() -> S>,
+/// Shared stateless full-key sorting, compaction, subtraction and merge kernels.
+/// Accepted state belongs exclusively to DeviceRadixRun.
+pub(crate) struct SetOps<'a> {
+    pub pool: &'a Arc<Pool>,
+    pub module: &'a run_kernels::LoadedModule,
+    pub params: crate::RadixRunParams,
+    pub active_bits: u32,
 }
-impl<W: Word, S> DeviceRuns<W, S> {
-    pub fn new(pool: Arc<Pool>) -> Result<Self> {
-        // SAFETY: module is loaded in, and retained with, the pool's context.
-        let module = unsafe { run_kernels::load(pool.context())? };
-        Ok(Self { pool, accepted: Vec::new(), rows: 0, module, timing_enabled: false, timing: None,
-            schema: std::marker::PhantomData })
+impl SetOps<'_> {
+    /// Formal rule DL-SortKnownUnique: certified injective full-key permutations
+    /// skip unique compaction and count readback, but never skip sorting.
+    pub(crate) fn sort<W: Word>(&self, input: &Buffer<W>, rows: usize, known_unique: bool) -> Result<SortedBatch<W>> {
+        self.sort_by_portions(input, rows, known_unique, SORT_PORTION_ROWS)
     }
-    pub fn len(&self) -> usize { self.rows }
-    pub fn is_empty(&self) -> bool { self.rows == 0 }
-    /// Initialized bytes in the accepted set, excluding retained spare capacity.
-    pub fn live_bytes(&self) -> usize { self.rows * std::mem::size_of::<W>() }
-    /// Backing bytes retained by current accepted runs. Published snapshots may
-    /// alias these allocations or retain older runs not counted here.
-    pub fn allocated_bytes(&self) -> usize {
-        self.accepted.iter().map(Run::allocated_bytes).sum()
-    }
-    pub fn reserved_capacity(&self) -> usize {
-        self.accepted.iter().map(Run::reserved_capacity).sum()
-    }
-    pub fn retained_buffers(&self) -> usize { self.accepted.len() }
-    pub fn runs(&self) -> Vec<RunView<W>> { self.accepted.iter().map(Run::view).collect() }
-    /// Retain a snapshot of accepted immutable runs, independent of later merges.
-    pub fn owned_runs(&self) -> Vec<Run<W>> { self.accepted.clone() }
-    pub fn enable_timing(&mut self, enabled: bool) { self.timing_enabled = enabled; }
-    /// Explicitly synchronize the last profiled admission and read CUDA event times.
-    pub fn last_timings(&self) -> Result<AdmissionTimings> {
-        self.timing.as_ref().ok_or_else(|| "admission timing is not enabled".into()).and_then(Timing::elapsed)
-    }
-    pub fn admit(&mut self, candidates: &Buffer<W>, rows: usize) -> Result<Run<W>> {
-        if !Arc::ptr_eq(&self.pool, candidates.pool()) { return Err("candidate pool differs from accepted state".into()); }
-        if rows > candidates.len() || rows > u32::MAX as usize { return Err("candidate live length exceeds capacity or u32 domain".into()); }
-        self.timing = if self.timing_enabled { Some(Timing::new(&self.pool)?) } else { None };
-        self.mark(0)?;
-        let unique = self.sort_unique(candidates, rows)?;
-        self.mark(1)?;
-        let fresh = if self.accepted.is_empty() || unique.is_empty() { unique } else {
-            self.subtract(&unique)?
-        };
-        self.mark(2)?;
-        // SAFETY: subtraction checked every accepted run; unique is sorted.
-        unsafe { self.append_sorted(fresh.clone())? };
-        self.mark(3)?;
-        Ok(fresh)
-    }
-    fn mark(&self, phase: usize) -> Result<()> {
-        if let Some(timing) = &self.timing { timing.record(phase, &self.pool)?; }
-        Ok(())
-    }
-    /// Canonicalize a buffer without changing accepted state, for layout deltas.
-    /// Only the unique count is downloaded. The input remains unchanged.
-    pub fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
-        self.sort(input, rows, false)
-    }
-    /// Sort an already unique initialized prefix without count downloads.
-    ///
-    /// Formal rule DL-SortKnownUnique: an injective permutation of a unique run
-    /// remains unique; sorting preserves its cardinality without compaction.
-    /// # Safety
-    /// The initialized input prefix must contain pairwise distinct words.
-    /// The input remains unchanged and accepted state is not modified.
-    pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
-        self.sort(input, rows, true)
-    }
-    fn sort(&self, input: &Buffer<W>, rows: usize, known_unique: bool) -> Result<Run<W>> {
-        if !Arc::ptr_eq(&self.pool, input.pool()) || rows > input.len() || rows > u32::MAX as usize {
+    /// RCCL's radix sort takes one portion, so a longer input is sorted
+    /// `portion` rows at a time: each later portion drops the rows already
+    /// sorted (unless certified unique) and is merged into the result.
+    pub(crate) fn sort_by_portions<W: Word>(
+        &self, input: &Buffer<W>, rows: usize, known_unique: bool, portion: usize,
+    ) -> Result<SortedBatch<W>> {
+        if !self.pool.shares_memory(input.pool()) || rows > input.len() || rows > u32::MAX as usize
+        {
             return Err("invalid sort input pool or live length".into());
         }
+        if self.active_bits > W::BITS {
+            return Err("sort active bits exceed the key word".into());
+        }
+        crate::stats::record_sort(
+            if known_unique { crate::stats::SortKind::Layout } else { crate::stats::SortKind::Canonical },
+            rows, self.active_bits, W::BITS != 64,
+        );
+        if rows == 0 || self.active_bits == 0 {
+            // Zero-bit packing has exactly one possible value. This decision
+            // depends only on the recorded width, never the candidate values.
+            let rows = rows.min(1);
+            return unsafe { SortedBatch::from_sorted(Buffer::zeroed(self.pool.clone(), rows)?, rows) };
+        }
+        let mut sorted: Option<SortedBatch<W>> = None;
+        for start in (0..rows).step_by(portion) {
+            // Device address arithmetic; the host never dereferences it.
+            let words = input.ptr().wrapping_add(start).cast_const();
+            let mut next = self.sort_portion(words, (rows - start).min(portion), known_unique)?;
+            sorted = Some(match sorted {
+                None => next,
+                Some(previous) => {
+                    if !known_unique {
+                        next = self.subtract(&next, &[previous.view()])?;
+                    }
+                    // A portion holding only rows already sorted adds nothing.
+                    if next.is_empty() { previous } else { self.merge(&previous, &next)? }
+                }
+            });
+        }
+        Ok(sorted.expect("a nonempty input has a first portion"))
+    }
+    fn sort_portion<W: Word>(&self, input: *const W, rows: usize, known_unique: bool) -> Result<SortedBatch<W>> {
+        crate::stats::trace_step(self.pool, if known_unique { "sort/portion-known-unique" } else { "sort/portion-unique" }, rows, std::mem::size_of::<W>());
         // SAFETY: kernels initialize the returned prefix before publication.
-        let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
-        if rows == 0 { return unsafe { Run::from_sorted(output, 0) }; }
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
-        let mut compaction = if known_unique { None } else {
+        let mut compaction = if known_unique {
+            None
+        } else {
             Some((
                 Native::<u64>::new(&self.pool, 1)?,
-                rccl_cub::thrust_integration::compaction_workspace_in(self.pool.resource(), &launch, rows)?,
+                rccl_cub::thrust_integration::compaction_workspace_in(
+                    self.pool.resource(),
+                    &launch,
+                    rows,
+                )?,
             ))
         };
         if W::BITS == 64 {
-            let mut first = Native::<u64>::new(&self.pool, rows)?;
-            let mut alternate = Native::<u64>::new(&self.pool, rows)?;
-            // SAFETY: input is initialized; the destination is disjoint and same-width.
-            unsafe { cuda_core::simt::memory::memcpy_dtod_async(first.get().cu_deviceptr(), input.cu_deviceptr(), rows * 8, self.pool.stream().cu_stream())?; }
-            let mut controls = RadixScratch {
-                workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(&launch, rows)?,
-                pool: self.pool.clone(),
-            };
-            let mut buffers = rccl_cub::DoubleBuffer::new(first.get_mut(), alternate.get_mut()).ok_or("unequal sort buffers")?;
-            rccl_cub::device_radix_sort_keys_buffer(&launch, &mut buffers, 0..64, &mut controls.workspace)?;
+            let sorted = stable_keys(&self.pool, &launch, input, rows, self.active_bits)?;
             if let Some((count, compact)) = &mut compaction {
+                let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
                 rccl_cub::thrust_integration::device_unique_copy_by(
-                    &launch, DeviceSliceRead::new(buffers.current().cu_deviceptr() as *const u64),
-                    DeviceSliceWrite::new(output.ptr().cast::<u64>()), count.get_mut(),
-                    |a: u64, b: u64| a == b, rows, compact,
+                    &launch,
+                    DeviceSliceRead::new(sorted.ptr().cast::<u64>() as *const u64),
+                    DeviceSliceWrite::new(output.ptr().cast::<u64>()),
+                    count.get_mut(),
+                    |a: u64, b: u64| a == b,
+                    rows,
+                    compact,
+                )?;
+                let rows = read_count(&self.pool, count.get())?;
+                return unsafe { SortedBatch::from_sorted(output, rows) };
+            }
+            // Adopt the actual sorted buffer: no post-sort copy or spare output.
+            return unsafe { SortedBatch::from_sorted(sorted, rows) };
+        }
+        let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
+        {
+            // The permutation owner lives until this branch has enqueued its consumer.
+            let permutation = stable_row_order(
+                &self.pool,
+                &self.module,
+                &launch,
+                input.cast(),
+                rows,
+                self.active_bits,
+                W::BITS / 64,
+                W::MS_FIRST,
+                self.params.block_threads,
+            )?;
+            let order = permutation.get().cu_deviceptr() as *const u32;
+            if let Some((count, compact)) = &mut compaction {
+                let source = input;
+                let words =
+                    rccl_cub::DeviceMap::new(DeviceSliceRead::new(order), move |row: u32| unsafe {
+                        *source.add(row as usize)
+                    });
+                rccl_cub::thrust_integration::device_unique_copy_by(
+                    &launch,
+                    words,
+                    DeviceSliceWrite::new(output.ptr()),
+                    count.get_mut(),
+                    |a: W, b: W| a.compare(&b).is_eq(),
+                    rows,
+                    compact,
                 )?;
             } else {
-                // SAFETY: radix sort initialized all rows; output is disjoint.
-                unsafe { cuda_core::simt::memory::memcpy_dtod_async(output.cu_deviceptr(), buffers.current().cu_deviceptr(), rows * 8, self.pool.stream().cu_stream())?; }
-            }
-        } else {
-            let mut first = Native::<u64>::new(&self.pool, rows)?;
-            let mut alternate = Native::<u64>::new(&self.pool, rows)?;
-            let mut indices = Native::<u32>::new(&self.pool, rows)?;
-            let mut alternate_indices = Native::<u32>::new(&self.pool, rows)?;
-            let mut controls = RadixScratch {
-                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u64, u32>(&launch, rows)?,
-                pool: self.pool.clone(),
-            };
-            let mut buffers = rccl_cub::DoubleBuffer::paired(
-                (first.get_mut(), indices.get_mut()),
-                (alternate.get_mut(), alternate_indices.get_mut()),
-            ).ok_or("unequal lane radix buffers")?;
-            let config = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
-            let prepared = self.module.prepare_gather_lane::<W>(config)?;
-            // Stable least-significant-lane passes retain full-row order.
-            for lane in 0..W::BITS / 64 {
-                let (values, order) = buffers.current_mut();
-                self.module.gather_lane::<W>(
-                    self.pool.stream(), &prepared, input.ptr(), rows as u32, lane,
-                    values.cu_deviceptr() as *mut u64,
-                    order.cu_deviceptr() as *mut u32,
+                let initial = self.module.prepare_gather_sorted::<W>(LaunchConfig1D::new(
+                    1,
+                    self.params.block_threads,
+                    0,
+                ))?;
+                let grid = cq_gpu_runtime::launch_grid_for_kernel(
+                    initial.function(),
+                    rows.div_ceil(self.params.block_threads as usize),
+                    self.params.block_threads,
+                    0,
                 )?;
-                rccl_cub::device_radix_sort_pairs_buffer(
-                    &launch, &mut buffers, 0..64, &mut controls.workspace,
-                )?;
-            }
-            if let Some((count, compact)) = &mut compaction {
-                let source = input.ptr();
-                let words = rccl_cub::DeviceMap::new(
-                    DeviceSliceRead::new(buffers.current().1.cu_deviceptr() as *const u32),
-                    move |row: u32| unsafe { *source.add(row as usize) },
-                );
-                rccl_cub::thrust_integration::device_unique_copy_by(
-                    &launch, words, DeviceSliceWrite::new(output.ptr()),
-                    count.get_mut(), |a: W, b: W| a.compare(&b).is_eq(), rows, compact,
-                )?;
-            } else {
+                let config = LaunchConfig1D::new(grid, self.params.block_threads, 0);
                 self.module.gather_sorted::<W>(
-                    self.pool.stream(), &self.module.prepare_gather_sorted::<W>(config)?,
-                    input.ptr(), rows as u32,
-                    buffers.current().1.cu_deviceptr() as *const u32, output.ptr(),
+                    self.pool.stream(),
+                    &self.module.prepare_gather_sorted::<W>(config)?,
+                    input,
+                    rows as u32,
+                    order,
+                    output.ptr(),
                 )?;
             }
         }
-        let rows = if let Some((count, _)) = &compaction { read_count(&self.pool, count.get())? } else { rows };
+        let rows = if let Some((count, _)) = &compaction {
+            read_count(&self.pool, count.get())?
+        } else {
+            rows
+        };
         // SAFETY: compaction established uniqueness, or the caller guaranteed it.
         // Both paths initialize the complete sorted prefix before publication.
-        unsafe { Run::from_sorted(output, rows) }
+        unsafe { SortedBatch::from_sorted(output, rows) }
     }
-    fn subtract(&self, unique: &Run<W>) -> Result<Run<W>> {
+    pub(crate) fn subtract<W: Word>(&self, unique: &SortedBatch<W>, accepted: &[RunView<W>]) -> Result<SortedBatch<W>> {
         let rows = unique.len();
-        let descriptors = Buffer::from_host_async(self.pool.clone(), &self.runs())?;
+        crate::stats::trace_step(self.pool, "subtract", rows, std::mem::size_of::<W>() + 4);
+        crate::phases::admission_scope!(c"admit/plain-subtract", rows);
+        let descriptors = {
+            crate::phases::admission_scope!(c"admit/member-upload");
+            Buffer::from_host_async(self.pool.clone(), accepted)?
+        };
+        crate::stats::record_work(|work| {
+            work.descriptor_materializations += 1;
+            work.descriptor_bytes += (accepted.len() * std::mem::size_of::<RunView<W>>()) as u64;
+        });
         // SAFETY: the flag kernel and stable select initialize these outputs.
         let flags = unsafe { Buffer::<u32>::uninitialized(self.pool.clone(), rows)? };
         let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
-        let config = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
-        self.module.absent::<W>(
-            self.pool.stream(), &self.module.prepare_absent::<W>(config)?, unique.buffer.ptr(),
-            rows as u64, descriptors.ptr(), self.accepted.len() as u32, flags.ptr(),
+        let initial = self.module.prepare_absent::<W>(LaunchConfig1D::new(
+            1,
+            self.params.block_threads,
+            0,
+        ))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            initial.function(),
+            rows.div_ceil(self.params.block_threads as usize),
+            self.params.block_threads,
+            0,
         )?;
+        let config = LaunchConfig1D::new(grid, self.params.block_threads, 0);
+        self.module.absent::<W>(
+            self.pool.stream(),
+            &self.module.prepare_absent::<W>(config)?,
+            unique.buffer.ptr(),
+            rows as u64,
+            descriptors.ptr(),
+            accepted.len() as u32,
+            flags.ptr(),
+        )?;
+        self.select_flagged(unique, &flags, output)
+    }
+
+    pub(crate) fn subtract_indexed<W: Word>(&self, unique: &SortedBatch<W>, index: &crate::pair_bitmap::Index) -> Result<SortedBatch<W>> {
+        let rows = unique.len();
+        crate::stats::trace_step(self.pool, "subtract/bitmap", rows, std::mem::size_of::<W>() + 4);
+        crate::phases::admission_scope!(c"admit/bitmap-subtract", rows);
+        let flags = unsafe { Buffer::<u32>::uninitialized(self.pool.clone(), rows)? };
+        let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
+        index.absent(unique.buffer.ptr().cast(), rows, flags.ptr())?;
+        self.select_flagged(unique, &flags, output)
+    }
+
+    fn select_flagged<W: Word>(&self, unique: &SortedBatch<W>, flags: &Buffer<u32>, output: Buffer<W>) -> Result<SortedBatch<W>> {
+        let rows = unique.len();
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
         let mut count = Native::<u64>::new(&self.pool, 1)?;
-        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(self.pool.resource(), &launch, rows)?;
+        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(
+            self.pool.resource(),
+            &launch,
+            rows,
+        )?;
         rccl_cub::thrust_integration::device_select_flagged(
-            &launch, DeviceSliceRead::new(unique.buffer.ptr()), DeviceSliceRead::new(flags.ptr()),
-            DeviceSliceWrite::new(output.ptr()), count.get_mut(), rows, &mut workspace,
+            &launch,
+            DeviceSliceRead::new(unique.buffer.ptr()),
+            DeviceSliceRead::new(flags.ptr()),
+            DeviceSliceWrite::new(output.ptr()),
+            count.get_mut(),
+            rows,
+            &mut workspace,
         )?;
         let fresh = read_count(&self.pool, count.get())?;
         // SAFETY: stable selection preserves sorted uniqueness of the input.
-        unsafe { Run::from_sorted(output, fresh) }
+        unsafe { SortedBatch::from_sorted(output, fresh) }
     }
-    /// Append a pre-canonicalized layout delta and apply ratio-four merging.
-    /// Wide rows use tiled merge-path partitioning, without native RCCL's
-    /// 16-byte key-layout limit or a full-size auxiliary row allocation.
-    /// # Safety
-    /// The run must be disjoint from every accepted run. In particular callers
-    /// may sort a bijective permutation of an admitted delta for another layout.
-    pub unsafe fn append_sorted(&mut self, run: Run<W>) -> Result<()> {
-        if !Arc::ptr_eq(&self.pool, run.buffer.pool()) { return Err("layout run pool differs".into()); }
-        if run.is_empty() { return Ok(()); }
-        let rows = self.rows.checked_add(run.len()).ok_or("accepted row count overflow")?;
-        // Prepare the complete merge before mutating state: failures leave it unchanged.
-        let mut merged = run;
-        let mut keep = self.accepted.len();
-        while keep > 0 && self.accepted[keep - 1].len() <= merged.len().saturating_mul(4) {
-            merged = self.merge(&self.accepted[keep - 1], &merged)?;
-            keep -= 1;
-        }
-        self.accepted.truncate(keep);
-        self.accepted.push(merged);
-        self.rows = rows;
-        Ok(())
-    }
-    fn merge(&self, first: &Run<W>, second: &Run<W>) -> Result<Run<W>> {
-        let rows = first.len().checked_add(second.len()).ok_or("merged length overflow")?;
+    pub(crate) fn merge<W: Word>(&self, first: &SortedBatch<W>, second: &SortedBatch<W>) -> Result<SortedBatch<W>> {
+        let rows = first
+            .len()
+            .checked_add(second.len())
+            .ok_or("merged length overflow")?;
+        crate::phases::admission_scope!(c"admit/plain-merge", rows);
+        crate::stats::record_work(|work| work.merges += 1);
+        crate::stats::trace_step(self.pool, "merge", rows, std::mem::size_of::<W>());
         // SAFETY: merge writes every output element before publication.
         let mut output = Output(unsafe { Buffer::uninitialized(self.pool.clone(), rows)? });
         if W::BITS > 128 {
-            let tiles = rows.div_ceil(run_kernels::MERGE_TILE_ROWS);
-            let config = LaunchConfig1D::new(tiles.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+            let tiles = rows.div_ceil(self.params.merge_tile_rows as usize);
+            let initial = self.module.prepare_merge_wide::<W>(LaunchConfig1D::new(
+                1,
+                self.params.block_threads,
+                0,
+            ))?;
+            let grid = cq_gpu_runtime::launch_grid_for_kernel(
+                initial.function(),
+                tiles.div_ceil(self.params.block_threads as usize),
+                self.params.block_threads,
+                0,
+            )?;
+            let config = LaunchConfig1D::new(grid, self.params.block_threads, 0);
             self.module.merge_wide::<W>(
-                self.pool.stream(), &self.module.prepare_merge_wide::<W>(config)?,
-                first.view(), second.view(), output.0.ptr(),
+                self.pool.stream(),
+                &self.module.prepare_merge_wide::<W>(config)?,
+                first.view(),
+                second.view(),
+                output.0.ptr(),
+                self.params.merge_tile_rows as usize,
             )?;
             // SAFETY: disjoint merge-path tiles initialize the sorted union.
-            return unsafe { Run::from_sorted(output.0, rows) };
+            return unsafe { SortedBatch::from_sorted(output.0, rows) };
         }
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
-        let partitions = rccl_cub::thrust_integration::device_merge_partition_count::<W>(first.len(), second.len())?;
+        let partitions = rccl_cub::thrust_integration::device_merge_partition_count::<W>(
+            first.len(),
+            second.len(),
+        )?;
         let mut partitions = Native::<usize>::new(&self.pool, partitions)?;
         let mut workspace = rccl_cub::DeviceMergeWorkspace::__from_partitions(partitions.get_mut());
-        rccl_cub::device_merge_keys(&launch, first, second, &mut workspace, &mut output, |a: &W, b: &W| a.compare(b))?;
+        rccl_cub::device_merge_keys(
+            &launch,
+            first,
+            second,
+            &mut workspace,
+            &mut output,
+            |a: &W, b: &W| a.compare(b),
+        )?;
         // SAFETY: merging disjoint sorted unique runs produces a sorted unique run.
-        unsafe { Run::from_sorted(output.0, rows) }
-    }
-    /// Explicit diagnostic row download, followed by a host k-way sorted merge.
-    pub fn to_host(&self) -> Result<Vec<W>> {
-        let runs = self.accepted.iter().map(|run| run.buffer.to_host_prefix(run.len())).collect::<Result<Vec<_>>>()?;
-        let mut heap = BinaryHeap::new();
-        for (run, values) in runs.iter().enumerate() {
-            if let Some(&word) = values.first() { heap.push(Reverse((word, run, 0))); }
-        }
-        let mut output = Vec::with_capacity(self.rows);
-        while let Some(Reverse((word, run, offset))) = heap.pop() {
-            output.push(word);
-            if let Some(&next) = runs[run].get(offset + 1) { heap.push(Reverse((next, run, offset + 1))); }
-        }
-        Ok(output)
+        unsafe { SortedBatch::from_sorted(output.0, rows) }
     }
 }
 
-// Native RCCL count/control buffers need stream-ordered destruction too.
-struct Native<T: DeviceCopy> { buffer: Option<DeviceBuffer<T>>, pool: Arc<Pool> }
+type DeviceBuffer<T> = rccl_memory::DeviceBuffer<'static, T, &'static MemoryResource>;
+type RadixWorkspace = rccl_cub::DeviceRadixSortBufferWorkspace<
+    DeviceBuffer<u64>, DeviceBuffer<i32>, DeviceBuffer<i32>,
+>;
+
+// Borrowed RCCL storage drops before its retained, stable-address pool.
+pub(crate) struct Native<T: DeviceCopy> {
+    buffer: DeviceBuffer<T>,
+    _pool: Arc<Pool>,
+}
 impl<T: DeviceCopy> Native<T> {
-    fn new(pool: &Arc<Pool>, rows: usize) -> Result<Self> {
-        // SAFETY: every consumer initializes scratch before reading it.
-        Ok(Self { buffer: Some(unsafe { DeviceBuffer::uninitialized_async(pool.stream(), rows)? }), pool: pool.clone() })
+    pub(crate) fn new(pool: &Arc<Pool>, rows: usize) -> Result<Self> {
+        let owner = pool.clone();
+        // SAFETY: the Arc retains both allocator and stream until buffer drops.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&owner) };
+        Ok(Self {
+            buffer: DeviceBuffer::zeroed_in(retained.resource(), retained.stream(), rows)?,
+            _pool: owner,
+        })
     }
-    fn get(&self) -> &DeviceBuffer<T> { self.buffer.as_ref().unwrap() }
-    fn get_mut(&mut self) -> &mut DeviceBuffer<T> { self.buffer.as_mut().unwrap() }
-}
-impl<T: DeviceCopy> Drop for Native<T> {
-    fn drop(&mut self) {
-        if let Some(buffer) = self.buffer.take() {
-            // SAFETY: all accesses were enqueued on this pool stream.
-            if let Err(error) = unsafe { buffer.drop_async(self.pool.stream()) } { self.pool.context().record_err::<()>(Err(error)); }
-        }
+    pub(crate) fn get(&self) -> &DeviceBuffer<T> {
+        &self.buffer
+    }
+    pub(crate) fn get_mut(&mut self) -> &mut DeviceBuffer<T> {
+        &mut self.buffer
     }
 }
-struct RadixScratch { workspace: rccl_cub::DeviceRadixSortBufferWorkspace, pool: Arc<Pool> }
+thread_local! {
+    static RADIX_CONTROLS: std::cell::RefCell<Vec<(bool, usize, RadixWorkspace, Arc<Pool>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn release_radix_controls() {
+    RADIX_CONTROLS.with(|cache| cache.borrow_mut().clear());
+}
+struct RadixScratch {
+    workspace: Option<RadixWorkspace>,
+    rows: usize,
+    pairs: bool,
+    _pool: Arc<Pool>,
+}
 impl Drop for RadixScratch {
     fn drop(&mut self) {
-        fn release<T: DeviceCopy>(pool: &Pool, buffer: &mut DeviceBuffer<T>) {
-            // SAFETY: zero-length replacement owns no allocation; old uses are stream ordered.
-            let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }.expect("empty allocation");
-            let old = std::mem::replace(buffer, empty);
-            if let Err(error) = unsafe { old.drop_async(pool.stream()) } { pool.context().record_err::<()>(Err(error)); }
-        }
-        let (bins, lookback, counters) = self.workspace.__parts_mut();
-        release(&self.pool, bins); release(&self.pool, lookback); release(&self.pool, counters);
+        let Some(workspace) = self.workspace.take() else { return };
+        let entry = (self.pairs, self.rows, workspace, self._pool.clone());
+        let _ = RADIX_CONTROLS.try_with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache.retain(|entry| Arc::ptr_eq(&entry.3, &self._pool));
+            if let Some(index) = cache.iter().position(|entry| entry.0 == self.pairs) {
+                if cache[index].1 >= self.rows { return; }
+                cache.remove(index);
+            }
+            cache.push(entry);
+        });
     }
 }
-fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usize> {
+impl RadixScratch {
+    fn new(pool: &Arc<Pool>, launch: &rccl_cub::cuda::Launch<'_, '_>, rows: usize, pairs: bool) -> Result<Self> {
+        if let Some((_, capacity, workspace, owner)) = RADIX_CONTROLS.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache.retain(|entry| Arc::ptr_eq(&entry.3, pool));
+            cache.iter().position(|entry| entry.0 == pairs && entry.1 >= rows)
+                .map(|index| cache.remove(index))
+        }) {
+            return Ok(Self { workspace: Some(workspace), rows: capacity, pairs, _pool: owner });
+        }
+        let owner = pool.clone();
+        assert!(std::ptr::eq(launch.stream(), pool.stream().as_ref()));
+        // SAFETY: the Arc retains the allocator and this exact stream until
+        // workspace destruction. The program lifetime is not extended.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&owner) };
+        let launch: rccl_cub::cuda::Launch<'static, '_> = unsafe { std::mem::transmute(*launch) };
+        let workspace = if pairs {
+            rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u64, u32, _>(
+                retained.resource(), &launch, rows,
+            )?
+        } else {
+            rccl_cub::device_radix_sort_keys_buffer_workspace_in::<u64, _>(
+                retained.resource(), &launch, rows,
+            )?
+        };
+        Ok(Self { workspace: Some(workspace), rows, pairs, _pool: owner })
+    }
+}
+
+/// A live prefix of exclusively borrowed scratch. Capacity is not sort length.
+struct SortPrefix<'a, T: DeviceCopy> {
+    buffer: &'a mut DeviceBuffer<T>,
+    rows: usize,
+}
+impl<'a, T: DeviceCopy> SortPrefix<'a, T> {
+    fn new(buffer: &'a mut Native<T>, rows: usize) -> Self {
+        assert!(rows <= buffer.get().len());
+        Self {
+            buffer: buffer.get_mut(),
+            rows,
+        }
+    }
+    fn ptr(&self) -> u64 {
+        self.buffer.cu_deviceptr()
+    }
+}
+impl<T: DeviceCopy> rccl_cub::DeviceRange for SortPrefix<'_, T> {
+    fn len(&self) -> usize {
+        self.rows
+    }
+}
+// SAFETY: the checked prefix retains an exclusive borrow of its live owner.
+unsafe impl<T: DeviceCopy> cuda_host::KernelSliceArg for SortPrefix<'_, T> {
+    type Elem = T;
+    fn cu_deviceptr(&self) -> u64 {
+        self.ptr()
+    }
+    fn len(&self) -> usize {
+        self.rows
+    }
+}
+unsafe impl<T: DeviceCopy> cuda_host::KernelSliceArgMut for SortPrefix<'_, T> {}
+
+pub(crate) struct KeySortScratch {
+    first: Native<u64>,
+    alternate: Native<u64>,
+    controls: RadixScratch,
+}
+impl KeySortScratch {
+    pub(crate) fn new(
+        pool: &Arc<Pool>,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        rows: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            first: Native::new(pool, rows)?,
+            alternate: Native::new(pool, rows)?,
+            controls: RadixScratch::new(pool, launch, rows, false)?,
+        })
+    }
+    pub(crate) fn capacity(&self) -> usize {
+        self.first.get().len()
+    }
+
+    pub(crate) fn sort(
+        &mut self,
+        pool: &Arc<Pool>,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        input: *const u64,
+        rows: usize,
+        bits: u32,
+    ) -> Result<*const u64> {
+        unsafe {
+            cuda_core::simt::memory::memcpy_dtod_async(
+                self.first.get().cu_deviceptr(),
+                input as u64,
+                rows * 8,
+                pool.stream().cu_stream(),
+            )?;
+        }
+        let mut first = SortPrefix::new(&mut self.first, rows);
+        let mut alternate = SortPrefix::new(&mut self.alternate, rows);
+        let mut buffers = rccl_cub::DoubleBuffer::new(&mut first, &mut alternate)
+            .ok_or("unequal scalar radix buffers")?;
+        rccl_cub::device_radix_sort_keys_buffer(
+            launch,
+            &mut buffers,
+            0..bits,
+            self.controls.workspace.as_mut().unwrap(),
+        )?;
+        Ok(buffers.current().ptr() as *const u64)
+    }
+}
+
+pub(crate) struct RowSortScratch {
+    first: Native<u64>,
+    alternate: Native<u64>,
+    indices: Native<u32>,
+    alternate_indices: Native<u32>,
+    controls: RadixScratch,
+}
+impl RowSortScratch {
+    pub(crate) fn new(
+        pool: &Arc<Pool>,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        rows: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            first: Native::new(pool, rows)?,
+            alternate: Native::new(pool, rows)?,
+            indices: Native::new(pool, rows)?,
+            alternate_indices: Native::new(pool, rows)?,
+            controls: RadixScratch::new(pool, launch, rows, true)?,
+        })
+    }
+    pub(crate) fn capacity(&self) -> usize {
+        self.first.get().len()
+    }
+
+    pub(crate) fn sort(
+        &mut self,
+        pool: &Arc<Pool>,
+        module: &run_kernels::LoadedModule,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        input: *const u64,
+        rows: usize,
+        bits: u32,
+        physical_lanes: u32,
+        ms_first: bool,
+        block_threads: u32,
+    ) -> Result<*const u32> {
+        if rows > u32::MAX as usize || bits == 0 || bits.div_ceil(64) > physical_lanes
+            || block_threads != 256
+        {
+            return Err("invalid stable row sort dimensions or launch width".into());
+        }
+        let lanes = bits.div_ceil(64);
+        let mut first = SortPrefix::new(&mut self.first, rows);
+        let mut alternate = SortPrefix::new(&mut self.alternate, rows);
+        let mut indices = SortPrefix::new(&mut self.indices, rows);
+        let mut alternate_indices = SortPrefix::new(&mut self.alternate_indices, rows);
+        let mut buffers = rccl_cub::DoubleBuffer::paired(
+            (&mut first, &mut indices),
+            (&mut alternate, &mut alternate_indices),
+        )
+        .ok_or("unequal lane radix buffers")?;
+        let initial = module.prepare_gather_lane(LaunchConfig1D::new(1, block_threads, 0))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            initial.function(),
+            rows.div_ceil(block_threads as usize),
+            block_threads,
+            0,
+        )?;
+        let prepared = module.prepare_gather_lane(LaunchConfig1D::new(grid, block_threads, 0))?;
+        // Stable least-significant-lane passes retain full-row order.
+        for lane in 0..lanes {
+            let (values, order) = buffers.current_mut();
+            module.gather_lane(
+                pool.stream(),
+                &prepared,
+                input,
+                rows as u32,
+                lane,
+                physical_lanes,
+                ms_first,
+                values.ptr() as *mut u64,
+                order.ptr() as *mut u32,
+            )?;
+            rccl_cub::device_radix_sort_pairs_buffer(
+                launch,
+                &mut buffers,
+                0..(bits - lane * 64).min(64),
+                self.controls.workspace.as_mut().unwrap(),
+            )?;
+        }
+        Ok(buffers.current().1.ptr() as *const u32)
+    }
+}
+pub(crate) fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usize> {
+    crate::phases::admission_scope!(c"admit/count-readback");
     let mut count = 0_u64;
     // SAFETY: preceding compaction initialized one u64; stack storage survives synchronization.
-    unsafe { cuda_core::simt::memory::memcpy_dtoh_async(&mut count as *mut u64, buffer.cu_deviceptr(), 8, pool.stream().cu_stream())?; }
+    unsafe {
+        cuda_core::simt::memory::memcpy_dtoh_async(
+            &mut count as *mut u64,
+            buffer.cu_deviceptr(),
+            8,
+            pool.stream().cu_stream(),
+        )?;
+    }
     crate::record_readback();
     pool.stream().synchronize()?;
     Ok(usize::try_from(count)?)
 }
 
+/// The stable sorting permutation of an initialized packed-word prefix.
+///
+/// Least-significant-lane-first stable radix passes over row indices keep
+/// equal words in input order, so the permutation also orders occurrences.
+/// Shared by full-key set canonicalization and occurrence-preserving grouped radix runs.
+pub(crate) fn stable_order<W: Word>(
+    pool: &Arc<Pool>,
+    module: &run_kernels::LoadedModule,
+    launch: &rccl_cub::cuda::Launch<'_, '_>,
+    input: &Buffer<W>,
+    rows: usize,
+    block_threads: u32,
+    active_bits: u32,
+) -> Result<Native<u32>> {
+    stable_row_order(
+        pool,
+        module,
+        launch,
+        input.ptr().cast(),
+        rows,
+        active_bits,
+        W::BITS / 64,
+        W::MS_FIRST,
+        block_threads,
+    )
+}
+
+/// Stable row ordering shared by typed words and runtime-sized encoded rows.
+/// `bits` records significant bits; padding above it must be zero.
+/// `physical_lanes` is the row stride, independent of the active lane count.
+pub(crate) fn stable_row_order(
+    pool: &Arc<Pool>,
+    module: &run_kernels::LoadedModule,
+    launch: &rccl_cub::cuda::Launch<'_, '_>,
+    input: *const u64,
+    rows: usize,
+    bits: u32,
+    physical_lanes: u32,
+    ms_first: bool,
+    block_threads: u32,
+) -> Result<Native<u32>> {
+    let mut scratch = RowSortScratch::new(pool, launch, rows)?;
+    let current = scratch.sort(
+        pool,
+        module,
+        launch,
+        input,
+        rows,
+        bits,
+        physical_lanes,
+        ms_first,
+        block_threads,
+    )?;
+    Ok(if current as u64 == scratch.indices.get().cu_deviceptr() {
+        scratch.indices
+    } else {
+        scratch.alternate_indices
+    })
+}
+
+/// Affine pooled output reinterpreted as scalar lanes only after checking that
+/// the sealed Word type occupies exactly one u64 (u64 or [u64; 1]).
+struct ScalarOutput<W: Word>(Buffer<W>);
+impl<W: Word> rccl_cub::DeviceRange for ScalarOutput<W> {
+    fn len(&self) -> usize { self.0.len() }
+}
+// SAFETY: only stable_keys constructs this wrapper, after checking its layout.
+unsafe impl<W: Word> cuda_host::KernelSliceArg for ScalarOutput<W> {
+    type Elem = u64;
+    fn cu_deviceptr(&self) -> u64 { self.0.cu_deviceptr() }
+    fn len(&self) -> usize { self.0.len() }
+}
+unsafe impl<W: Word> cuda_host::KernelSliceArgMut for ScalarOutput<W> {}
+
+/// Direct stable scalar sort with a pooled output that can be adopted whole.
+fn stable_keys<W: Word>(
+    pool: &Arc<Pool>,
+    launch: &rccl_cub::cuda::Launch<'_, '_>,
+    input: *const W,
+    rows: usize,
+    bits: u32,
+) -> Result<Buffer<W>> {
+    if W::BITS != 64 || bits > 64 {
+        return Err("scalar radix sort requires one physical lane".into());
+    }
+    let mut first = ScalarOutput(unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? });
+    let mut alternate = ScalarOutput(unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? });
+    unsafe {
+        cuda_core::simt::memory::memcpy_dtod_async(
+            first.0.cu_deviceptr(), input as u64, rows * 8,
+            pool.stream().cu_stream(),
+        )?;
+    }
+    let mut controls = RadixScratch::new(pool, launch, rows, false)?;
+    let first_is_current = {
+        let mut buffers = rccl_cub::DoubleBuffer::new(&mut first, &mut alternate)
+            .ok_or("unequal scalar radix buffers")?;
+        rccl_cub::device_radix_sort_keys_buffer(
+            launch, &mut buffers, 0..bits, controls.workspace.as_mut().unwrap(),
+        )?;
+        buffers.current_is_first()
+    };
+    Ok(if first_is_current { first.0 } else { alternate.0 })
+}
+
+/// Stable merge-path co-rank: how many `first` rows precede output `diagonal`
+/// when equal words take the first run before the second.
+/// # Safety
+/// Both pointers must address initialized sorted words of the given lengths.
+#[inline(always)]
+pub(crate) unsafe fn corank<W: Word>(
+    first: *const W,
+    first_len: usize,
+    second: *const W,
+    second_len: usize,
+    diagonal: usize,
+) -> usize {
+    let mut lo = diagonal.saturating_sub(second_len);
+    let mut hi = diagonal.min(first_len);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let other = diagonal - mid;
+        if other > 0
+            && mid < first_len
+            && !unsafe { &*first.add(mid) }
+                .compare(unsafe { &*second.add(other - 1) })
+                .is_gt()
+        {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 #[cuda_host::cuda_module]
-mod run_kernels {
-    use crate::{Word, runs::RunView};
+pub(crate) mod run_kernels {
+    use crate::{runs::RunView, Word};
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-    pub const MERGE_TILE_ROWS: usize = 32;
 
     /// Each thread finds one merge-path diagonal, then merges a bounded tile.
     /// Tiles partition the output, so rows need neither atomics nor scratch.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn merge_wide<W: Word>(first: RunView<W>, second: RunView<W>, output: *mut W) {
+    pub fn merge_wide<W: Word>(
+        first: RunView<W>,
+        second: RunView<W>,
+        output: *mut W,
+        merge_tile_rows: usize,
+    ) {
         let rows = first.len + second.len;
         let mut tile = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
-        let tiles = rows.div_ceil(MERGE_TILE_ROWS);
+        let tiles = rows.div_ceil(merge_tile_rows);
         while tile < tiles {
-            let start = tile * MERGE_TILE_ROWS;
-            let end = start + (rows - start).min(MERGE_TILE_ROWS);
-            let mut lo = start.saturating_sub(second.len);
-            let mut hi = start.min(first.len);
+            let start = tile * merge_tile_rows;
+            let end = start + (rows - start).min(merge_tile_rows);
             // Find how many first-run rows precede this output diagonal.
             // Equal keys prefer the first run, matching the merge below.
-            while lo < hi {
-                let mid = lo + (hi - lo) / 2;
-                let other = start - mid;
-                if other > 0 && mid < first.len
-                    && !unsafe { &*first.ptr.add(mid) }
-                        .compare(unsafe { &*second.ptr.add(other - 1) }).is_gt()
-                {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
-                }
-            }
+            let lo =
+                unsafe { crate::runs::corank(first.ptr, first.len, second.ptr, second.len, start) };
             let mut a = lo;
             let mut b = start - lo;
             let mut row = start;
             while row < end {
-                let take_first = a < first.len && (b == second.len
-                    || !unsafe { &*first.ptr.add(a) }
-                        .compare(unsafe { &*second.ptr.add(b) }).is_gt());
+                let take_first = a < first.len
+                    && (b == second.len
+                        || !unsafe { &*first.ptr.add(a) }
+                            .compare(unsafe { &*second.ptr.add(b) })
+                            .is_gt());
                 unsafe {
                     if take_first {
                         *output.add(row) = *first.ptr.add(a);
@@ -467,7 +864,9 @@ mod run_kernels {
         let mut row = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
         while row < rows as usize {
-            unsafe { *output.add(row) = *input.add(*order.add(row) as usize); }
+            unsafe {
+                *output.add(row) = *input.add(*order.add(row) as usize);
+            }
             row += stride;
         }
     }
@@ -475,18 +874,27 @@ mod run_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn gather_lane<W: Word>(
-        input: *const W, rows: u32, lane: u32, values: *mut u64, order: *mut u32,
+    pub fn gather_lane(
+        input: *const u64,
+        rows: u32,
+        lane: u32,
+        lanes: u32,
+        ms_first: bool,
+        values: *mut u64,
+        order: *mut u32,
     ) {
         let mut row = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
-        let lanes = W::BITS / 64;
-        let physical = if W::MS_FIRST { lanes - 1 - lane } else { lane };
+        let physical = if ms_first { lanes - 1 - lane } else { lane };
         while row < rows as usize {
-            let source = if lane == 0 { row as u32 } else { unsafe { *order.add(row) } };
+            let source = if lane == 0 {
+                row as u32
+            } else {
+                unsafe { *order.add(row) }
+            };
             unsafe {
                 *order.add(row) = source;
-                *values.add(row) = *input.cast::<u64>().add(source as usize * lanes as usize + physical as usize);
+                *values.add(row) = *input.add(source as usize * lanes as usize + physical as usize);
             }
             row += stride;
         }
@@ -494,7 +902,13 @@ mod run_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn absent<W: Word>(input: *const W, rows: u64, runs: *const RunView<W>, count: u32, flags: *mut u32) {
+    pub fn absent<W: Word>(
+        input: *const W,
+        rows: u64,
+        runs: *const RunView<W>,
+        count: u32,
+        flags: *mut u32,
+    ) {
         let mut row = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
         while row < rows as usize {
@@ -507,12 +921,19 @@ mod run_kernels {
                 let mut end = view.len;
                 while begin < end {
                     let mid = begin + (end - begin) / 2;
-                    if unsafe { &*view.ptr.add(mid) }.compare(&value).is_lt() { begin = mid + 1; } else { end = mid; }
+                    if unsafe { &*view.ptr.add(mid) }.compare(&value).is_lt() {
+                        begin = mid + 1;
+                    } else {
+                        end = mid;
+                    }
                 }
-                absent = begin == view.len || !unsafe { &*view.ptr.add(begin) }.compare(&value).is_eq();
+                absent =
+                    begin == view.len || !unsafe { &*view.ptr.add(begin) }.compare(&value).is_eq();
                 run += 1;
             }
-            unsafe { *flags.add(row) = absent as u32; }
+            unsafe {
+                *flags.add(row) = absent as u32;
+            }
             row += stride;
         }
     }

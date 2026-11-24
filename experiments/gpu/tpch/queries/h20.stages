@@ -1,0 +1,62 @@
+program h20 {
+    domain PartName = dictionary(part.p_name);
+    domain SupplierName = dictionary(supplier.s_name);
+    domain SupplierAddress = dictionary(supplier.s_address);
+    domain NationName = dictionary(nation.n_name);
+    input Part(p_partkey: i64, p_name: StringCode in PartName) = table(part);
+    input Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64) = table(partsupp);
+    input Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
+        l_suppkey: i64, l_quantity: Decimal, l_shipdate: Date) = table(lineitem);
+    input Supplier(s_suppkey: i64, s_nationkey: i32, s_name: StringCode in SupplierName,
+        s_address: StringCode in SupplierAddress) = table(supplier);
+    input Nation(n_nationkey: i32, n_name: StringCode in NationName) = table(nation);
+    input ForestNames(code: StringCode in PartName) = dictionary(PartName) where { |value: &str| {
+        value.starts_with("forest")
+    } };
+    operand start: Date = date { Date::load("1994-01-01").expect("authored ISO date") };
+    operand end: Date = date { Date::load("1995-01-01").expect("authored ISO date") };
+    stage s0 {
+        inputs { Lineitem = Lineitem; }
+        captures [start, end];
+        evidence {}
+        cq {
+            struct Shipments;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
+                l_suppkey: i64, l_quantity: Decimal, l_shipdate: Date);
+            relation answer(part_key: i64, supplier_key: i64, quantity_units: i64);
+            answer(part_key, supplier_key, sum(quantity_units)) :-
+                Lineitem(order_key, line_number, part_key, supplier_key, quantity, shipdate),
+                where shipdate >= start && shipdate < end,
+                let quantity_units: i64 = quantity.scaled();
+        }
+    }
+    publish Shipped = s0 owned;
+    stage s1 {
+        inputs {
+            Part = Part; ForestNames = ForestNames; Partsupp = Partsupp; Shipped = Shipped;
+            Supplier = Supplier; Nation = Nation;
+        }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Part(p_partkey: i64, p_name: StringCode);
+            relation ForestNames(name: StringCode);
+            relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64);
+            relation Shipped(part_key: i64, supplier_key: i64, quantity_units: i64);
+            relation Supplier(s_suppkey: i64, s_nationkey: i32, s_name: StringCode, s_address: StringCode);
+            relation Nation(n_nationkey: i32, n_name: StringCode);
+            relation answer(supplier_name: StringCode, address: StringCode);
+            answer(supplier_name, address) :-
+                Part(part_key, part_name), ForestNames(part_name),
+                Partsupp(part_key, supplier_key, available), Shipped(part_key, supplier_key, quantity_units),
+                if i128::from(*available) * 200 > i128::from(*quantity_units),
+                Supplier(supplier_key, nation_key, supplier_name, address),
+                Nation(nation_key, nation_name), where nation_name == "CANADA";
+        }
+    }
+    terminal {
+        from s1 project [column(0), column(1)]
+            dictionaries [0 = SupplierName, 1 = SupplierAddress];
+    }
+}

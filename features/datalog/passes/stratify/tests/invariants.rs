@@ -1,5 +1,5 @@
-use cq_datalog_stratify::{self as stratify, invariants};
 use cq_datalog_incremental as seminaive;
+use cq_datalog_stratify::{self as stratify, invariants};
 use cq_lang_datalog_source::{BodyItem, Program};
 use cq_lang_datalog_strata::contract;
 use quote::ToTokens;
@@ -27,35 +27,84 @@ fn frozen_filter_roundtrips_and_erases_independently() {
     assert_eq!(parsed, after);
     invariants::check(&before, &parsed).unwrap();
     let scheduled = seminaive::compile(&parsed).unwrap();
-    cq_lang_datalog_incremental::contract::check(&syn::parse2(scheduled.to_token_stream()).unwrap()).unwrap();
-    assert_eq!(cq_lang_datalog_strata::invariants::erase(&after).unwrap(), before);
+    cq_lang_datalog_incremental::contract::check(
+        &syn::parse2(scheduled.to_token_stream()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cq_lang_datalog_strata::invariants::erase(&after).unwrap(),
+        before
+    );
 }
 
 #[test]
-fn helper_ownership_follows_declared_column_types() {
-    for (ty, expected) in [
-        ("i64", "*x"),
-        ("::core::primitive::u32", "*x"),
-        ("bool", "*x"),
-        ("char", "*x"),
-        ("&'static str", "*x"),
-        ("String", "(*x).clone()"),
-        ("UserType", "(*x).clone()"),
+fn helper_projection_is_relational_and_type_blind() {
+    for ty in [
+        "i64",
+        "::core::primitive::u32",
+        "bool",
+        "char",
+        "&'static str",
+        "String",
+        "UserType",
     ] {
-        let expression = cq_lang_datalog_source::invariants::owned_column(
-            &syn::parse_quote!(x),
-            &syn::parse_str(ty).unwrap(),
-        );
-        assert_eq!(expression, syn::parse_str::<syn::Expr>(expected).unwrap());
+        let mut source = source();
+        for declaration in &mut source.declarations {
+            for column in &mut declaration.columns {
+                column.ty = syn::parse_str(ty).unwrap();
+            }
+        }
+        let before = stratify::compile(&source).unwrap();
+        let after = invariants::compile(&before).unwrap();
+        let helper = after.source.rules.last().unwrap();
+        assert_eq!(helper.head.args[0], syn::parse_quote!(y));
+        assert_eq!(helper.head.args[1], syn::parse_quote!(z));
+        invariants::check(&before, &after).unwrap();
+        for expression in [
+            syn::parse_quote!(*y),
+            syn::parse_quote!((*y).clone()),
+            syn::parse_quote!(z),
+        ] {
+            let mut forged = after.clone();
+            forged.source.rules.last_mut().unwrap().head.args[0] = expression;
+            assert!(contract::check(&forged).is_err());
+        }
     }
-    let after = invariants::compile(&stratify::compile(&source()).unwrap()).unwrap();
-    assert_eq!(
-        after.source.rules.last().unwrap().head.args[0],
-        syn::parse_quote!(*y)
-    );
-    let mut forged = after;
-    forged.source.rules.last_mut().unwrap().head.args[0] = syn::parse_quote!((*y).clone());
-    assert!(contract::check(&forged).is_err());
+}
+
+#[test]
+fn helper_projection_preserves_each_selected_code_domain() {
+    let source: Program = syn::parse_quote! {
+        struct FilteredCodes;
+        relation Seed(x:u32 in (names),y:u32 in (names)) = (seed);
+        relation Edge(kind:u32 in (kinds),x:u32 in (names),y:u32 in (names)) = (edges);
+        relation Block(x:u32 in (names)) = (blocked);
+        relation Reach(x:u32 in (names),y:u32 in (names));
+        output Reach;
+        Reach(*x,*y) :- Seed(x,y);
+        Reach(*x,*z) :- Reach(x,y), Edge("edge",y,z), !Block(z);
+    };
+    let before = stratify::compile(&source).unwrap();
+    let after = invariants::compile(&before).unwrap();
+    assert_eq!(after.source.invariants.len(), 1);
+    let helper = after.source.declarations.last().unwrap();
+    assert_eq!(helper.columns.len(), 2);
+    for (column, input) in helper
+        .columns
+        .iter()
+        .zip(source.declarations[1].columns.iter().skip(1))
+    {
+        assert_eq!(column.ty, input.ty);
+        assert_eq!(column.domain, input.domain);
+    }
+    let parsed = syn::parse2(after.to_token_stream()).unwrap();
+    invariants::check(&before, &parsed).unwrap();
+    seminaive::compile(&parsed).unwrap();
+    for domain in [None, Some(syn::parse_quote!(in (kinds)))] {
+        let mut forged = after.clone();
+        forged.source.declarations.last_mut().unwrap().columns[0].domain = domain;
+        assert!(contract::check(&forged).is_err());
+    }
 }
 
 #[test]
@@ -89,14 +138,18 @@ fn leaves_drivers_unfiltered_atoms_opaque_clauses_and_expanding_joins_alone() {
         "Reach(*x,*z) :- Edge(y,z), !Block(z), Reach(x,y);",
         "Reach(*x,*z) :- Reach(x,y), Edge(y,z);",
         "Reach(*x,*z) :- Reach(x,y), Edge(y,z), Edge(z,w), !Block(w);",
-        "Reach(*x,*z) :- Reach(x,y), Edge(y,z), if *z > 0, !Block(z);",
+        "Reach(*x,*z) :- Reach(x,y), Edge(y,z), where z > 0, !Block(z);",
         "Reach(*x,*z) :- Reach(x,y), Edge(y,z), !Block(x);",
     ] {
         let mut p = source();
         p.rules[1] = syn::parse_str(body).unwrap();
         let p = stratify::compile(&p).unwrap();
         assert!(
-            invariants::compile(&p).unwrap().source.invariants.is_empty(),
+            invariants::compile(&p)
+                .unwrap()
+                .source
+                .invariants
+                .is_empty(),
             "{body}"
         );
     }
@@ -141,8 +194,13 @@ fn benchmark_program(text: &str) -> Program {
     fn find(tokens: TokenStream) -> Option<Program> {
         let tokens: Vec<_> = tokens.into_iter().collect();
         for window in tokens.windows(3) {
-            if let [TokenTree::Ident(name), TokenTree::Punct(bang), TokenTree::Group(body)] = window
-                && name == "datalog" && bang.as_char() == '!'
+            if let [
+                TokenTree::Ident(name),
+                TokenTree::Punct(bang),
+                TokenTree::Group(body),
+            ] = window
+                && name == "datalog"
+                && bang.as_char() == '!'
             {
                 let mut body = body.stream().into_iter().peekable();
                 if matches!(body.peek(), Some(TokenTree::Ident(name)) if name == "pipeline") {
@@ -166,7 +224,12 @@ fn ddisasm_selects_only_the_recursive_register_filter() {
     let before = stratify::compile(&source).unwrap();
     let after = invariants::compile(&before).unwrap();
     assert_eq!(
-        after.source.invariants.iter().map(|h| h.rule).collect::<Vec<_>>(),
+        after
+            .source
+            .invariants
+            .iter()
+            .map(|h| h.rule)
+            .collect::<Vec<_>>(),
         [8]
     );
     invariants::check(&before, &after).unwrap();
@@ -180,7 +243,12 @@ fn doop_invariant_selection_is_checked_without_blanket_join_materialization() {
     let after = invariants::compile(&before).unwrap();
     eprintln!(
         "DOOP invariant rules: {:?}",
-        after.source.invariants.iter().map(|h| h.rule).collect::<Vec<_>>()
+        after
+            .source
+            .invariants
+            .iter()
+            .map(|h| h.rule)
+            .collect::<Vec<_>>()
     );
     invariants::check(&before, &after).unwrap();
     seminaive::compile(&after).unwrap();

@@ -34,6 +34,8 @@ pub fn compile(source: &storage::Program) -> syn::Result<Program> {
         default_pipeline(),
         TerminalRegistry::default(),
         syn::parse_quote!(none),
+        Some(2),
+        Some(0),
         None,
     )
 }
@@ -42,6 +44,8 @@ struct Arguments {
     terminals: TerminalRegistry,
     timing: Ident,
     lower: Option<usize>,
+    plan: Option<usize>,
+    shared_demand: Option<Vec<Vec<round::SharedDemand>>>,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
@@ -49,6 +53,8 @@ impl syn::parse::Parse for Arguments {
         let mut terminals = None;
         let mut timing = None;
         let mut lower = None;
+        let mut plan = None;
+        let mut shared_demand = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             input.parse::<syn::Token![=]>()?;
@@ -60,6 +66,24 @@ impl syn::parse::Parse for Arguments {
                 terminals = Some(input.parse()?);
             } else if name == "lower" && lower.is_none() {
                 lower = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
+            } else if name == "plan" && plan.is_none() {
+                plan = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
+            } else if name == "shared_demand" && shared_demand.is_none() {
+                let strata;
+                syn::bracketed!(strata in input);
+                shared_demand = Some(
+                    strata.parse_terminated(
+                        |input| {
+                            let demands;
+                            syn::bracketed!(demands in input);
+                            Ok(demands
+                                .parse_terminated(syn::parse::Parse::parse, syn::Token![,])?
+                                .into_iter()
+                                .collect())
+                        },
+                        syn::Token![,],
+                    )?.into_iter().collect(),
+                );
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -69,10 +93,12 @@ impl syn::parse::Parse for Arguments {
             input.parse::<syn::Token![;]>()?;
         }
         Ok(Self {
+            plan: plan.or_else(|| pipeline.is_none().then_some(0)),
+            lower: lower.or_else(|| pipeline.is_none().then_some(2)),
             pipeline: pipeline.unwrap_or_else(default_pipeline),
             terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
-            lower,
+            shared_demand,
         })
     }
 }
@@ -82,8 +108,10 @@ pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result
         terminals,
         timing,
         lower,
+        plan,
+        shared_demand,
     } = syn::parse2(args)?;
-    construct(source, pipeline, terminals, timing, lower)
+    construct(source, pipeline, terminals, timing, lower, plan, shared_demand)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -110,6 +138,105 @@ fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
         syn::parse_quote!(!#name(#(#args),*))
     }
 }
+/// The synthetic in-plan admission read `!C(x̄)`: the head relation's committed
+/// canonical layout over the complete head key, in canonical column order.
+fn admission_negation(context: &RoundContext, head: usize, args: &[syn::Expr]) -> BodyItem {
+    let canonical = &context.layouts[context.relations[head].providers.canonical];
+    let name = &canonical.name;
+    let args = canonical.columns.iter().map(|&column| &args[column]);
+    syn::parse_quote!(!#name(#(#args),*))
+}
+// Layouts change only positional host representation, never Rust-step order.
+fn use_layouts(
+    query: &mut round::cq::Query,
+    context: &RoundContext,
+    storage: &storage::Program,
+    variant: usize,
+) -> syn::Result<()> {
+    for read in storage.reads.iter().filter(|read| read.variant == variant) {
+        let Some(BodyItem::Positive { atom }) = query.body.iter_mut().nth(read.position) else {
+            return Err(syn::Error::new_spanned(
+                &*query,
+                "recorded read is not a positive occurrence",
+            ));
+        };
+        if read.kind == "direct" {
+            continue;
+        }
+        let layouts = if read.kind == "delta" {
+            &context.delta_layouts
+        } else {
+            &context.layouts
+        };
+        let layout = layouts
+            .get(read.index)
+            .ok_or_else(|| syn::Error::new_spanned(&*atom, "missing recorded layout"))?;
+        atom.args = read.columns.iter().map(|&i| atom.args[i].clone()).collect();
+        atom.relation = layout.name.clone();
+    }
+    Ok(())
+}
+
+fn scan_source(query: &round::cq::Query, context: &RoundContext) -> Option<InputSource> {
+    let BodyItem::Positive { atom } = query.body.first()? else {
+        return None;
+    };
+    if let Some(index) = context
+        .relations
+        .iter()
+        .position(|relation| relation.delta.as_ref() == Some(&atom.relation))
+    {
+        return Some(InputSource::Delta(index));
+    }
+    context
+        .layouts
+        .iter()
+        .position(|layout| layout.name == atom.relation && layout.key == 0)
+        .map(InputSource::Layout)
+}
+
+/// Formal rule FK-Known: decide where a rule hole discharges its head's
+/// committed anti-join, returning its written head-binding/advised level. Advice
+/// `known(at(level k))` places it in plan after the k-th positive read (k must
+/// not precede the read binding the last head variable); `known(admit)` keeps
+/// admission. Without advice, a hole whose queue records a planning invocation
+/// is in plan iff a read after the written head-binding level is recorded
+/// `multiply` (DL-Fanout): an early anti-join saves the expansion of known
+/// heads there, while before reads that only filter it would probe every
+/// intermediate row (the unconditional structural default measured DOOP xalan
+/// `mini` 2.36x and batik `mini-par` 2.95x slower). Device storage realizes
+/// `admit` only.
+/// Automatic admission leaves placement to CQ's ready-negation scheduling:
+/// its reordered reads need not bind the head at the written query's level.
+fn known_admission(
+    query: &round::cq::Query,
+    advice: Option<incremental::Known>,
+    device: bool,
+    planned: bool,
+    fanout: &[Fanout],
+) -> syn::Result<Option<usize>> {
+    let (last, reads) = round::head_level(query);
+    match advice {
+        Some(incremental::Known::At(_)) if device => Err(syn::Error::new_spanned(
+            query,
+            "GPU Datalog admission is at admit only (ADM-InPlan GPU follow-up)",
+        )),
+        _ if device => Ok(None),
+        Some(incremental::Known::At(level)) => {
+            ensure(
+                level >= last.max(1) && level <= reads,
+                query,
+                &format!(
+                    "known(at(level {level})) must lie between the read binding the last head variable (level {}) and the last positive read ({reads})",
+                    last.max(1)
+                ),
+            )?;
+            Ok(Some(level))
+        }
+        Some(incremental::Known::Admit) => Ok(None),
+        None => Ok((planned && round::fanout_follows(fanout, last)).then_some(last.max(1))),
+    }
+}
 
 fn scan_input(
     query: &mut round::cq::Query,
@@ -133,6 +260,8 @@ fn scan_input(
     let binding = &scan.binding;
     declaration.name = binding.clone();
     declaration.value = Some(syn::parse_quote!(= (#binding)));
+    // A scan is a whole, unkeyed input (a delta or key-zero layout bucket).
+    declaration.hosts = Vec::new();
     let BodyItem::Positive { atom } = &mut query.body[0] else {
         unreachable!("scan source is a positive read")
     };
@@ -140,30 +269,27 @@ fn scan_input(
     declaration
 }
 // Each hole owns only the CQ inputs it reads, including completed borrowed keys.
+// Layout and key-set inputs declare their token's host reads on their recorded
+// key (IF-HostDecl); delta row buffers declare none. Key sets collected by
+// non-batch key holes store borrowed key columns (`borrowed_keys`).
 fn hole_inputs<'a>(
+    tokens: &[storage::provider::Token],
     context: &RoundContext,
     keys: &[KeySet],
+    holes: &[round::cq::Program],
+    borrowed_keys: bool,
     names: impl Iterator<Item = &'a Ident>,
-) -> Vec<cq_syntax::RelationDecl> {
+) -> syn::Result<Vec<cq_syntax::RelationDecl>> {
     let names: std::collections::BTreeSet<_> = names.map(symbol_name).collect();
     let mut inputs = Vec::new();
     for relation in &context.relations {
-        if names.contains(&symbol_name(&relation.declaration.name)) {
-            let mut declaration = relation.declaration.clone();
-            let host = &relation.all;
-            declaration.value = Some(if declaration.value.is_some() {
-                syn::parse_quote!(= (#host))
-            } else {
-                syn::parse_quote!(= (&#host))
-            });
-            inputs.push(declaration);
-        }
         if let Some(delta) = &relation.delta {
             if names.contains(&symbol_name(delta)) {
                 let mut declaration = relation.declaration.clone();
                 declaration.name = delta.clone();
                 let host = relation.delta_host.as_ref().expect("checked delta host");
                 declaration.value = Some(syn::parse_quote!(= (&#host)));
+                declaration.hosts = Vec::new();
                 inputs.push(declaration);
             }
         }
@@ -179,6 +305,8 @@ fn hole_inputs<'a>(
                 .collect();
             let host = &layout.host;
             declaration.value = Some(syn::parse_quote!(= (&#host)));
+            declaration.hosts =
+                host_decls(tokens, &layout.provider, &declaration, layout.key, false)?;
             inputs.push(declaration);
         }
     }
@@ -188,7 +316,13 @@ fn hole_inputs<'a>(
             declaration.name = key.name.clone();
             declaration.columns = if key.columns.is_empty() {
                 let column = &declaration.columns[0].name;
-                syn::parse_quote!(#column: ())
+                let logical_type_id = holes[key.hole]
+                    .declarations
+                    .last()
+                    .expect("key output declaration")
+                    .columns[0]
+                    .logical_type_id;
+                syn::parse_quote!(#column: () #logical_type_id)
             } else {
                 key.columns
                     .iter()
@@ -197,10 +331,33 @@ fn hole_inputs<'a>(
             };
             let host = &key.name;
             declaration.value = Some(syn::parse_quote!(= (#host)));
+            // A unit key (no projected columns) stores an owned `()`.
+            let borrowed = borrowed_keys && !key.columns.is_empty();
+            let arity = declaration.columns.len();
+            declaration.hosts = host_decls(tokens, &key.provider, &declaration, arity, borrowed)?;
             inputs.push(declaration);
         }
     }
-    inputs
+    Ok(inputs)
+}
+/// The token's declared host reads on the leading `key` columns of `declaration`.
+fn host_decls(
+    tokens: &[storage::provider::Token],
+    provider: &storage::Provider,
+    declaration: &cq_syntax::RelationDecl,
+    key: usize,
+    borrowed: bool,
+) -> syn::Result<Vec<cq_syntax::HostDecl>> {
+    let token = storage::provider::lookup(tokens, &provider.token)?;
+    let key: Vec<Ident> = declaration
+        .columns
+        .iter()
+        .take(key)
+        .map(|column| column.name.clone())
+        .collect();
+    Ok(storage::provider::host_decl(token, &key, borrowed)
+        .into_iter()
+        .collect())
 }
 /// Lower variants and key projections, retaining the recorded schedule.
 fn construct(
@@ -209,37 +366,25 @@ fn construct(
     terminals: TerminalRegistry,
     timing: Ident,
     lower: Option<usize>,
+    plan: Option<usize>,
+    shared_demand: Option<Vec<Vec<round::SharedDemand>>>,
 ) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
+    ensure(
+        shared_demand.as_ref().is_none_or(|demands| demands.len() == analysis.components.len()),
+        source,
+        "shared_demand must provide one demand list per stratum",
+    )?;
     terminals.check()?;
     let interface = terminals.interface(&pipeline)?;
-    let lower = if let Some(lower) = lower {
-        ensure(
-            lower < pipeline.passes.len(),
-            source,
-            "lower invocation ordinal is out of range",
-        )?;
-        lower
-    } else {
-        let candidates: Vec<_> = pipeline
-            .passes
-            .iter()
-            .enumerate()
-            .filter(|(_, pass)| {
-                pass.path
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.ident == "lower")
-            })
-            .map(|(index, _)| index)
-            .collect();
-        ensure(
-            candidates.len() == 1,
-            source,
-            "fork requires exactly one named lower invocation; supply lower = <ordinal> for a custom alias",
-        )?;
-        candidates[0]
-    };
+    let lower = lower.ok_or_else(|| {
+        syn::Error::new_spanned(source, "custom fork queues require lower = <ordinal>")
+    })?;
+    ensure(
+        lower < pipeline.passes.len(),
+        source,
+        "lower invocation ordinal is out of range",
+    )?;
     // Only checked, per-hole facts may enter this invocation.
     let authored: cq_stage::Context = syn::parse2(pipeline.passes[lower].arguments.clone())?;
     ensure(
@@ -260,8 +405,7 @@ fn construct(
             .map(|(declaration, providers)| Relation {
                 declaration: declaration.clone(),
                 providers: providers.clone(),
-                all: fresh.id("all"),
-                seen: fresh.id("seen"),
+                next_canonical: fresh.id("next_canonical"),
                 next: fresh.id("next"),
                 delta: analysis
                     .deltas
@@ -284,7 +428,9 @@ fn construct(
                 name: fresh.id("layout"),
                 host: fresh.id("host"),
                 provider: layout.provider.clone(),
+                hasher: layout.hasher,
                 maintenance: layout.maintenance.clone(),
+                protocol: layout.protocol,
             })
             .collect(),
         delta_layouts: source
@@ -297,7 +443,9 @@ fn construct(
                 name: fresh.id("delta_layout"),
                 host: fresh.id("delta_host"),
                 provider: layout.provider.clone(),
+                hasher: layout.hasher,
                 maintenance: layout.maintenance.clone(),
+                protocol: layout.protocol,
             })
             .collect(),
         strata: Vec::new(),
@@ -311,9 +459,8 @@ fn construct(
                 let relation = analysis.positions[&symbol_name(id)];
                 Output {
                     relation,
-                    conversion: if source.incremental.strata.source.declarations[relation]
-                        .value
-                        .is_some()
+                    conversion: if source.layouts[source.providers[relation].canonical].protocol
+                        == storage::LayoutProtocol::Bulk
                     {
                         syn::parse_quote!(borrowed_cloned_into_iter)
                     } else {
@@ -327,7 +474,9 @@ fn construct(
         round_name: fresh.id("round"),
     };
     let mut holes: Vec<round::cq::Program> = Vec::new();
-    for members in &analysis.components {
+    let mut unit_type_id = None;
+    let mut planning = Vec::new();
+    for (stratum_index, members) in analysis.components.iter().enumerate() {
         let mut stratum = Stratum {
             members: members.clone(),
             keys: Vec::new(),
@@ -355,17 +504,11 @@ fn construct(
                         .filter(|(_, layout)| layout.relation == relation)
                         .map(|(index, _)| index)
                         .collect();
-                    let mut operations = Vec::new();
-                    if !full.is_empty() {
-                        operations.push(PublicationOp {
-                            kind: syn::parse_quote!(full_layouts),
-                            layouts: full,
-                        });
-                    }
-                    operations.push(PublicationOp {
-                        kind: syn::parse_quote!(all_extend),
-                        layouts: Vec::new(),
-                    });
+                    // The canonical layout is a full layout, so this is never empty.
+                    let mut operations = vec![PublicationOp {
+                        kind: syn::parse_quote!(full_layouts),
+                        layouts: full,
+                    }];
                     operations.push(PublicationOp {
                         kind: syn::parse_quote!(delta_swap),
                         layouts: Vec::new(),
@@ -431,74 +574,88 @@ fn construct(
                         filters: selections,
                         equalities: repeated,
                         name: fresh.id("keys"),
-                        provider: syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
+                        provider: planned.provider.clone(),
+                        hasher: planned.hasher,
                         hole: holes.len(),
                     };
                     let name = fresh.id("key_hole");
-                    let source_name = &source.incremental.strata.source.declarations[relation].name;
+                    // Completed relations are scanned through their canonical layout.
+                    let canonical = &context.layouts[source.providers[relation].canonical];
+                    let source_name = &canonical.name;
                     let variables: Vec<_> = source.incremental.strata.source.declarations[relation]
                         .columns
                         .iter()
                         .map(|_| fresh.id("column"))
                         .collect();
                     let (selected, output_columns): (Vec<_>, Vec<_>) = if key.columns.is_empty() {
+                        if unit_type_id.is_none() {
+                            let mut declarations =
+                                source.incremental.strata.source.declarations.clone();
+                            declarations.push(syn::parse_quote!(relation __cq_unit_key(unit: ());));
+                            cq_syntax::intern_logical_types(&mut declarations)?;
+                            unit_type_id = declarations.last().unwrap().columns[0].logical_type_id;
+                        }
                         let column = &variables[0];
-                        (vec![quote!(())], vec![quote!(#column: ())])
+                        (vec![quote!(())], vec![quote!(#column: () #unit_type_id)])
                     } else {
                         (
+                            // Key columns are projected variables on every
+                            // interface; a batch arena stores them as values.
                             key.columns
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    if interface == HoleInterface::Batch {
-                                        quote!(*#variable)
-                                    } else {
-                                        quote!(#variable)
-                                    }
+                                    quote!(#variable)
                                 })
                                 .collect(),
                             key.columns
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    let ty = &source.incremental.strata.source.declarations
+                                    let column = &source.incremental.strata.source.declarations
                                         [relation]
-                                        .columns[i]
-                                        .ty;
+                                        .columns[i];
+                                    let (ty, domain) = (&column.ty, &column.domain);
+                                    let logical_type_id = &column.logical_type_id;
                                     // Batch arenas own their scalar key columns;
                                     // host key sets retain borrowed projections.
+                                    // A key column keeps its authored code domain.
                                     if interface == HoleInterface::Batch {
-                                        quote!(#variable: #ty)
+                                        quote!(#variable: #ty #logical_type_id #domain)
                                     } else {
-                                        quote!(#variable: &#ty)
+                                        quote!(#variable: &#ty #logical_type_id #domain)
                                     }
                                 })
                                 .collect(),
                         )
                     };
-                    // Literals stay in the filtered occurrence. Nonliteral
-                    // expressions compare after scanning so owned values cannot
-                    // move through an FnMut fanout closure.
-                    let mut arguments: Vec<syn::Expr> = variables
+                    // Every key filter compares after scanning, so owned
+                    // values cannot move through an FnMut fanout closure.
+                    let arguments: Vec<syn::Expr> = variables
                         .iter()
                         .map(|variable| syn::parse_quote!(#variable))
                         .collect();
                     let mut selections = Vec::new();
                     for (column, expression) in &key.filters {
-                        if cq_syntax::equality::literal(cq_syntax::rust::unparen(expression)) {
-                            arguments[*column] = cq_syntax::rust::unparen(expression).clone();
-                        } else {
-                            let variable = &variables[*column];
-                            selections.push(quote!(if *#variable == (#expression)));
-                        }
+                        let variable = &variables[*column];
+                        selections.push(quote!(where #variable == (#expression)));
                     }
                     for &(first, repeated) in &key.equalities {
                         let first = &variables[first];
                         let repeated = &variables[repeated];
-                        selections.push(quote!(if #first == #repeated));
+                        selections.push(quote!(where #first == #repeated));
                     }
-                    let declarations = hole_inputs(&context, &[], std::iter::once(source_name));
+                    let arguments = canonical.columns.iter().map(|&column| &arguments[column]);
+                    let declarations = hole_inputs(
+                        &source.tokens,
+                        &context,
+                        &[],
+                        &holes,
+                        false,
+                        std::iter::once(source_name),
+                    )?;
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
+                    planning.push(None);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
                 };
@@ -515,26 +672,93 @@ fn construct(
             query.head.relation = name.clone();
             let mut output = source.incremental.strata.source.declarations[head].clone();
             output.name = name.clone();
+            // Formal rule DL-Fanout over the variant's source relations and
+            // the program's recorded EDB keys.
+            let strata_source = &source.incremental.strata.source;
+            let fanout = round::fanout(&variant.query, &|relation| strata_source.keys(relation));
+            let level = known_admission(
+                &query,
+                variant.known,
+                source.device.is_some(),
+                plan.is_some(),
+                &fanout,
+            )?;
+            let known = if level.is_some() {
+                Admission::InPlan
+            } else {
+                Admission::Admit
+            };
+            if level.is_some() {
+                // Formal rule ADM-InPlan: name computed head terms by ordinary
+                // bindings, then append the committed anti-join `!C(x̄)` over the
+                // head's canonical layout; only explicit advice pins its level.
+                let declaration = &source.incremental.strata.source.declarations[head];
+                for (position, argument) in query.head.args.iter_mut().enumerate() {
+                    if cq_syntax::rust::variable(argument).is_none() {
+                        let variable = fresh.id("known");
+                        let ty = &declaration.columns[position].ty;
+                        let binding: BodyItem = syn::parse_quote!(let #variable: #ty = #argument);
+                        query.body.push(binding);
+                        *argument = syn::parse_quote!(#variable);
+                    }
+                }
+                let args: Vec<syn::Expr> = query.head.args.iter().cloned().collect();
+                query.body.push(admission_negation(&context, head, &args));
+            }
             let declarations = hole_inputs(
+                &source.tokens,
                 &context,
                 &stratum.keys,
+                &holes,
+                interface != HoleInterface::Batch,
                 query.body.iter().filter_map(|item| match item {
                     BodyItem::Positive { atom } => Some(&atom.relation),
                     BodyItem::Negation(negative) => Some(&negative.atom.relation),
                     _ => None,
                 }),
-            );
+            )?;
             let hole = holes.len();
             holes.push(syn::parse2(
                 quote!(struct #name; #(#declarations)* #scan_declaration #output #query),
             )?);
+            planning.push(Some(Planning {
+                order: variant
+                    .query
+                    .body
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, item)| {
+                        matches!(item, BodyItem::Positive { .. }).then_some(variant.order[position])
+                    })
+                    .collect(),
+                authored: variant.authored,
+                steps: variant
+                    .steps
+                    .iter()
+                    .map(|step| PlanningStep {
+                        occurrence: step.occurrence,
+                        columns: step.columns.clone(),
+                    })
+                    .collect(),
+                smallest: variant.smallest.clone(),
+                known: if matches!(variant.known, Some(incremental::Known::At(_))) {
+                    level
+                } else {
+                    None
+                },
+                delta: variant.delta,
+                driver: source.incremental.driver,
+                permutation: variant.order.clone(),
+                shared_demand: shared_demand.as_ref().map(|demands| demands[stratum_index].clone()),
+            }));
             context.relations[head].admit.push(hole);
             let rule = RuleHole {
                 variant: variant_index,
                 head,
                 hole,
                 scan,
-                insertion: syn::parse_quote!(insert),
+                known,
+                fanout,
             };
             if variant.delta.is_some() {
                 stratum.steps.push(rule);
@@ -544,61 +768,68 @@ fn construct(
         }
         context.strata.push(stratum);
     }
-    let mut certified_hosts = std::collections::BTreeSet::new();
-    for certificate in &source.certificates {
-        let name = match symbol_name(&certificate.kind).as_str() {
-            "all" => Some(&context.relations[certificate.index].declaration.name),
-            "delta" => context.relations[certificate.index].delta.as_ref(),
-            "layout" => Some(&context.layouts[certificate.index].name),
-            "delta_layout" => Some(&context.delta_layouts[certificate.index].name),
-            _ => None,
-        };
-        if let Some(name) = name {
-            certified_hosts.insert(symbol_name(name));
-        }
-    }
-    for rule in context
-        .strata
-        .iter()
-        .flat_map(|s| s.seeds.iter().chain(&s.steps))
-    {
-        if let Some(scan) = &rule.scan {
-            let source_name = match scan.source {
-                InputSource::Delta(index) => context.relations[index].delta.as_ref(),
-                InputSource::Layout(index) => Some(&context.layouts[index].name),
-            };
-            if source_name.is_some_and(|name| certified_hosts.contains(&symbol_name(name))) {
-                certified_hosts.insert(symbol_name(&scan.binding));
+    /// Formal rule DL-PlanningOwner: authored order targets only its recorded planning invocation.
+    fn check_planning_owner(
+        pipeline: &cq_stage::Pipeline,
+        plan: Option<usize>,
+        lower: usize,
+        authored: bool,
+    ) -> syn::Result<()> {
+        if let Some(plan) = plan {
+            ensure(
+                plan < lower && plan < pipeline.passes.len(),
+                pipeline,
+                "planning invocation must precede lowering",
+            )?;
+            if authored {
+                ensure(
+                    pipeline.passes[plan].arguments.is_empty(),
+                    pipeline,
+                    "authored Datalog order conflicts with planning invocation arguments",
+                )?;
             }
+        } else {
+            ensure(
+                !authored,
+                pipeline,
+                "authored Datalog order requires a recorded planning invocation: plan = <ordinal>",
+            )?;
         }
+        Ok(())
+    }
+    check_planning_owner(
+        &pipeline,
+        plan,
+        lower,
+        planning
+            .iter()
+            .flatten()
+            .any(|facts| facts.authored || facts.known.is_some()),
+    )?;
+    debug_assert_eq!(holes.len(), planning.len());
+    for (index, hole) in holes.iter_mut().enumerate() {
+        hole.declared_evidence =
+            round::evidence::for_hole(source, &context, index, &hole.declarations)?;
     }
     let holes = holes
         .into_iter()
-        .map(|cq| {
+        .zip(planning)
+        .map(|(cq, planning)| {
             let facts = cq_stage::Context {
                 consumer_canonical: true,
-                discharged_host_sets: cq
-                    .query
-                    .body
-                    .iter()
-                    .filter_map(|item| match item {
-                        BodyItem::Positive { atom }
-                            if certified_hosts.contains(&symbol_name(&atom.relation)) =>
-                        {
-                            Some(symbol_name(&atom.relation))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
             };
             let mut pipeline = pipeline.clone();
             pipeline.passes[lower].arguments = facts.to_token_stream();
             Hole {
+                answer: round::answer_ownership(&cq, interface),
                 cq,
                 pipeline,
                 interface,
                 facts,
                 lower,
+                plan,
+                planning,
+                binding: None,
             }
         })
         .collect();

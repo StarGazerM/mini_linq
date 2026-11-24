@@ -3,8 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use cq_lang_structures::demand::{carried_columns, columns_used_rust as rust_columns};
 use cq_lang_structures::physical::{Definition, Operator, symbol_name};
-use cq_syntax::{algebra::Environment, rust};
+use cq_syntax::rust;
 
 use crate::{
     Analysis, Capability, Dispatch, DispatchShape, Machine, Monoid, Obligation, Program,
@@ -15,11 +16,19 @@ type Columns = BTreeSet<String>;
 
 #[derive(Clone)]
 enum Operation {
-    Map(Columns),
+    /// Net columns a map reads from its input row, and the columns it binds.
+    Map {
+        uses: Columns,
+        defines: Columns,
+    },
     Lookup {
         keys: Columns,
         payload: Columns,
         membership: bool,
+        /// Columns the expansion's children read from their parent besides
+        /// its later uses: every PH-Smallest side's bound prefix, which each
+        /// candidate's membership tests re-read (GPU-Smallest).
+        carried: Columns,
     },
     Flatten,
     Tile {
@@ -36,7 +45,8 @@ struct Chain {
 }
 
 struct Builder<'a> {
-    program: &'a Program,
+    physical_program: &'a cq_lang_structures::physical::Program,
+    structure_analysis: &'a cq_lang_structures::Analysis,
     analysis: &'a Analysis,
     definitions: BTreeMap<String, &'a Term>,
     physical: BTreeMap<String, &'a Definition>,
@@ -63,7 +73,13 @@ fn publication<'a>(
     })
 }
 
+/// Formal rule BE-Resource: derive payload demands from recorded publication
+/// refinements; without deferred-range publication, a range expands in place.
+/// Grading checks the target layout of these demands against level capacity.
 pub(crate) fn dispatch_shape(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     program: &Program,
     analysis: &Analysis,
     dispatch: &Dispatch,
@@ -113,19 +129,19 @@ pub(crate) fn dispatch_shape(
             .cloned(),
     );
     let builder = Builder {
-        program,
+        physical_program: physical,
+        structure_analysis,
         analysis,
         definitions,
-        physical: program
-            .structures
-            .physical
-            .program
-            .definitions
+        physical: physical.program.definitions
             .iter()
             .map(|definition| (symbol_name(&definition.name), definition))
             .collect(),
         publications,
-        carried: carried_columns(program, analysis),
+        carried: carried_columns(physical, structures, structure_analysis)
+            .into_iter()
+            .map(|(name, columns)| (name, columns.into_iter().collect()))
+            .collect(),
         scanned: analysis
             .dispatches
             .iter()
@@ -184,63 +200,31 @@ pub(crate) fn dispatch_shape(
             .iter()
             .any(|operation| matches!(operation, Operation::Canon))
     });
-    let host_union_operand = program.sequence.definitions.iter().any(|definition| {
-        analysis
-            .levels
-            .get(&symbol_name(&definition.name))
-            .is_some_and(|level| level.len() == 1)
-            && builder.host_union(&definition.term).is_some_and(|arms| {
-                arms.iter().any(
-                    |arm| matches!(arm, Term::Ref(reference) if symbol_name(reference) == *name),
-                )
-            })
+    let virtual_range = dispatch.gpu.as_ref().is_some_and(|execution| {
+        matches!(
+            execution.publication,
+            crate::gpu::Publication::DeferredRange { .. }
+        )
     });
-    let virtual_range = !final_output
-        && !canonical
-        && !host_union_operand
-        && chains.len() == 1
-        && !analysis.structures.built.contains_key(&chains[0].result)
-        && !builder.host_consumed_results().contains(&chains[0].result)
-        && chains[0]
-            .operations
-            .iter()
-            .rposition(|operation| {
-                matches!(
-                    operation,
-                    Operation::Lookup {
-                        membership: false,
-                        ..
-                    }
-                )
-            })
-            .is_some_and(|at| {
-                terminal_range(&chains[0].operations[at + 1..])
-                    && chains[0].operations[at + 1..]
-                        .iter()
-                        .any(|operation| matches!(operation, Operation::Flatten))
-            });
     let outputs = if final_output {
-        let returned = symbol_name(&program.structures.physical.program.returned);
-        program
-            .structures
-            .physical
-            .program
-            .head
+        let returned = symbol_name(&physical.program.returned);
+        physical.program.head
             .args
             .iter()
             .flat_map(|expression| {
-                rust_columns(expression, &analysis.structures.layouts[&returned], None)
+                rust_columns(expression, &structure_analysis.layouts[&returned], None)
             })
             .collect()
     } else if canonical && builder.output_fold(inner) {
-        // A scalar publication reuses the single declared output attribute.
-        program
-            .structures
-            .physical
-            .program
-            .head
+        // A scalar publication reuses the single declared output attribute;
+        // capture arguments are host values, not published attributes.
+        physical.program.head
             .args
-            .first()
+            .iter()
+            .find(|argument| {
+                !rust::variable(argument)
+                    .is_some_and(|v| physical.program.captures.contains(&symbol_name(v)))
+            })
             .and_then(rust::variable)
             .map(symbol_name)
             .into_iter()
@@ -249,8 +233,7 @@ pub(crate) fn dispatch_shape(
         chains
             .iter()
             .flat_map(|chain| {
-                analysis
-                    .structures
+                structure_analysis
                     .physical
                     .headings
                     .get(&chain.result)
@@ -389,8 +372,8 @@ impl<'p> Builder<'p> {
                 let mut chains = self.chains(inner)?;
                 let result = symbol_name(name);
                 for chain in &mut chains {
-                    let dependencies = self.map_columns(&result, &chain.result)?;
-                    chain.operations.push(Operation::Map(dependencies));
+                    let (uses, defines) = self.map_columns(&result, &chain.result)?;
+                    chain.operations.push(Operation::Map { uses, defines });
                     chain.result.clone_from(&result);
                 }
                 Ok(chains)
@@ -431,30 +414,41 @@ impl<'p> Builder<'p> {
         let mut chains = self.chains(inner)?;
         let provider = symbol_name(provider);
         let keys: Columns = keys.iter().map(symbol_name).collect();
+        // A lookup key equals its parent's value: a key still live after the
+        // lookup is carried as a parent, never re-read from the provider row,
+        // whichever provider representation stores it.
         let payload = if membership {
             Columns::new()
         } else {
-            self.payload(&provider, &keys)?
+            let mut payload = self.payload(&provider, &keys)?;
+            payload.retain(|column| !keys.contains(column));
+            payload
         };
         for chain in &mut chains {
+            let mut carried = Columns::new();
             if !membership {
                 chain.result = self.lookup_result(&provider, &keys, &chain.result)?;
+                for candidate in cq_lang_structures::physical::candidate_prefixes(
+                    self.physical_program,
+                    &self.structure_analysis.physical,
+                ) {
+                    if symbol_name(candidate.reader) == chain.result {
+                        carried.extend(candidate.sides.into_iter().flat_map(|(_, prefix)| prefix));
+                    }
+                }
             }
             chain.operations.push(Operation::Lookup {
                 keys: keys.clone(),
                 payload: payload.clone(),
                 membership,
+                carried,
             });
         }
         Ok(chains)
     }
 
     fn lookup_result(&self, provider: &str, keys: &Columns, input: &str) -> syn::Result<String> {
-        self.program
-            .structures
-            .physical
-            .program
-            .definitions
+        self.physical_program.program.definitions
             .iter()
             .find_map(|definition| match &definition.operator {
                 Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
@@ -528,7 +522,7 @@ impl<'p> Builder<'p> {
     }
 
     fn payload(&self, provider: &str, keys: &Columns) -> syn::Result<Columns> {
-        let structures = &self.analysis.structures;
+        let structures = self.structure_analysis;
         let result = self
             .analysis
             .results
@@ -569,47 +563,66 @@ impl<'p> Builder<'p> {
         } else {
             self.carried[result].clone()
         };
-        // Equality reconstructs the leading directory key from the parent;
-        // deeper directory keys are part of the enumerated provider payload.
-        if let Some(first) = order.first() {
-            payload.remove(first);
-        }
-        payload.extend(order.into_iter().skip(1));
+        // Directory levels beyond the lookup prefix are enumerated payload.
+        payload.extend(order);
         Ok(payload)
     }
 
-    fn map_columns(&self, result: &str, input: &str) -> syn::Result<Columns> {
-        let mut columns = Columns::new();
+    /// A map's net reads from its input row and the columns it binds. A read
+    /// of a column bound earlier in the same map is internal, not a use.
+    fn map_columns(&self, result: &str, input: &str) -> syn::Result<(Columns, Columns)> {
+        let mut definitions = Vec::new();
         let mut current = result.to_owned();
         while current != input {
             let definition = self
                 .physical
                 .get(&current)
                 .ok_or_else(|| error("BE-Resource: map has no checked Physical definition"))?;
-            columns.extend(operator_columns(&definition.operator, self.analysis));
+            definitions.push(definition);
             let Some(parent) = definition.operator.input() else {
                 break;
             };
             current = symbol_name(parent);
         }
-        Ok(columns)
+        let (mut uses, mut defines) = (Columns::new(), Columns::new());
+        for definition in definitions.into_iter().rev() {
+            let bound: Columns = match &definition.operator {
+                Operator::Bind(bind) => bind
+                    .binding_types()
+                    .iter()
+                    .map(|(name, _)| symbol_name(name))
+                    .collect(),
+                _ => Columns::new(),
+            };
+            uses.extend(
+                operator_columns(&definition.operator, self.structure_analysis)
+                    .into_iter()
+                    .filter(|column| !bound.contains(column) && !defines.contains(column)),
+            );
+            defines.extend(bound);
+        }
+        Ok((uses, defines))
     }
 
     fn live(&self, operations: &[Operation], sink: &Columns) -> Columns {
         let mut live = sink.clone();
         for operation in operations.iter().rev() {
             match operation {
-                Operation::Map(columns) => live.extend(columns.iter().cloned()),
+                Operation::Map { uses, defines } => {
+                    live.retain(|column| !defines.contains(column));
+                    live.extend(uses.iter().cloned());
+                }
                 Operation::Lookup {
                     keys,
                     payload,
                     membership,
-                    ..
+                    carried,
                 } => {
                     if !membership {
                         live.retain(|column| !payload.contains(column));
                     }
                     live.extend(keys.iter().cloned());
+                    live.extend(carried.iter().cloned());
                 }
                 Operation::Fold(monoid) => live = fold_columns(monoid),
                 _ => {}
@@ -621,8 +634,7 @@ impl<'p> Builder<'p> {
     fn column(&self, name: &str) -> syn::Result<ResourceColumn> {
         let mut types = Vec::new();
         for ty in self
-            .analysis
-            .structures
+            .structure_analysis
             .physical
             .rows
             .values()
@@ -704,12 +716,14 @@ impl<'p> Builder<'p> {
                 Operation::Lookup {
                     payload,
                     membership: false,
+                    carried,
                     ..
                 } => {
                     if virtual_range && terminal_range(rest) {
                         return Ok(());
                     }
-                    let live = self.live(rest, sink);
+                    let mut live = self.live(rest, sink);
+                    live.extend(carried.iter().cloned());
                     let parents = live
                         .difference(payload)
                         .map(|name| self.column(name))
@@ -726,49 +740,6 @@ impl<'p> Builder<'p> {
             }
         }
         Ok(())
-    }
-
-    fn host_union(&self, term: &'p Term) -> Option<&'p [Term]> {
-        match term {
-            Term::Union(arms) => Some(arms),
-            Term::Store { inner, .. } | Term::Canon(inner) => self.host_union(inner),
-            Term::Ref(name) => self.host_union(self.definitions.get(&symbol_name(name))?),
-            _ => None,
-        }
-    }
-
-    fn host_consumed_results(&self) -> Columns {
-        let mut consumed = Columns::new();
-        for definition in &self.program.sequence.definitions {
-            let name = symbol_name(&definition.name);
-            if matches!(definition.term, Term::Store { .. })
-                && self
-                    .analysis
-                    .levels
-                    .get(&name)
-                    .is_some_and(|level| level.len() == 1)
-                && !self
-                    .analysis
-                    .dispatches
-                    .iter()
-                    .any(|dispatch| dispatch.inner_stores.contains(&name))
-                && let Some(result) = self.analysis.results.get(&name)
-            {
-                self.dependencies(result, &mut consumed);
-            }
-        }
-        consumed
-    }
-
-    fn dependencies(&self, name: &str, consumed: &mut Columns) {
-        if !consumed.insert(name.to_owned()) {
-            return;
-        }
-        if let Some(definition) = self.physical.get(name) {
-            for operand in definition.operator.operands() {
-                self.dependencies(&symbol_name(operand), consumed);
-            }
-        }
     }
 
     fn output_fold(&self, term: &Term) -> bool {
@@ -816,19 +787,8 @@ fn fold_columns(monoid: &Monoid) -> Columns {
     }
 }
 
-fn rust_columns(
-    expression: &syn::Expr,
-    heading: &[String],
-    environment: Option<&Environment>,
-) -> Columns {
-    let names = environment
-        .map(|environment| environment.variables.iter().map(symbol_name).collect())
-        .unwrap_or_else(|| heading.iter().cloned().collect());
-    rust::free_variables(expression).dependencies(&names)
-}
-
-fn operator_columns(operator: &Operator, analysis: &Analysis) -> Columns {
-    let layouts = &analysis.structures.layouts;
+fn operator_columns(operator: &Operator, structure_analysis: &cq_lang_structures::Analysis) -> Columns {
+    let layouts = &structure_analysis.layouts;
     match operator {
         Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
             select.condition.columns()
@@ -857,96 +817,4 @@ fn operator_columns(operator: &Operator, analysis: &Analysis) -> Columns {
             .collect(),
         _ => Columns::new(),
     }
-}
-
-/// Provider payload demand follows the checked Physical DAG, not the Sequence
-/// schedule. Explicit storage keys, filtered payloads and canonical valuations
-/// survive downstream projection, just as they do at tuple adapter boundaries.
-fn carried_columns(program: &Program, analysis: &Analysis) -> BTreeMap<String, Columns> {
-    let structures = &analysis.structures;
-    let physical = &program.structures.physical.program;
-    let mut used: BTreeMap<_, Columns> = structures
-        .layouts
-        .keys()
-        .map(|name| (name.clone(), Columns::new()))
-        .collect();
-    let returned = symbol_name(&physical.returned);
-    for expression in &physical.head.args {
-        used.get_mut(&returned)
-            .expect("checked returned layout")
-            .extend(rust_columns(
-                expression,
-                &structures.layouts[&returned],
-                None,
-            ));
-    }
-    for definition in &physical.definitions {
-        let name = symbol_name(&definition.name);
-        let columns = used.get_mut(&name).expect("checked Physical layout");
-        if definition.canon.is_some() {
-            columns.extend(structures.layouts[&name].iter().cloned());
-        }
-        if let Some(builds) = structures.built.get(&name) {
-            for (levels, _) in builds {
-                columns.extend(levels.iter().flatten().cloned());
-            }
-        }
-        if let Some(filtered) = structures.filtered.get(&name) {
-            columns.extend(filtered.payload.columns.iter().map(symbol_name));
-        }
-        if structures.host_read(&name)
-            && (structures.physical.key_reads.contains_key(&name)
-                || structures.physical.merge_reads.contains_key(&name))
-        {
-            columns.extend(structures.layouts[&name].iter().cloned());
-        }
-    }
-    for (name, keys) in structures.keysets.keys() {
-        used.get_mut(name)
-            .expect("checked keyset layout")
-            .extend(keys.iter().cloned());
-    }
-    for definition in physical.definitions.iter().rev() {
-        let output = used[&symbol_name(&definition.name)].clone();
-        let mut demand = |input: &syn::Ident, extra: &Columns, carry: bool| {
-            let input = symbol_name(input);
-            let heading = &structures.layouts[&input];
-            used.get_mut(&input).expect("checked input layout").extend(
-                output
-                    .iter()
-                    .filter(|_| carry)
-                    .chain(extra)
-                    .filter(|column| heading.contains(column))
-                    .cloned(),
-            );
-        };
-        match &definition.operator {
-            Operator::Probe(_, keyed)
-            | Operator::Merge(_, keyed)
-            | Operator::Semi(_, keyed)
-            | Operator::Anti(_, keyed) => {
-                let keys = keyed.columns.iter().map(symbol_name).collect();
-                demand(&keyed.left, &keys, true);
-                demand(
-                    &keyed.right,
-                    &keys,
-                    matches!(
-                        definition.operator,
-                        Operator::Probe(_, _) | Operator::Merge(_, _)
-                    ),
-                );
-            }
-            Operator::Union(union) => {
-                for operand in &union.operands {
-                    demand(operand, &Columns::new(), true);
-                }
-            }
-            operator => {
-                if let Some(input) = operator.input() {
-                    demand(input, &operator_columns(operator, analysis), true);
-                }
-            }
-        }
-    }
-    used
 }

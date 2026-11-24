@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(actual, checked);
     }
     #[test]
-    fn owned_strings() {
+    fn owned_values_and_string_codes() {
         for scenario in SCENARIOS {
             strings::check(&generate(scenario, 6, 0x5eed));
         }

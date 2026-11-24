@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h18.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Quantities ; relation Lineitem (l_orderkey : i64 , l_linenumber : i64 , l_quantity : Decimal) ; relation answer (order_key : i64 , sum_quantity : i64) ; answer (order_key , sum (quantity_units)) :- Lineitem (order_key , line_number , quantity) , let quantity_units : i64 = quantity . scaled () ;

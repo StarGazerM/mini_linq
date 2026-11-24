@@ -1,0 +1,243 @@
+{
+  "schema": "mini-linq.planner-evidence.v1",
+  "dataset": {
+    "name": "ordering-lookup-fixture",
+    "hash": "sha256:9b5d0ac4278e91c41d1e49d63ce65ac4087282fd601a35b2c0d4e05cfd51e5c9",
+    "date": "2026-11-10",
+    "schema_hash": "sha256:7c55d02cf64dfca46cdf650faa1db9c9e9eb26dc7461d7d4f11733aea019c6f8",
+    "formulation": "synthetic-ordering-fixture",
+    "manifest": {
+      "schema": {
+        "A": {
+          "semantics": "bag",
+          "columns": {
+            "a": {
+              "kind": "signed_integer"
+            },
+            "x": {
+              "kind": "signed_integer"
+            }
+          },
+          "null_handling": "reject",
+          "set_certification": null
+        },
+        "B": {
+          "semantics": "bag",
+          "columns": {
+            "b": {
+              "kind": "signed_integer"
+            },
+            "y": {
+              "kind": "signed_integer"
+            }
+          },
+          "null_handling": "reject",
+          "set_certification": null
+        },
+        "F": {
+          "semantics": "bag",
+          "columns": {
+            "a": {
+              "kind": "signed_integer"
+            },
+            "b": {
+              "kind": "signed_integer"
+            },
+            "v": {
+              "kind": "signed_integer"
+            }
+          },
+          "null_handling": "reject",
+          "set_certification": null
+        }
+      },
+      "formulation": "synthetic-ordering-fixture",
+      "files": {
+        "evidence_lookup.cq": {
+          "role": "metadata",
+          "content_hash": "sha256:6ca560a661b182809eec4f713ea75f3ea0dee919846b4aac9348bbeb54dc88ec",
+          "encoding_hash": "sha256:def486aa297ff01972588ae85ca8ee925453be6e555f751c8a113dd97ee3ae02",
+          "missing_as_empty": false
+        }
+      },
+      "dictionaries": {},
+      "loader_options": {
+        "hash_mode": "typed-row-stream-v1",
+        "statistics": "declared synthetic test quantities; no measured dataset"
+      }
+    }
+  },
+  "relations": {
+    "A": {
+      "semantics": "bag",
+      "scope": "input",
+      "columns": {
+        "a": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": null,
+          "min": null,
+          "max": null,
+          "max_degree": null
+        },
+        "x": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": null,
+          "min": null,
+          "max": null,
+          "max_degree": null
+        }
+      },
+      "rows": {
+        "id": "A.rows",
+        "source": "declared",
+        "claim": "equal",
+        "value": 10,
+        "lower": null,
+        "upper": null,
+        "dataset_hash": "sha256:9b5d0ac4278e91c41d1e49d63ce65ac4087282fd601a35b2c0d4e05cfd51e5c9",
+        "provenance": {
+          "producer": "cq-planning ordering fixture",
+          "method": "declared synthetic test quantities migrated from legacy plan annotations; not measurements",
+          "locator": "evidence_lookup.cq",
+          "run": null,
+          "artifact_hash": "sha256:6ca560a661b182809eec4f713ea75f3ea0dee919846b4aac9348bbeb54dc88ec"
+        },
+        "unit": "rows"
+      },
+      "keys": [
+        {
+          "columns": [
+            "a"
+          ],
+          "source": "declared",
+          "dataset_hash": "sha256:9b5d0ac4278e91c41d1e49d63ce65ac4087282fd601a35b2c0d4e05cfd51e5c9",
+          "provenance": {
+            "producer": "cq-planning ordering fixture",
+            "method": "declared synthetic test quantities migrated from legacy plan annotations; not measurements",
+            "locator": "evidence_lookup.cq",
+            "run": null,
+            "artifact_hash": "sha256:6ca560a661b182809eec4f713ea75f3ea0dee919846b4aac9348bbeb54dc88ec"
+          }
+        }
+      ],
+      "key_sets": [],
+      "recursive": null
+    },
+    "B": {
+      "semantics": "bag",
+      "scope": "input",
+      "columns": {
+        "b": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": null,
+          "min": null,
+          "max": null,
+          "max_degree": null
+        },
+        "y": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": null,
+          "min": null,
+          "max": null,
+          "max_degree": null
+        }
+      },
+      "rows": {
+        "id": "B.rows",
+        "source": "declared",
+        "claim": "equal",
+        "value": 20,
+        "lower": null,
+        "upper": null,
+        "dataset_hash": "sha256:9b5d0ac4278e91c41d1e49d63ce65ac4087282fd601a35b2c0d4e05cfd51e5c9",
+        "provenance": {
+          "producer": "cq-planning ordering fixture",
+          "method": "declared synthetic test quantities migrated from legacy plan annotations; not measurements",
+          "locator": "evidence_lookup.cq",
+          "run": null,
+          "artifact_hash": "sha256:6ca560a661b182809eec4f713ea75f3ea0dee919846b4aac9348bbeb54dc88ec"
+        },
+        "unit": "rows"
+      },
+      "keys": [
+        {
+          "columns": [
+            "b"
+          ],
+          "source": "declared",
+          "dataset_hash": "sha256:9b5d0ac4278e91c41d1e49d63ce65ac4087282fd601a35b2c0d4e05cfd51e5c9",
+          "provenance": {
+            "producer": "cq-planning ordering fixture",
+            "method": "declared synthetic test quantities migrated from legacy plan annotations; not measurements",
+            "locator": "evidence_lookup.cq",
+            "run": null,
+            "artifact_hash": "sha256:6ca560a661b182809eec4f713ea75f3ea0dee919846b4aac9348bbeb54dc88ec"
+          }
+        }
+      ],
+      "key_sets": [],
+      "recursive": null
+    },
+    "F": {
+      "semantics": "bag",
+      "scope": "input",
+      "columns": {
+        "a": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": null,
+          "min": null,
+          "max": null,
+          "max_degree": null
+        },
+        "b": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": null,
+          "min": null,
+          "max": null,
+          "max_degree": null
+        },
+        "v": {
+          "domain": {
+            "kind": "signed_integer"
+          },
+          "distinct": null,
+          "min": null,
+          "max": null,
+          "max_degree": null
+        }
+      },
+      "rows": {
+        "id": "F.rows",
+        "source": "declared",
+        "claim": "equal",
+        "value": 1000,
+        "lower": null,
+        "upper": null,
+        "dataset_hash": "sha256:9b5d0ac4278e91c41d1e49d63ce65ac4087282fd601a35b2c0d4e05cfd51e5c9",
+        "provenance": {
+          "producer": "cq-planning ordering fixture",
+          "method": "declared synthetic test quantities migrated from legacy plan annotations; not measurements",
+          "locator": "evidence_lookup.cq",
+          "run": null,
+          "artifact_hash": "sha256:6ca560a661b182809eec4f713ea75f3ea0dee919846b4aac9348bbeb54dc88ec"
+        },
+        "unit": "rows"
+      },
+      "keys": [],
+      "key_sets": [],
+      "recursive": null
+    }
+  }
+}

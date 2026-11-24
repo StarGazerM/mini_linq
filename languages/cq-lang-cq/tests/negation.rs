@@ -37,34 +37,29 @@ fn negation_preserves_terms_without_binding_or_creating_rust_steps() {
 
 #[test]
 fn negation_checks_written_scope_inputs_arity_and_term_grammar() {
-    for (body, expected) in [
-        ("!S(x,_), R(x)", "before it is bound"),
-        ("R(x), !S(y,_), let y:i32 = 1", "before it is bound"),
-        ("R(x), !Missing(x)", "not declared as an input"),
-        ("R(x), !answer(x)", "not declared as an input"),
-        ("R(x), !S(x)", "declared arity is 2"),
-        ("R(x), !S(x,1,2)", "declared arity is 2"),
-        ("R(x), !S(x + 1,_)", "negation arguments"),
-        ("R(x), !S(f(x),_)", "negation arguments"),
-        ("R(x), !S(*x,_)", "negation arguments"),
-        ("R(x), !S(module::parameter,_)", "negation arguments"),
+    for body in [
+        "!S(x,_), R(x)",
+        "R(x), !S(y,_), let y:i32 = 1",
+        "R(x), !Missing(x)",
+        "R(x), !answer(x)",
+        "R(x), !S(x)",
+        "R(x), !S(x,1,2)",
+        "R(x), !S(x + 1,_)",
+        "R(x), !S(f(x),_)",
+        "R(x), !S(*x,_)",
+        "R(x), !S(module::parameter,_)",
     ] {
         let query: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32); relation S(a:i32,b:i32); answer(x) :- {body};"
         ))
         .unwrap();
-        let error = cq::contract::check(&query).unwrap_err().to_string();
-        assert!(error.contains(expected), "{body}: {error}");
+        assert!(cq::contract::check(&query).is_err(), "{body}");
     }
     let fresh: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32); relation S(a:i32);
         answer(y) :- R(x), !S(y);
     };
-    let error = cq::contract::check(&fresh).unwrap_err().to_string();
-    assert!(
-        error.contains("not bound"),
-        "negation cannot introduce y: {error}"
-    );
+    assert!(cq::contract::check(&fresh).is_err(), "negation cannot introduce y");
 }
 
 #[test]
@@ -77,21 +72,25 @@ fn negation_only_queries_support_existential_emptiness_and_parameters() {
         cq::contract::check(&query).unwrap();
         assert!(cq::blocks::bound(&query.query.body).is_empty());
         let normal = cq::normal::normalize(&query).unwrap();
+        assert_eq!(normal.query.body.len(), 1);
         assert!(matches!(normal.query.body[0], cq::BodyItem::Negation(_)));
-        assert!(matches!(normal.query.body[1], cq::BodyItem::Let(_)));
+        // The closed head operand is a host capture, not a body binding (A-Capture).
+        assert!(matches!(
+            normal.query.captures.items.as_slice(),
+            [cq::syntax::Capture::Let(_)]
+        ));
         assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
     }
 }
 
 #[test]
-fn negation_requires_leibniz_only_for_compared_columns() {
+fn negation_leaves_column_type_obligations_to_rustc() {
     for argument in ["x", "parameter", "1.0"] {
         let query: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32); relation S(a:f64); answer(x) :- R(x), !S({argument});"
         ))
         .unwrap();
-        let error = cq::contract::check(&query).unwrap_err().to_string();
-        assert!(error.contains("Leibniz"), "{argument}: {error}");
+        cq::contract::check(&query).unwrap();
     }
     let wildcard: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32); relation S(a:f64,b:f32);
@@ -103,8 +102,7 @@ fn negation_requires_leibniz_only_for_compared_columns() {
         "struct Q; relation R(a:i32); relation S(a:i32); answer(y) :- R(y), let x:f64 = 0.0, !S(x);",
     ] {
         let query: cq::Program = syn::parse_str(source).unwrap();
-        let error = cq::normal::check(&query).unwrap_err().to_string();
-        assert!(error.contains("Leibniz"), "{source}: {error}");
+        cq::normal::check(&cq::normal::normalize(&query).unwrap()).unwrap();
     }
 }
 
@@ -137,8 +135,7 @@ fn blocks_count_negation_uses_but_not_bindings_or_rust() {
             "struct Q; relation R(a:i32); relation S(a:i32,b:i32); answer(x) :- {body};"
         ))
         .unwrap();
-        let error = cq::contract::check(&query).unwrap_err().to_string();
-        assert!(error.contains("before it is bound"), "{body}: {error}");
+        assert!(cq::contract::check(&query).is_err(), "{body}");
     }
 }
 

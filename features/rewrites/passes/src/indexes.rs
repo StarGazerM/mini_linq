@@ -2,7 +2,7 @@
 //! reads, and in what column order.
 //!
 //! Formal rule EXT-SortedIndexes: for a built `let` result whose stream reads
-//! are probes or semijoins on integral keys, record a minimum set of
+//! are probes or semijoins, record a minimum set of
 //! lexicographic layouts such that every read key is exactly a level prefix
 //! of one layout (a minimum chain cover of the read key sets). Each chain's
 //! successive differences become singleton levels, ordered by when their
@@ -16,10 +16,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use cq_lang_structures::provider::base as providers;
 use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
-use cq_structure_selection::arguments::sorted_key;
 use proc_macro2::TokenStream;
-use syn::{Ident, Token, Type};
+use syn::{Ident, Token};
 
 /// Minimum chain cover of `demands` (Dilworth via bipartite matching): a
 /// fewest set of chains `K1 ⊂ K2 ⊂ …`, each returned as its successive
@@ -130,11 +130,11 @@ impl syn::parse::Parse for Choice {
     }
 }
 
-fn default_type(ty: &Type) -> bool {
-    matches!(ty, Type::Path(p) if p.qself.is_none() && {
-        let path: Vec<_> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
-        path == ["cq_storage", "HashIndex"] || path == ["cq_storage", "HashSet"] || path == ["cq_storage", "Trie"]
-    })
+/// Base tokens whose default layout this rewrite may replace.
+fn default_token(provider: &ir::Provider) -> bool {
+    ["hash_index", "hash_set", "trie"]
+        .iter()
+        .any(|token| provider.token == *token)
 }
 
 /// Index of the definition at which `column` of `result` is first bound,
@@ -163,7 +163,7 @@ fn birth(
     }
 }
 
-pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn sorted_indexes(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let choices: Vec<Choice> = if arguments.is_empty() {
         Vec::new()
     } else {
@@ -171,16 +171,15 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             .into_iter()
             .collect()
     };
-    let facts = ir::contract::check(source)?;
-    let physical = &facts.physical;
-    let operators: BTreeMap<String, &Operator> = source
-        .physical
+    let facts = ir::contract::check(physical, source)?;
+    let physical_facts = &facts.physical;
+    let operators: BTreeMap<String, &Operator> = physical
         .program
         .definitions
         .iter()
         .map(|d| (symbol_name(&d.name), &d.operator))
         .collect();
-    let candidates = ir::physical::candidate_prefixes(&source.physical, physical);
+    let candidates = ir::physical::candidate_prefixes(physical, physical_facts);
     let mut used = vec![false; choices.len()];
     let mut target = source.clone();
     let names: BTreeSet<String> = target
@@ -204,11 +203,11 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             .iter()
             .all(|&i| match &target.structures.entries[i].structure {
                 Structure::Built { keyed, .. } => {
-                    keyed.membership.is_none() && default_type(&keyed.ty)
+                    keyed.membership.is_none() && default_token(&keyed.provider)
                 }
                 _ => false,
             });
-        let reads: Vec<_> = physical
+        let reads: Vec<_> = physical_facts
             .keyed_reads
             .get(&name)
             .into_iter()
@@ -223,11 +222,6 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         let candidate = candidates
             .iter()
             .any(|c| c.sides.iter().any(|(side, _)| *side == name));
-        let integral_keys = reads.iter().all(|(_, columns, _)| {
-            columns
-                .iter()
-                .all(|c| sorted_key(&physical.rows[&name].types[c]))
-        });
         let chosen = choices.iter().position(|choice| {
             let build = symbol_name(&choice.build);
             build == name
@@ -236,7 +230,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                     .get(&name)
                     .is_some_and(|origin| origin.base == build)
         });
-        if !eligible || reads.is_empty() || !keyed_only || candidate || !integral_keys {
+        if !eligible || reads.is_empty() || !keyed_only || candidate {
             if let Some(choice) = chosen {
                 return Err(syn::Error::new_spanned(
                     &choices[choice].build,
@@ -262,7 +256,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                 .collect();
             let singletons: Vec<Vec<String>> = layout.iter().map(|c| vec![c.clone()]).collect();
             if choices[choice].levels.iter().any(|l| l.columns.len() != 1)
-                || layout.iter().any(|c| !physical.headings[&name].contains(c))
+                || layout.iter().any(|c| !physical_facts.headings[&name].contains(c))
                 || demands
                     .iter()
                     .any(|d| ir::prefix_depth(&singletons, d).is_none())
@@ -289,7 +283,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                 .map_err(|detail| syn::Error::new(proc_macro2::Span::call_site(), detail))?;
             // Within a level, order columns by when the reading stream binds
             // them; the level is the difference between two read keys.
-            let heading = &physical.headings[&name];
+            let heading = &physical_facts.headings[&name];
             let left_of = |key: &Vec<String>| -> Option<String> {
                 reads
                     .iter()
@@ -317,7 +311,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                         let mut level = level.clone();
                         level.sort_by_key(|column| {
                             let bound = left.as_deref().map_or(usize::MAX, |l| {
-                                birth(&source.physical, &physical.headings, l, column)
+                                birth(physical, &physical_facts.headings, l, column)
                             });
                             (bound, heading.iter().position(|c| c == column))
                         });
@@ -348,7 +342,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             let Structure::Built { keyed, .. } = &mut entry.structure else {
                 unreachable!()
             };
-            let row = &physical.rows[&name];
+            let row = &physical_facts.rows[&name];
             keyed.levels = layout
                 .iter()
                 .map(|c| {
@@ -356,17 +350,16 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                     syn::parse_quote!([#column])
                 })
                 .collect();
-            let mut ty: Type = if payload {
-                syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)
-            } else {
-                syn::parse_quote!(::cq_storage::HashSet<_>)
-            };
+            let mut provider =
+                providers::declaration(if payload { "hash_index" } else { "hash_set" }).instance();
             for _ in 1..layout.len() {
-                ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
+                provider = providers::declaration("trie")
+                    .compose(provider)
+                    .expect("STR-Provider: `trie` is nested");
             }
-            keyed.ty = ty;
+            keyed.provider = provider;
             keyed.supports = if payload && layout.len() == 1 {
-                Some(syn::parse_quote!(supports [keys]))
+                Some(syn::parse_quote!(supports[keys]))
             } else {
                 None
             };
@@ -386,6 +379,8 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             "sorted_indexes choice matched no built result",
         ));
     }
-    ir::check_rewrite(source, &target)?;
+    target.structures.declare(&providers::declarations())?;
+    ir::record_join_filter_policies(physical, &mut target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }

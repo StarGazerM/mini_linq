@@ -12,6 +12,11 @@ Wider GPU index keys, Datalog publication integration, automatic placement and
 a Metal query backend remain separate work. Earlier measurement sections and
 command blocks retain their historical boundaries.
 
+Evidence provenance: historical numerical results below are preserved from
+this document at repository snapshot `7e187597` (2026-11-02), with the original
+dated result files and machine/source identifiers cited in each experiment.
+They are not measurements of the current direct-call compiler cutover.
+
 ## Decision
 
 Start with GPU-built, CPU-readable immutable indexes and an explicitly
@@ -31,7 +36,10 @@ Datalog's generated layout updates, or a Metal-resident execution backend.
 The GPU experiment is at [experiments/mac/gpu-index](../experiments/mac/gpu-index/README.md),
 alongside the main tree's optimized native `RadixRun`. Its runtime and canonical
 native implementation are consolidated in `experiments/mac/cq-mac` and
-`experiments/mac/mccl`, separate from the portable core workspace. The native
+`experiments/mac/mccl`, in the shared `experiments/mac` Metal workspace, separate
+from the portable root workspace. The native CPU benchmark at
+`experiments/mac/index-bench/native` instead belongs to the root workspace and
+uses its `cpu-bench` profile (release, thin LTO, one codegen unit). The native
 cached numeric-key sort, lazy exact dense-membership bitmap, H09 workload order,
 and profiling changes remain intact. The earlier sibling snapshots are historical
 backups, not build dependencies or active work directories. Archived timings
@@ -328,9 +336,10 @@ the verification counts above describe their original source states, not this me
 
 ## Implemented hybrid runtime
 
-[`experiments/mac/cq-mac`](../experiments/mac/cq-mac/src/lib.rs) is a standalone Cargo workspace,
-not a dependency of the portable workspace. It adds no compiler pass, provider
-name exception, Datalog emission change or implicit `Build` implementation.
+[`experiments/mac/cq-mac`](../experiments/mac/cq-mac/src/lib.rs) belongs to the
+`experiments/mac` Metal workspace, not the portable root workspace. It adds no
+compiler pass, provider name exception, Datalog emission change or implicit
+`Build` implementation.
 
 - `MacContext::new()` fallibly creates an MCCL context. Index construction
   validates unified memory, capacity and compiled pipeline geometry; unsupported
@@ -577,8 +586,8 @@ does not eliminate that completion boundary.
 
 | Concern | Existing contract |
 |---|---|
-| Physical layout and payload | `Structure::Built`, `Structure::Host`, and `Keyed { ty, levels, supports, membership, filtered }` in `cq-lang-structures`. These `levels` are key levels, not machines. |
-| Legal reads on a machine | Sequence `ProviderToken { capabilities, supports, levels, elements }`. Its `levels` explicitly govern consumption, not construction (`cq-lang-sequence/src/lib.rs`). |
+| Physical layout and payload | `Structure::Built`, `Structure::Host`, and `Keyed { provider, levels, supports, membership, filtered }` in `cq-lang-structures`; `provider` is a declared token instance (STR-Provider). These `levels` are key levels, not machines. |
+| Legal reads on a machine | Sequence `Catalog { declarations, providers: CatalogEntry { provider, levels } }`, keyed by token id (PL-Catalog); capabilities and supports are the token's declared facts. Entry `levels` explicitly govern consumption, not construction (`cq-lang-sequence/src/lib.rs`). |
 | Execution and publication | Sequence `Grade`, `Store` and derived `Dispatch { level, producer_level, failure_channel, ... }`. Existing grading proves scope/publication obligations, not a general pending-index readiness protocol. |
 | Native construction ABI | `cq-print::Context::materialize` emits `Build::build`; native fallback uses `Lazy<T,F>`. Both are context-free/infallible at that interface. Mac construction needs an explicit context and error policy. |
 | Advice | Sequence `Advice::apply` replays checked rewrites. Recorded grades/rewrites are decisions, while catalog ordering and machine geometry guide candidate selection. “Advice” does not universally mean a soft hint. |
@@ -1033,8 +1042,8 @@ context's platform requirements and synchronous completion protocol.
 
 ## MCCL provider cutover
 
-`experiments/mac/cq-mac` depends on the local `experiments/mac/mccl` workspace.
-Both remain outside the portable core workspace. Core `MacContext` construction/merge,
+`experiments/mac/cq-mac` depends on the local `experiments/mac/mccl` package.
+Both share the Metal workspace outside the portable root workspace. Core `MacContext` construction/merge,
 `MacRun`, CQ read traits, chronological bags and pinned snapshot contracts remain.
 MCCL provides stable u32/u32 GPU radix sort, partitioned merge, exact radix-12
 directories and explicitly selected CPU comparison/radix construction. Tuple
@@ -1175,8 +1184,8 @@ aggregate builds, constructing 24,660 individual indexes**, excluding first
 observations and warmups. Reports indicate successful cache-limit restoration:
 
 - [Balanced sizes/distributions/relations (lossless gzip archive)](../experiments/mac/query-expansion/results/index-matrix-balanced-m3max-20261026.json.gz)
-- [Individually named relation projections](../experiments/mac/query-expansion/results/index-matrix-relations-m3max-20261026.json)
-- [Skewed relation sizes and cache boundaries](../experiments/mac/query-expansion/results/index-matrix-skewed-m3max-20261026.json)
+- [Individually named relation projections](../experiments/mac/query-expansion/results/index-matrix-relations-m3max-20261026.json.gz)
+- [Skewed relation sizes and cache boundaries](../experiments/mac/query-expansion/results/index-matrix-skewed-m3max-20261026.json.gz)
 
 Same **1,048,576 total uniform rows**, all outputs simultaneously live:
 
@@ -1214,7 +1223,7 @@ MCCL still pays per-call cached allocation and graph work. Raw and MCCL use the
 same canonical shader source, compiled at runtime/offline respectively.
 
 All 16 size/input configurations completed, with 640 measured samples plus
-first calls and warmups. [Raw controls](../experiments/mac/gpu-index/index-compare-m3max-20261026.json).
+first calls and warmups. [Raw controls](../experiments/mac/gpu-index/index-compare-m3max-20261026.json.gz).
 The `workspace` distribution is the **exact historical fixture**:
 `((source_row_id * 40503) & 65535) * 65537`.
 
@@ -1456,9 +1465,9 @@ are not disguised as GPU construction. New schemas prevent mixing old boundaries
 
 Post-cutover raw evidence (historical files remain unchanged):
 
-- [Source boundary smoke](../experiments/mac/query-expansion/results/shared-source-smoke-20261026.json).
-- [36 size/input/relation configurations through 64M rows](../experiments/mac/query-expansion/results/shared-source-matrix-m3max-20261026.json).
-- [16 two-column reuse/cache configurations](../experiments/mac/query-expansion/results/shared-source-multicolumn-m3max-20261026.json).
+- [Source boundary smoke](../experiments/mac/query-expansion/results/shared-source-smoke-20261026.json.gz).
+- [36 size/input/relation configurations through 64M rows](../experiments/mac/query-expansion/results/shared-source-matrix-m3max-20261026.json.gz).
+- [16 two-column reuse/cache configurations](../experiments/mac/query-expansion/results/shared-source-multicolumn-m3max-20261026.json.gz).
 - [H09 CPU/GPU constructor comparison](../experiments/mac/query-expansion/results/shared-source-h09-m3max-20261026.json),
   [H09 pool cases](../experiments/mac/query-expansion/results/shared-source-pool-h09-m3max-20261026.json),
   [constructor pool cases](../experiments/mac/query-expansion/results/shared-source-pool-construction-m3max-20261026.json).
@@ -1730,8 +1739,9 @@ All active Mac implementation sources are now Git-managed in this checkout:
 - `experiments/mac/query-expansion`: authored-query and matched build/read drivers.
 - `runtime/cq-storage`: portable native storage and the shared RadixRun reader.
 
-The Mac crates remain standalone Cargo workspaces outside the portable core.
-Cargo metadata for all four Mac workspaces has no external path package.
+At this historical checkpoint the Mac crates had standalone Cargo workspaces
+outside the portable core; metadata for all four had no external path package.
+They now share the `experiments/mac` Metal workspace.
 The rebuilt `libmccl_native.dylib` resolves MCCL/MLX libraries inside
 `experiments/mac/mccl/build/native`, not a sibling project. Historical source
 paths embedded in archived measurement records are provenance and remain intact.
@@ -1823,17 +1833,18 @@ fallback, even when the supplied host had an index on that field.
 `cq_storage::dispatch::IndexedColumn<N>` is now the explicit single-column
 contract. Its key is a one-field tuple of the declared owned key type; its
 payload implements `Columns` in the original order of every remaining column.
-`ColumnHost` reuses ordinary autoref dispatch, fallback ownership and cursor
-proofs. The printer derives N from the checked declaration/rename, not from
-coincidental equality of Rust field types. Prefix, computed-key, multicolumn
-nonleading, candidate and PointLookup paths retain their existing rules.
+`ColumnHost` implements the ordinary direct-read traits; a declared
+`host [column] reads [...]` capability and the per-reader Structures record
+select it. The printer derives N from the checked declaration/rename, not
+from coincidental equality of Rust field types. There are no autoref tiers.
 Membership requires its separate trait, and retained/expanded reads retain
 their Copy/exact-size requirements.
 
-This is a host-read registration through a Rust capability, not a Mac-specific
-provider-name exception or a new logical operator. A host without the matching
-slot/capability still uses the recorded lazy fallback. Constructor context,
-placement and failures remain explicit outside the compiled query.
+This is an explicit host declaration backed by a Rust capability, not a
+Mac-specific provider-name exception or a new logical operator. A host without
+a matching declaration uses the recorded lazy fallback; a declared capability
+missing from the Rust type is a rustc error, not a fallback. Constructor
+context, placement and failures remain explicit outside the compiled query.
 
 ### Execution proof and measurement boundaries
 

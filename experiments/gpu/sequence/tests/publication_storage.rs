@@ -1,0 +1,74 @@
+use cq_gpu_runtime::{Codec, DeviceColumns, Dictionary, Pool};
+use cq_gpu_sequence_runtime::Result;
+
+#[test]
+fn recorded_for_order_survives_packed_flat_and_terminal_publications() -> Result<()> {
+    publication_cases(i32::MIN as i64, i32::MAX as i64)
+}
+
+#[test]
+#[should_panic(expected = "GPU domain key field exceeds 32 bits")]
+fn packed_publication_rejects_wide_domain_key() {
+    publication_cases(i64::MIN, i64::MAX).unwrap();
+}
+
+fn publication_cases(minimum: i64, maximum: i64) -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    for raw in [
+        vec![],
+        vec![(-1i64, u32::MAX); 5],
+        vec![
+            (minimum, 0),
+            (maximum, u32::MAX),
+            (-7, 2),
+            (-7, 2),
+            (0, 1),
+            (minimum, u32::MAX),
+        ],
+    ] {
+        let data = DeviceColumns::from_rows(
+            pool.clone(),
+            &raw,
+            &mut Dictionary::default(),
+            &[Codec::For, Codec::For],
+        )?;
+        let output = cq_gpu_sequence_test_macros::sequence! {
+            physical {
+                relation R(a:i64,b:u32) = (&data);
+                r = let canon rename R {a -> a,b -> b};
+                return r as answer(b,a);
+            }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,u32)> [];
+                r rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                r canon = rows;
+            }
+            sequence {
+                input = store rows r;
+                packed_feed = canon flatten tile 256 input;
+                packed = store packed_feed;
+                raw_feed = flatten tile 256 packed;
+                raw_rows = store raw_feed;
+                terminal_feed = flatten tile 256 raw_rows;
+                result = store terminal_feed;
+                output count;
+            }
+            graded gpu {
+                input at host;
+                packed_feed at device.block;
+                packed at host;
+                raw_feed at device.block;
+                raw_rows at host;
+                terminal_feed at device.block;
+                result at host;
+            }
+        };
+        let mut actual: Vec<(u32, i64)> = output.to_host()?;
+        actual.sort_unstable();
+        let mut expected: Vec<_> = raw.iter().map(|&(a, b)| (b, a)).collect();
+        expected.sort_unstable();
+        expected.dedup();
+        assert_eq!(actual, expected);
+    }
+    Ok(())
+}

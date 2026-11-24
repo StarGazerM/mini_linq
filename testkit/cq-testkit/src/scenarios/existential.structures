@@ -1,5 +1,4 @@
-structures { r0 host scan = :: core :: iter :: Map < _ , _ > [];
- r1 host scan = :: core :: iter :: Map < _ , _ > [];
- r1 host r2 = :: cq_storage :: HashIndex < '_ , _ , _ > [];
- r3 canon = :: cq_storage :: HashSet < _ >;
+structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r0 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
+ r1 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
+ r3 rows = @sort as ::cq_storage::dedup::Sort; r3 canon = rows;
  }

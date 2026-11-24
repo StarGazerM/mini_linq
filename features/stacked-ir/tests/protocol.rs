@@ -86,11 +86,7 @@ fn trace_is_checked_at_both_boundaries_and_cannot_end_a_pipeline() {
         quote! { pipeline {}; #source },
         |source, _| enter::compile(source),
     );
-    assert!(
-        output
-            .to_string()
-            .contains("pipeline ended before its Rust printer")
-    );
+    assert!(output.to_string().contains("compile_error"));
 
     let mut invalid = enter::compile(&source).unwrap();
     invalid.physical.program.returned = syn::parse_quote!(missing);

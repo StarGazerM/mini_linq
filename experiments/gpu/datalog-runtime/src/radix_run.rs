@@ -1,0 +1,4162 @@
+//! Occurrence-preserving grouped device runs indexed by an exact radix-prefix
+//! directory: the device counterpart of `cq_storage::RadixRun`.
+//!
+//! A run stores each distinct packed key once, group offsets in the selected
+//! carrier `O`, and the selected item columns `C` in stable occurrence order.
+//! Keys are [`Word`]s: the DL-DevicePacking word is the one order-preserving
+//! key embedding and is stored whole, never truncated into the directory.
+//! Every policy is a caller parameter ([`RadixRunParams`]) or a type fact
+//! (`W`, `O`, and `C`). Recorded block widths are checked against the kernels'
+//! compiled launch contracts before construction.
+//! Grid sizes follow the shared occupancy convention for the target device.
+//!
+//! Key reads ([`RadixKeysView`]) carry no item pointers; item columns are read
+//! by position through the separate [`RadixItemsView`], or one demanded column
+//! at a time through a [`RadixLayout`]'s [`ItemColumn`].
+//!
+//! Construction (build, merge, snapshot upload) runs on the run's own pool
+//! stream. Reads name an execution pool that must share the snapshot's memory
+//! (GPU-RadixLaneRead); shared memory is not a happens-before proof, so the
+//! caller orders the read after publication (fork readiness) and consumers of
+//! the results after the read (join readiness), and retains the snapshot owner
+//! until every stream user has completed.
+use crate::{
+    layout::{PackedField, ScalarTuple},
+    runs::{self, Native},
+    Column, Packing, Result, Word,
+};
+#[cfg(feature = "packed-radix")]
+use crate::packed_run::{PackedRun, PackedSet, PackedView, DEFAULT_BLOCK_ROWS, SMALL_RUN_ROWS};
+use cuda_core::{DeviceCopy, LaunchConfig1D};
+use gpu_device_columns::{Buffer, OutputCount, Pool, SourceView};
+use rccl_cub::{DeviceArithmeticRange, DeviceMap, DeviceSliceRead, DeviceSliceWrite};
+use std::{
+    any::Any,
+    marker::PhantomData,
+    ops::RangeInclusive,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+};
+
+#[cfg(feature = "packed-radix")]
+use std::sync::OnceLock;
+
+const SIDE: u64 = 1 << 63;
+
+mod sealed {
+    pub trait Offset {}
+    pub trait Lane {}
+    pub trait Columns {}
+}
+
+/// A group-offset carrier, selected upstream from item-count bound evidence.
+/// Builds and merges whose terminal item count exceeds `MAX` are rejected.
+pub trait OffsetWord:
+    sealed::Offset
+    + Copy
+    + Ord
+    + std::fmt::Debug
+    + DeviceCopy
+    + rccl_cub::DeviceArithmetic
+    + Send
+    + Sync
+    + 'static
+{
+    const MAX: u64;
+    /// Device-side conversion; host callers check [`offset_fits`] first.
+    fn from_u64(value: u64) -> Self;
+    fn to_u64(self) -> u64;
+}
+impl sealed::Offset for u32 {}
+impl OffsetWord for u32 {
+    const MAX: u64 = u32::MAX as u64;
+    #[inline(always)]
+    fn from_u64(value: u64) -> Self {
+        value as u32
+    }
+    #[inline(always)]
+    fn to_u64(self) -> u64 {
+        self as u64
+    }
+}
+impl sealed::Offset for u64 {}
+impl OffsetWord for u64 {
+    const MAX: u64 = u64::MAX;
+    #[inline(always)]
+    fn from_u64(value: u64) -> Self {
+        value
+    }
+    #[inline(always)]
+    fn to_u64(self) -> u64 {
+        self
+    }
+}
+
+/// Whether carrier `O` represents the terminal offset of `items` occurrences.
+pub fn offset_fits<O: OffsetWord>(items: usize) -> bool {
+    u64::try_from(items).is_ok_and(|items| items <= O::MAX)
+}
+
+/// Stored width and signedness of one item lane: a type fact of [`ItemLane`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LaneKind {
+    pub bits: u32,
+    pub signed: bool,
+}
+
+impl LaneKind {
+    /// Whether every value of `column`'s numeric domain is stored exactly:
+    /// same signedness and at least the column's width, or an unsigned
+    /// column in a strictly wider signed lane. Never a narrowing.
+    pub const fn holds(self, column: Column) -> bool {
+        if self.signed == column.is_signed() {
+            self.bits >= column.bits()
+        } else {
+            self.signed && self.bits > column.bits()
+        }
+    }
+}
+
+/// A fixed-width, byte-addressable item column element.
+pub trait ItemLane: sealed::Lane + Copy + DeviceCopy + Send + Sync + 'static {
+    const KIND: LaneKind;
+}
+macro_rules! lanes {
+    ($($ty:ty => $signed:expr),*) => {$(
+        impl sealed::Lane for $ty {}
+        impl ItemLane for $ty {
+            const KIND: LaneKind = LaneKind { bits: <$ty>::BITS, signed: $signed };
+        }
+    )*};
+}
+lanes!(u8 => false, i8 => true, u16 => false, i16 => true, u32 => false, i32 => true,
+    u64 => false, i64 => true, u128 => false);
+impl<const L: usize> sealed::Lane for [u64; L] {}
+impl<const L: usize> ItemLane for [u64; L] {
+    const KIND: LaneKind = LaneKind {
+        bits: 64 * L as u32,
+        signed: false,
+    };
+}
+
+/// Formal rule GPU-RadixItemColumns:
+/// An explicit item layout: one `Buffer<T>` column, a tuple of layouts stored as
+/// independent columns, or `()` for key-only runs. Position `i` names the same
+/// occurrence in every column; grouping and merging gather whole columns by
+/// position and never reconstruct rows. The layout is selected by the provider
+/// type, never by inspecting a row type.
+pub trait DeviceItemColumns: sealed::Columns + Sized + Send + Sync + 'static {
+    /// Downloaded diagnostic columns.
+    type Host: Default;
+    const COLUMNS: usize;
+    /// Every column shares `pool`'s memory and has at least `rows` entries.
+    /// Shared memory is an allocation fact; the caller orders initialization.
+    fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()>;
+    /// Append each column's lane kind in layout order.
+    fn lanes(out: &mut Vec<LaneKind>);
+    #[doc(hidden)]
+    fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self>;
+    #[doc(hidden)]
+    fn merge<O: OffsetWord>(
+        left: &Self,
+        right: &Self,
+        kernels: &ItemKernels,
+        left_items: usize,
+        sources: *const O,
+        rows: usize,
+    ) -> Result<Self>;
+    /// Append each column's device address in layout order.
+    fn column_pointers(&self, out: &mut Vec<u64>);
+    fn to_host(&self, rows: usize) -> Result<Self::Host>;
+}
+
+/// Loaded column-gather kernels; constructed only by [`DeviceRadixRun`].
+pub struct ItemKernels {
+    pool: Arc<Pool>,
+    module: radix_kernels::LoadedModule,
+    block_threads: u32,
+}
+
+impl ItemKernels {
+    fn config(&self, function: &cuda_core::CudaFunction, parts: usize) -> Result<LaunchConfig1D> {
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            function,
+            parts.div_ceil(self.block_threads as usize),
+            self.block_threads,
+            0,
+        )?;
+        Ok(LaunchConfig1D::new(grid, self.block_threads, 0))
+    }
+    fn shape(&self) -> LaunchConfig1D {
+        LaunchConfig1D::new(1, self.block_threads, 0)
+    }
+}
+
+impl<T: ItemLane> sealed::Columns for Buffer<T> {}
+impl<T: ItemLane> DeviceItemColumns for Buffer<T> {
+    type Host = Vec<T>;
+    const COLUMNS: usize = 1;
+    fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()> {
+        if !pool.shares_memory(self.pool()) || rows > self.len() {
+            return Err("item column memory or live length differs from its keys".into());
+        }
+        Ok(())
+    }
+    fn lanes(out: &mut Vec<LaneKind>) {
+        out.push(T::KIND);
+    }
+    fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self> {
+        // SAFETY: the gather initializes every output position before publication.
+        let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
+        if rows != 0 {
+            let module = &kernels.module;
+            let initial = module.prepare_gather_items::<T>(kernels.shape())?;
+            let config = kernels.config(initial.function(), rows)?;
+            module.gather_items::<T>(
+                kernels.pool.stream(),
+                &module.prepare_gather_items::<T>(config)?,
+                self.ptr(),
+                order,
+                rows as u64,
+                output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+    fn merge<O: OffsetWord>(
+        left: &Self,
+        right: &Self,
+        kernels: &ItemKernels,
+        left_items: usize,
+        sources: *const O,
+        rows: usize,
+    ) -> Result<Self> {
+        // SAFETY: every output position has exactly one source occurrence.
+        let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
+        if rows != 0 {
+            let module = &kernels.module;
+            let initial = module.prepare_merge_items::<T, O>(kernels.shape())?;
+            let config = kernels.config(initial.function(), rows)?;
+            module.merge_items::<T, O>(
+                kernels.pool.stream(),
+                &module.prepare_merge_items::<T, O>(config)?,
+                left.ptr(),
+                right.ptr(),
+                left_items as u64,
+                sources,
+                rows as u64,
+                output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+    fn column_pointers(&self, out: &mut Vec<u64>) {
+        out.push(self.cu_deviceptr());
+    }
+    fn to_host(&self, rows: usize) -> Result<Vec<T>> {
+        self.to_host_prefix(rows)
+    }
+}
+
+impl sealed::Columns for () {}
+impl DeviceItemColumns for () {
+    type Host = ();
+    const COLUMNS: usize = 0;
+    fn check(&self, _: &Arc<Pool>, _: usize) -> Result<()> {
+        Ok(())
+    }
+    fn lanes(_: &mut Vec<LaneKind>) {}
+    fn gather(&self, _: &ItemKernels, _: *const u32, _: usize) -> Result<()> {
+        Ok(())
+    }
+    fn merge<O: OffsetWord>(
+        _: &(),
+        _: &(),
+        _: &ItemKernels,
+        _: usize,
+        _: *const O,
+        _: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn column_pointers(&self, _: &mut Vec<u64>) {}
+    fn to_host(&self, _: usize) -> Result<()> {
+        Ok(())
+    }
+}
+
+macro_rules! tuple_columns {
+    ($($C:ident:$field:tt),+) => {
+        impl<$($C: DeviceItemColumns),+> sealed::Columns for ($($C,)+) {}
+        impl<$($C: DeviceItemColumns),+> DeviceItemColumns for ($($C,)+) {
+            type Host = ($($C::Host,)+);
+            const COLUMNS: usize = 0 $(+ $C::COLUMNS)+;
+            fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()> {
+                $(self.$field.check(pool, rows)?;)+
+                Ok(())
+            }
+            fn lanes(out: &mut Vec<LaneKind>) {
+                $($C::lanes(out);)+
+            }
+            fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self> {
+                Ok(($(self.$field.gather(kernels, order, rows)?,)+))
+            }
+            fn merge<O: OffsetWord>(
+                left: &Self, right: &Self, kernels: &ItemKernels, left_items: usize,
+                sources: *const O, rows: usize,
+            ) -> Result<Self> {
+                Ok(($($C::merge(&left.$field, &right.$field, kernels, left_items, sources, rows)?,)+))
+            }
+            fn column_pointers(&self, out: &mut Vec<u64>) {
+                $(self.$field.column_pointers(out);)+
+            }
+            fn to_host(&self, rows: usize) -> Result<Self::Host> {
+                Ok(($(self.$field.to_host(rows)?,)+))
+            }
+        }
+    };
+}
+tuple_columns!(A:0);
+tuple_columns!(A:0, B:1);
+tuple_columns!(A:0, B:1, C:2);
+tuple_columns!(A:0, B:1, C:2, D:3);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10);
+tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10, L:11);
+
+/// An integer item lane filled from a decoded resident source value (its
+/// i64 bit pattern). The recorded value schema guarantees the source column's
+/// domain fits the lane ([`LaneKind::holds`]), so the conversion is exact.
+pub trait SourceLane: ItemLane {
+    fn from_source(value: i64) -> Self;
+}
+macro_rules! source_lanes {
+    ($($ty:ty),*) => {$(
+        impl SourceLane for $ty {
+            #[inline(always)]
+            fn from_source(value: i64) -> Self {
+                value as $ty
+            }
+        }
+    )*};
+}
+source_lanes!(u8, i8, u16, i16, u32, i32, u64, i64);
+
+/// Item layouts that a build fills from resident source columns, one source
+/// per lane in layout order.
+pub trait SourceItemColumns: DeviceItemColumns {
+    #[doc(hidden)]
+    fn from_sources(
+        kernels: &ItemKernels,
+        sources: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self>;
+}
+
+impl SourceItemColumns for () {
+    fn from_sources(_: &ItemKernels, _: &[SourceView], _: *const u32, _: usize) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<T: SourceLane> SourceItemColumns for Buffer<T> {
+    fn from_sources(
+        kernels: &ItemKernels,
+        sources: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self> {
+        let [source] = sources else {
+            return Err("one source column per item lane".into());
+        };
+        // SAFETY: the lane kernel initializes every position before publication.
+        let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
+        if rows != 0 {
+            let module = &kernels.module;
+            let initial = module.prepare_source_lane::<T>(kernels.shape())?;
+            let config = kernels.config(initial.function(), rows)?;
+            module.source_lane::<T>(
+                kernels.pool.stream(),
+                &module.prepare_source_lane::<T>(config)?,
+                *source,
+                positions,
+                rows as u64,
+                output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+}
+
+macro_rules! source_columns {
+    ($($C:ident),+) => {
+        impl<$($C: SourceItemColumns),+> SourceItemColumns for ($($C,)+) {
+            fn from_sources(
+                kernels: &ItemKernels,
+                sources: &[SourceView],
+                positions: *const u32,
+                rows: usize,
+            ) -> Result<Self> {
+                if sources.len() != Self::COLUMNS {
+                    return Err("one source column per item lane".into());
+                }
+                let mut _at = 0;
+                Ok(($({
+                    let part = &sources[_at.._at + $C::COLUMNS];
+                    _at += $C::COLUMNS;
+                    $C::from_sources(kernels, part, positions, rows)?
+                },)+))
+            }
+        }
+    };
+}
+source_columns!(A);
+source_columns!(A, B);
+source_columns!(A, B, C);
+source_columns!(A, B, C, D);
+source_columns!(A, B, C, D, E);
+source_columns!(A, B, C, D, E, F);
+source_columns!(A, B, C, D, E, F, G);
+source_columns!(A, B, C, D, E, F, G, H);
+source_columns!(A, B, C, D, E, F, G, H, I);
+source_columns!(A, B, C, D, E, F, G, H, I, J);
+source_columns!(A, B, C, D, E, F, G, H, I, J, K);
+source_columns!(A, B, C, D, E, F, G, H, I, J, K, L);
+
+/// Caller-recorded provider parameters; the runtime chooses none of them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RadixRunParams {
+    /// Geometric item-count ratio between adjacent published runs (`>= 2`).
+    pub ratio: usize,
+    /// Directory resolution: `2^radix_bits + 1` lower bounds of min-relative
+    /// key prefixes per run. Zero selects exact binary search with no directory.
+    pub radix_bits: u32,
+    /// Merged key slots per merge-path tile (`>= 1`).
+    pub merge_tile_rows: u32,
+    /// Threads per block for radix auxiliary kernels, including stable ordering.
+    /// Must equal the kernels' compiled 256-thread launch contract.
+    pub block_threads: u32,
+}
+
+impl RadixRunParams {
+    /// Formal rule DL-DeviceRatio: explicit ratio, directory, tile and launch
+    /// geometry are checked once; maintenance uses the ordinary radix ratio law.
+    pub fn validate(&self) -> Result<()> {
+        if self.ratio < 2 {
+            return Err("radix run ratio must be at least two".into());
+        }
+        if self.radix_bits > 32 {
+            return Err("radix directory bits must be at most 32".into());
+        }
+        if self.merge_tile_rows == 0 {
+            return Err("merge tile must contain at least one slot".into());
+        }
+        if self.block_threads != 256 {
+            return Err("radix kernels require exactly 256 block threads".into());
+        }
+        Ok(())
+    }
+}
+
+/// One immutable run, as a borrowed kernel ABI. Contains no item pointers.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RadixRunView<W: Word, O: OffsetWord> {
+    /// Sorted plain keys, or the payload origin in a fixed packed run.
+    pub keys: *const W,
+    /// Materialized offsets, or the complete descriptor for a packed set run.
+    pub offsets: *const O,
+    /// Plain radix slot bounds; for packed fixed leaves, optional direct-read frames.
+    pub directory: *const O,
+    pub keys_len: u64,
+    pub items: u64,
+    /// Plain radix width, or column count in a fixed packed run.
+    pub radix_bits: u32,
+    /// Zero: materialized offsets; one: plain unit offsets. Packed tags below are also unit offsets.
+    pub unit_offsets: u32,
+}
+// SAFETY: this C-layout descriptor contains only device pointers and integers.
+unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixRunView<W, O> {}
+#[cfg(feature = "packed-radix")]
+const PACKED_UNIT: u32 = 2;
+#[cfg(feature = "packed-radix")]
+const FIXED_UNIT: u32 = 3;
+// SAFETY: the pointers name immutable device storage and are never
+// dereferenced on the host, so moving or sharing descriptors is sound.
+unsafe impl<W: Word, O: OffsetWord> Send for RadixRunView<W, O> {}
+unsafe impl<W: Word, O: OffsetWord> Sync for RadixRunView<W, O> {}
+
+/// All published runs of one snapshot, oldest first. Reads visit every run.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RadixKeysView<W: Word, O: OffsetWord> {
+    pub runs: *const RadixRunView<W, O>,
+    pub run_count: u32,
+    pub reserved: u32,
+    /// Total occurrences across all runs; the exact absent-key position.
+    pub items: u64,
+    /// The snapshot identity every [`RadixMatch`] read through this view carries.
+    pub snapshot: u64,
+}
+// SAFETY: this C-layout descriptor contains only device pointers and integers.
+unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixKeysView<W, O> {}
+
+/// Item column addresses, run-major: `columns[run * column_count + column]`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RadixItemsView {
+    pub columns: *const u64,
+    pub column_count: u32,
+    pub run_count: u32,
+    pub snapshot: u64,
+}
+// SAFETY: this C-layout descriptor contains only a device pointer and integers.
+unsafe impl DeviceCopy for RadixItemsView {}
+
+/// One demanded item column of a snapshot (narrow item access): reads touch
+/// no other column. `T` of the typed [`ItemColumn`] is the column's lane.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RadixItemColumn {
+    /// The snapshot's run-major column address table.
+    pub columns: *const u64,
+    pub snapshot: u64,
+    pub column: u32,
+    pub column_count: u32,
+    pub run_count: u32,
+    pub reserved: u32,
+}
+// SAFETY: this C-layout descriptor contains only a device pointer and integers.
+unsafe impl DeviceCopy for RadixItemColumn {}
+// SAFETY: the column table is immutable device storage, never dereferenced on the host.
+unsafe impl Send for RadixItemColumn {}
+unsafe impl Sync for RadixItemColumn {}
+
+/// Batch key-read result: membership, occurrence count and the exact range in
+/// the concatenated stable order of all runs (`(items, items)` when absent).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KeyProbe {
+    pub contains: u64,
+    pub count: u64,
+    pub begin: u64,
+    pub end: u64,
+}
+// SAFETY: plain integers.
+unsafe impl DeviceCopy for KeyProbe {}
+
+/// Formal rule GPU-RadixCursor:
+/// A match cursor names one run's group: the snapshot identity, the run index
+/// and the half-open item positions `[begin, end)` local to that run's item
+/// columns (`(items, items)` of the run when absent). Logical merged-order
+/// positions ([`KeyProbe`]) are counts, never item addresses; expansion reads
+/// each run's cursor through a column of the same snapshot.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RadixMatch {
+    pub snapshot: u64,
+    pub run: u32,
+    pub reserved: u32,
+    pub begin: u64,
+    pub end: u64,
+}
+// SAFETY: plain integers.
+unsafe impl DeviceCopy for RadixMatch {}
+
+impl RadixMatch {
+    pub fn len(&self) -> u64 {
+        self.end - self.begin
+    }
+    pub fn is_empty(&self) -> bool {
+        self.begin == self.end
+    }
+}
+
+/// Inclusive key-interval read summed over runs: group slots and occurrences.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct IntervalProbe {
+    pub groups: u64,
+    pub items: u64,
+}
+// SAFETY: plain integers.
+unsafe impl DeviceCopy for IntervalProbe {}
+
+struct Segment<W: Word, O: OffsetWord, C> {
+    keys: Arc<Buffer<W>>,
+    offsets: Option<Buffer<O>>,
+    directory: Buffer<O>,
+    items: C,
+    key_count: usize,
+    item_count: usize,
+    radix_bits: u32,
+}
+
+// Packing is supplied by the typed layout's first publication, not by new_set.
+// Leave small states on their original path, including their directory policy.
+#[cfg(feature = "packed-radix")]
+struct PackedBacking<W: Word> {
+    packing: OnceLock<Packing>,
+    set: Option<PackedSet<W>>,
+}
+
+#[cfg(feature = "packed-radix")]
+struct PackedPublication<W: Word> {
+    runs: Vec<Arc<PackedRun<W>>>,
+}
+
+#[cfg(feature = "packed-radix")]
+impl<W: Word> PackedPublication<W> {
+    fn bytes(&self) -> usize {
+        self.runs.iter().map(|r| r.allocated_bytes()).sum()
+    }
+}
+
+enum SnapshotTables<W: Word, O: OffsetWord> {
+    Separate { runs: Buffer<RadixRunView<W, O>>, columns: Buffer<u64>, count: Buffer<u64> },
+    /// [one count | contiguous RadixRunView array | optional PackedView array].
+    /// All three device addresses have the same immutable publication lifetime.
+    #[cfg(feature = "packed-radix")]
+    FullKey { words: Buffer<u64>, runs: usize },
+}
+
+impl<W: Word, O: OffsetWord> SnapshotTables<W, O> {
+    fn runs(&self) -> *const RadixRunView<W, O> {
+        match self {
+            Self::Separate { runs, .. } => runs.ptr(),
+            #[cfg(feature = "packed-radix")]
+            Self::FullKey { words, .. } => words.ptr().wrapping_add(1).cast(),
+        }
+    }
+    fn len(&self) -> usize {
+        match self {
+            Self::Separate { runs, .. } => runs.len(),
+            #[cfg(feature = "packed-radix")]
+            Self::FullKey { runs, .. } => *runs,
+        }
+    }
+    fn columns(&self) -> *const u64 {
+        match self {
+            Self::Separate { columns, .. } => columns.ptr(),
+            #[cfg(feature = "packed-radix")]
+            Self::FullKey { .. } => std::ptr::null(),
+        }
+    }
+    fn count(&self) -> *const u64 {
+        match self {
+            Self::Separate { count, .. } => count.ptr(),
+            #[cfg(feature = "packed-radix")]
+            Self::FullKey { words, .. } => words.ptr(),
+        }
+    }
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Separate { runs, columns, count } => runs.allocated_bytes() + columns.allocated_bytes() + count.allocated_bytes(),
+            #[cfg(feature = "packed-radix")]
+            Self::FullKey { words, .. } => words.allocated_bytes(),
+        }
+    }
+    #[cfg(feature = "packed-radix")]
+    fn full_key<C: DeviceItemColumns>(state: &DeviceRadixRun<W, O, C>, items: u64) -> Result<Self> {
+        let set = state.packed_set();
+        let n = state.run_count();
+        u32::try_from(n).map_err(|_| "radix run count exceeds u32")?;
+        // Both device-copy ABIs are padding-free C structs of 64-bit pointers,
+        // u64s and a final pair of u32s, independent of W/O. Never stage padding.
+        const {
+            assert!(size_of::<RadixRunView<W, O>>() == 6 * 8 && align_of::<RadixRunView<W, O>>() == 8);
+            assert!(size_of::<PackedView<W>>() == 10 * 8 && align_of::<PackedView<W>>() == 8);
+        }
+        let packed_at = 1 + n * 6;
+        let len = packed_at + if set.is_some() { n * 10 } else { 0 };
+        // Write the two typed arrays directly into one aligned staging prefix.
+        // All words are initialized below before write_async copies the prefix.
+        let words = unsafe { Buffer::<u64>::uninitialized(state.pool.clone(), len)? };
+        let mut host = Vec::<u64>::with_capacity(len);
+        host.push(items);
+        let runs = host.as_mut_ptr().wrapping_add(1).cast::<RadixRunView<W, O>>();
+        if let Some(set) = set {
+            let packed = host.as_mut_ptr().wrapping_add(packed_at).cast::<PackedView<W>>();
+            let device = words.ptr().wrapping_add(packed_at).cast::<PackedView<W>>();
+            for (i, run) in set.runs().iter().enumerate() {
+                let view = run.view();
+                // A larger payload still has full 64-bit addressing via resolve_row.
+                let direct = W::BITS <= 128 && view.plain.is_null() && view.block_rows == crate::packed_run::DEFAULT_BLOCK_ROWS
+                    && run.payload_bytes() / 8 <= crate::packed_run::FRAME_PAGE_MASK as usize;
+                let radix = RadixRunView {
+                    keys: if direct { view.payload.cast() } else { view.plain },
+                    offsets: if view.plain.is_null() { device.wrapping_add(i).cast() } else { std::ptr::null() },
+                    directory: if direct { view.frames.cast() } else { std::ptr::null() },
+                    radix_bits: if direct { view.columns } else { 0 },
+                    unit_offsets: if direct { FIXED_UNIT } else if view.plain.is_null() { PACKED_UNIT } else { 1 },
+                    keys_len: view.rows, items: view.rows,
+                };
+                unsafe { packed.add(i).write(view); runs.add(i).write(radix); }
+            }
+        } else {
+            for (i, run) in state.runs.iter().enumerate() {
+                unsafe { runs.add(i).write(run.view()); }
+            }
+        }
+        unsafe { host.set_len(len); words.write_async(&host)?; }
+        Ok(Self::FullKey { words, runs: n })
+    }
+}
+
+impl<W: Word, O: OffsetWord, C> Segment<W, O, C> {
+    fn view(&self) -> RadixRunView<W, O> {
+        RadixRunView {
+            keys: self.keys.ptr(),
+            offsets: self.offsets.as_ref().map_or(std::ptr::null(), |offsets| offsets.ptr()),
+            directory: if self.radix_bits == 0 {
+                std::ptr::null()
+            } else {
+                self.directory.ptr()
+            },
+            keys_len: self.key_count as u64,
+            items: self.item_count as u64,
+            radix_bits: self.radix_bits,
+            unit_offsets: u32::from(self.offsets.is_none()),
+        }
+    }
+}
+
+/// Downloaded diagnostic copy of one run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostRadixRun<W, O, H> {
+    pub keys: Vec<W>,
+    pub offsets: Vec<O>,
+    pub directory: Vec<O>,
+    pub items: H,
+}
+
+/// Formal rule GPU-RadixRun:
+/// A stable lane radix permutation groups packed-key occurrences into distinct
+/// keys, `O` offsets and gathered item columns; an exact radix-prefix directory
+/// bounds a lower-bound search, so membership, counts, ranges and absent-key
+/// insertion positions equal the CPU RadixRun's for the same occurrences.
+/// Auxiliary launch widths are caller-recorded in `RadixRunParams`, checked
+/// against compiled contracts before construction, and retained by snapshots.
+///
+/// Each nonempty build downloads one group count; key reads never touch items.
+pub struct DeviceRadixRun<W: Word, O: OffsetWord, C: DeviceItemColumns> {
+    pool: Arc<Pool>,
+    params: RadixRunParams,
+    runs: Vec<Arc<Segment<W, O, C>>>,
+    #[cfg(feature = "packed-radix")]
+    packed: Option<Box<PackedBacking<W>>>,
+    /// Construction witness, not inferred from C=(): set admission guarantees
+    /// unit offsets and disjoint complete keys across all accepted runs.
+    full_key_set: bool,
+    pair_cache: crate::pair_bitmap::Cache,
+    /// Caller-recorded sort window; native occurrence builders default to the full word.
+    active_bits: u32,
+    /// The current publication's descriptors, uploaded once on first read and
+    /// replaced only when a publication changes the runs.
+    published: Mutex<Option<Arc<RadixSnapshot<W, O, C>>>>,
+    kernels: ItemKernels,
+    order: runs::run_kernels::LoadedModule,
+}
+
+impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
+    pub fn new(pool: Arc<Pool>, params: RadixRunParams) -> Result<Self> {
+        params.validate()?;
+        // SAFETY: modules are loaded in, and retained with, the pool's context.
+        let module = unsafe { radix_kernels::load(pool.context())? };
+        let order = unsafe { runs::run_kernels::load(pool.context())? };
+        Ok(Self {
+            kernels: ItemKernels {
+                pool: pool.clone(),
+                module,
+                block_threads: params.block_threads,
+            },
+            pool,
+            params,
+            runs: Vec::new(),
+            #[cfg(feature = "packed-radix")]
+            packed: None,
+            full_key_set: false,
+            pair_cache: Default::default(),
+            active_bits: W::BITS,
+            published: Mutex::new(None),
+            order,
+        })
+    }
+
+    /// Group `rows` occurrences: the first `rows` keys with the same positions
+    /// of every item column. Equal keys keep their input occurrence order.
+    pub fn build(
+        pool: Arc<Pool>,
+        params: RadixRunParams,
+        keys: &Buffer<W>,
+        items: &C,
+        rows: usize,
+    ) -> Result<Self> {
+        let mut run = Self::new(pool, params)?;
+        run.publish(keys, items, rows)?;
+        Ok(run)
+    }
+
+    pub fn pool(&self) -> &Arc<Pool> {
+        &self.pool
+    }
+    pub fn params(&self) -> RadixRunParams {
+        self.params
+    }
+    pub fn active_bits(&self) -> u32 {
+        self.active_bits
+    }
+    pub fn run_count(&self) -> usize {
+        #[cfg(feature = "packed-radix")]
+        if let Some(set) = self.packed_set() { return set.runs().len(); }
+        self.runs.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.run_count() == 0
+    }
+    /// Total occurrences across all runs.
+    pub fn item_count(&self) -> usize {
+        #[cfg(feature = "packed-radix")]
+        if let Some(set) = self.packed_set() { return set.len(); }
+        self.runs.iter().map(|run| run.item_count).sum()
+    }
+    /// `(distinct keys, occurrences)` per run, oldest first.
+    pub fn run_lengths(&self) -> Vec<(usize, usize)> {
+        #[cfg(feature = "packed-radix")]
+        if let Some(set) = self.packed_set() {
+            return set.runs().iter().map(|r| (r.len(), r.len())).collect();
+        }
+        self.runs
+            .iter()
+            .map(|run| (run.key_count, run.item_count))
+            .collect()
+    }
+
+    #[cfg(feature = "packed-radix")]
+    fn packed_set(&self) -> Option<&PackedSet<W>> {
+        self.packed.as_ref()?.set.as_ref()
+    }
+
+    #[cfg(feature = "packed-radix")]
+    fn bind_packing(&self, packing: &Packing) -> Result<()> {
+        if let Some(backing) = &self.packed {
+            if backing.packing.get_or_init(|| packing.clone()) != packing {
+                return Err("packed radix state already has a different field layout".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Formal rule GPU-RadixPublish:
+    /// Publication groups only the delta, appends its run, and merges adjacent
+    /// newest runs by stable merge-path until every older run has at least
+    /// `ratio` times the next run's occurrences: the CPU RadixRun ratio law.
+    /// Reads of every snapshot include all unmerged runs. Empty deltas are no-ops;
+    /// a failed build or merge leaves the published runs unchanged.
+    pub fn publish(&mut self, keys: &Buffer<W>, items: &C, rows: usize) -> Result<()> {
+        self.publish_with_control(keys, items, rows, None)
+    }
+
+    fn publish_with_control(&mut self, keys: &Buffer<W>, items: &C, rows: usize, control: Option<&Buffer<u64>>) -> Result<()> {
+        if self.full_key_set {
+            return Err("occurrence publication requires an occurrence constructor".into());
+        }
+        let Some(segment) = self.group(keys, items, rows, control)? else {
+            return Ok(());
+        };
+        let mut merged = Arc::new(segment);
+        let mut keep = self.runs.len();
+        while keep > 0 && self.runs[keep - 1].item_count / self.params.ratio < merged.item_count {
+            merged = Arc::new(self.merge(&self.runs[keep - 1], &merged)?);
+            keep -= 1;
+        }
+        self.runs.truncate(keep);
+        self.runs.push(merged);
+        self.full_key_set = false;
+        *self.published.get_mut().expect("radix publication cache") = None;
+        Ok(())
+    }
+
+    /// The current publication's immutable snapshot. Descriptors, the item
+    /// column table and the resident count are uploaded once per publication
+    /// on [`Self::pool`]'s stream without a host synchronization; until the
+    /// runs change, every call returns the same snapshot (same identity).
+    /// A snapshot retains its runs across later publications and release.
+    pub fn snapshot(&self) -> Result<Arc<RadixSnapshot<W, O, C>>> {
+        let mut published = self.published.lock().expect("radix publication cache");
+        if let Some(snapshot) = published.as_ref() {
+            return Ok(snapshot.clone());
+        }
+        crate::phases::admission_scope!(c"admit/snapshot", self.item_count());
+        let items = self.item_count() as u64;
+        let separate = || -> Result<_> {
+            u32::try_from(self.runs.len()).map_err(|_| "radix run count exceeds u32")?;
+            let views: Vec<_> = self.runs.iter().map(|run| run.view()).collect();
+            let mut columns = Vec::with_capacity(views.len() * C::COLUMNS);
+            for run in &self.runs { run.items.column_pointers(&mut columns); }
+            Ok(SnapshotTables::Separate {
+                runs: Buffer::from_host_async(self.pool.clone(), &views)?,
+                columns: Buffer::from_host_async(self.pool.clone(), &columns)?,
+                count: Buffer::from_host_async(self.pool.clone(), &[items])?,
+            })
+        };
+        #[cfg(not(feature = "packed-radix"))]
+        let tables = separate()?;
+        #[cfg(feature = "packed-radix")]
+        let tables = if self.full_key_set { SnapshotTables::full_key(self, items)? } else { separate()? };
+        let snapshot = Arc::new(RadixSnapshot {
+            id: NEXT_SNAPSHOT.fetch_add(1, Ordering::Relaxed),
+            tables,
+            items,
+            full_key_set: self.full_key_set,
+            active_bits: self.active_bits,
+            runs: self.runs.clone(),
+            #[cfg(feature = "packed-radix")]
+            packed: self.packed_set().map(|set| Box::new(PackedPublication { runs: set.runs().to_vec() })),
+            module: self.kernels.module.clone(),
+            order: self.order.clone(),
+            pool: self.pool.clone(),
+            block_threads: self.params.block_threads,
+        });
+        crate::stats::record_work(|work| {
+            work.descriptor_materializations += 1;
+            work.descriptor_bytes += snapshot.descriptor_bytes() as u64;
+        });
+        *published = Some(snapshot.clone());
+        Ok(snapshot)
+    }
+
+    /// Explicit diagnostic download of every run, oldest first.
+    pub fn to_host(&self) -> Result<Vec<HostRadixRun<W, O, C::Host>>> {
+        #[cfg(feature = "packed-radix")]
+        if let Some(set) = self.packed_set() {
+            return set.runs().iter().map(|run| Ok(HostRadixRun {
+                keys: run.unpack()?.to_host()?,
+                offsets: (0..=run.len()).map(|i| O::from_u64(i as u64)).collect(),
+                directory: Vec::new(), items: Default::default(),
+            })).collect();
+        }
+        self.runs
+            .iter()
+            .map(|run| {
+                Ok(HostRadixRun {
+                    keys: run.keys.to_host_prefix(run.key_count)?,
+                    offsets: match &run.offsets {
+                        Some(offsets) => offsets.to_host_prefix(run.key_count + 1)?,
+                        None => (0..=run.key_count).map(|slot| O::from_u64(slot as u64)).collect(),
+                    },
+                    directory: if run.radix_bits == 0 {
+                        Vec::new()
+                    } else {
+                        run.directory.to_host()?
+                    },
+                    items: run.items.to_host(run.item_count)?,
+                })
+            })
+            .collect()
+    }
+
+    fn launch_config(
+        &self,
+        function: &cuda_core::CudaFunction,
+        parts: usize,
+    ) -> Result<LaunchConfig1D> {
+        self.kernels.config(function, parts)
+    }
+
+    fn group(&self, keys: &Buffer<W>, items: &C, rows: usize, control: Option<&Buffer<u64>>) -> Result<Option<Segment<W, O, C>>> {
+        if !self.pool.shares_memory(keys.pool()) || rows > keys.len() {
+            return Err("radix run keys use another pool's memory or exceed their capacity".into());
+        }
+        items.check(&self.pool, rows)?;
+        if rows > u32::MAX as usize {
+            return Err("radix run build exceeds the u32 row domain".into());
+        }
+        if !offset_fits::<O>(rows) {
+            return Err("radix run items exceed the offset carrier".into());
+        }
+        if rows == 0 {
+            return Ok(None);
+        }
+        let pool = &self.pool;
+        crate::stats::record_sort(crate::stats::SortKind::Occurrence, rows, self.active_bits, true);
+        let module = &self.kernels.module;
+        let cub = rccl_cub::cuda::Program::load(pool.context())?;
+        let launch = cub.on(pool.stream())?;
+        let permutation = runs::stable_order(
+            pool,
+            &self.order,
+            &launch,
+            keys,
+            rows,
+            self.params.block_threads,
+            self.active_bits,
+        )?;
+        let order = permutation.get().cu_deviceptr() as *const u32;
+        // SAFETY: the flag kernel initializes all rows + 1 entries.
+        let flags = unsafe { Buffer::<u32>::uninitialized(pool.clone(), rows + 1)? };
+        let initial = module.prepare_group_flags::<W>(self.kernels.shape())?;
+        let config = self.launch_config(initial.function(), rows + 1)?;
+        module.group_flags::<W>(
+            pool.stream(),
+            &module.prepare_group_flags::<W>(config)?,
+            keys.ptr(),
+            order,
+            rows as u64,
+            flags.ptr(),
+        )?;
+        // SAFETY: stable selections initialize the prefixes read below.
+        let offsets = unsafe { Buffer::<O>::uninitialized(pool.clone(), rows + 1)? };
+        crate::stats::record_work(|work| {
+            work.offset_materializations += 1;
+            work.offset_bytes += ((rows + 1) * size_of::<O>()) as u64;
+        });
+        let distinct = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
+        let mut offset_count = Native::<u64>::new(pool, 1)?;
+        let mut key_count = Native::<u64>::new(pool, 1)?;
+        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(
+            pool.resource(),
+            &launch,
+            rows + 1,
+        )?;
+        rccl_cub::thrust_integration::device_select_flagged(
+            &launch,
+            DeviceArithmeticRange::new(O::from_u64(0), O::from_u64(1)),
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(offsets.ptr()),
+            offset_count.get_mut(),
+            rows + 1,
+            &mut workspace,
+        )?;
+        let source = keys.ptr() as *const W;
+        let sorted = DeviceMap::new(DeviceSliceRead::new(order), move |row: u32| unsafe {
+            *source.add(row as usize)
+        });
+        let mut workspace =
+            rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, rows)?;
+        rccl_cub::thrust_integration::device_select_flagged(
+            &launch,
+            sorted,
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(distinct.ptr()),
+            key_count.get_mut(),
+            rows,
+            &mut workspace,
+        )?;
+        let items = items.gather(&self.kernels, order, rows)?;
+        let count = if let Some(control) = control {
+            // Join the validation flag and group count in one metadata transfer.
+            unsafe {
+                cuda_core::simt::memory::memcpy_dtod_async(
+                    control.cu_deviceptr(), offset_count.get().cu_deviceptr(), 8,
+                    pool.stream().cu_stream(),
+                )?;
+            }
+            let result = control.to_host()?;
+            crate::record_readback();
+            crate::stats::record_work(|work| work.grouping_readbacks += 1);
+            if result[1] != 0 {
+                return Err("radix source value does not fit its recorded key field".into());
+            }
+            usize::try_from(result[0])?
+        } else {
+            let count = runs::read_count(pool, offset_count.get())?;
+            crate::stats::record_work(|work| work.grouping_readbacks += 1);
+            count
+        };
+        let key_count = count - 1;
+        let directory = self.directory(&distinct, key_count)?;
+        Ok(Some(Segment {
+            keys: Arc::new(distinct),
+            offsets: Some(offsets),
+            directory,
+            items,
+            key_count,
+            item_count: rows,
+            radix_bits: self.params.radix_bits,
+        }))
+    }
+
+    fn merge(&self, left: &Segment<W, O, C>, right: &Segment<W, O, C>) -> Result<Segment<W, O, C>> {
+        let total = left
+            .item_count
+            .checked_add(right.item_count)
+            .ok_or("merged item count overflow")?;
+        if !offset_fits::<O>(total) {
+            return Err("merged radix run items exceed the offset carrier".into());
+        }
+        let slots = left.key_count + right.key_count;
+        crate::stats::record_work(|work| work.merges += 1);
+        let pool = &self.pool;
+        let module = &self.kernels.module;
+        // SAFETY: the merge-path kernel initializes all slots and the terminal entry.
+        let tags = unsafe { Buffer::<u64>::uninitialized(pool.clone(), slots)? };
+        let positions = unsafe { Buffer::<O>::uninitialized(pool.clone(), slots + 1)? };
+        let flags = unsafe { Buffer::<u32>::uninitialized(pool.clone(), slots + 1)? };
+        let tile = self.params.merge_tile_rows as usize;
+        let initial = module.prepare_merge_slots::<W, O>(self.kernels.shape())?;
+        let config = self.launch_config(initial.function(), slots.div_ceil(tile))?;
+        module.merge_slots::<W, O>(
+            pool.stream(),
+            &module.prepare_merge_slots::<W, O>(config)?,
+            left.view(),
+            right.view(),
+            tile as u64,
+            tags.ptr(),
+            positions.ptr(),
+            flags.ptr(),
+        )?;
+        let cub = rccl_cub::cuda::Program::load(pool.context())?;
+        let launch = cub.on(pool.stream())?;
+        // SAFETY: stable selections initialize the prefixes read below.
+        let offsets = unsafe { Buffer::<O>::uninitialized(pool.clone(), slots + 1)? };
+        crate::stats::record_work(|work| {
+            work.offset_materializations += 1;
+            work.offset_bytes += ((slots + 1) * size_of::<O>()) as u64;
+        });
+        let distinct = unsafe { Buffer::<W>::uninitialized(pool.clone(), slots)? };
+        let mut offset_count = Native::<u64>::new(pool, 1)?;
+        let mut key_count = Native::<u64>::new(pool, 1)?;
+        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(
+            pool.resource(),
+            &launch,
+            slots + 1,
+        )?;
+        rccl_cub::thrust_integration::device_select_flagged(
+            &launch,
+            DeviceSliceRead::new(positions.ptr() as *const O),
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(offsets.ptr()),
+            offset_count.get_mut(),
+            slots + 1,
+            &mut workspace,
+        )?;
+        let (left_keys, right_keys) = (left.keys.ptr() as *const W, right.keys.ptr() as *const W);
+        let merged = DeviceMap::new(
+            DeviceSliceRead::new(tags.ptr() as *const u64),
+            move |tag: u64| unsafe {
+                if tag & SIDE == 0 {
+                    *left_keys.add(tag as usize)
+                } else {
+                    *right_keys.add((tag & !SIDE) as usize)
+                }
+            },
+        );
+        let mut workspace =
+            rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, slots)?;
+        rccl_cub::thrust_integration::device_select_flagged(
+            &launch,
+            merged,
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(distinct.ptr()),
+            key_count.get_mut(),
+            slots,
+            &mut workspace,
+        )?;
+        // Unit-item layouts need no item-source map, even for occurrence merges.
+        let sources = if C::COLUMNS == 0 {
+            None
+        } else {
+            // SAFETY: each merged item position has exactly one source occurrence.
+            let sources = unsafe { Buffer::<O>::uninitialized(pool.clone(), total)? };
+            let initial = module.prepare_item_sources::<W, O>(self.kernels.shape())?;
+            let config = self.launch_config(initial.function(), total)?;
+            module.item_sources::<W, O>(
+                pool.stream(),
+                &module.prepare_item_sources::<W, O>(config)?,
+                left.view(),
+                right.view(),
+                tags.ptr(),
+                positions.ptr(),
+                slots as u64,
+                total as u64,
+                sources.ptr(),
+            )?;
+            Some(sources)
+        };
+        let items = C::merge(
+            &left.items,
+            &right.items,
+            &self.kernels,
+            left.item_count,
+            sources.as_ref().map_or(std::ptr::null(), |sources| sources.ptr()),
+            total,
+        )?;
+        let key_count = runs::read_count(pool, offset_count.get())? - 1;
+        crate::stats::record_work(|work| work.grouping_readbacks += 1);
+        let directory = self.directory(&distinct, key_count)?;
+        Ok(Segment {
+            keys: Arc::new(distinct),
+            offsets: Some(offsets),
+            directory,
+            items,
+            key_count,
+            item_count: total,
+            radix_bits: self.params.radix_bits,
+        })
+    }
+
+    fn directory(&self, keys: &Buffer<W>, key_count: usize) -> Result<Buffer<O>> {
+        let bits = self.params.radix_bits;
+        if bits == 0 || key_count == 0 {
+            // SAFETY: zero-length storage is never read.
+            return unsafe { Buffer::uninitialized(self.pool.clone(), 0) };
+        }
+        let entries = (1_usize << bits) + 1;
+        // SAFETY: one thread initializes each directory entry.
+        let directory = unsafe { Buffer::<O>::uninitialized(self.pool.clone(), entries)? };
+        let module = &self.kernels.module;
+        let initial = module.prepare_build_directory::<W, O>(self.kernels.shape())?;
+        let config = self.launch_config(initial.function(), entries)?;
+        module.build_directory::<W, O>(
+            self.pool.stream(),
+            &module.prepare_build_directory::<W, O>(config)?,
+            keys.ptr(),
+            key_count as u64,
+            bits,
+            directory.ptr(),
+        )?;
+        Ok(directory)
+    }
+}
+
+/// Formal rule DL-DeviceRuns: fresh is read-only unique-minus-committed;
+/// admitted complete keys are disjoint, with unit offsets in the radix engine.
+impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
+    /// Construct an explicit full-key set with a caller-recorded packing width.
+    /// `active_bits == W::BITS` is the conservative full-width mode.
+    /// Narrow sort inputs must satisfy each unsafe sort method's padding contract.
+    pub fn new_set(pool: Arc<Pool>, params: RadixRunParams, active_bits: u32) -> Result<Self> {
+        if active_bits > W::BITS {
+            return Err("set active bits exceed the key word".into());
+        }
+        let mut state = Self::new(pool, params)?;
+        state.full_key_set = true;
+        state.active_bits = active_bits;
+        #[cfg(feature = "packed-radix")]
+        if std::env::var_os("GPU_DATALOG_PACKED_RUN").as_deref() != Some(std::ffi::OsStr::new("0")) {
+            state.packed = Some(Box::new(PackedBacking { packing: OnceLock::new(), set: None }));
+        }
+        Ok(state)
+    }
+
+    fn set_ops(&self) -> runs::SetOps<'_> {
+        runs::SetOps {
+            pool: &self.pool, module: &self.order, params: self.params,
+            active_bits: self.active_bits,
+        }
+    }
+
+    /// Full-key set cardinality. Set publications have one unit item per key.
+    pub fn len(&self) -> usize {
+        self.item_count()
+    }
+
+    fn retained_metadata_and_packed_bytes(&self) -> usize {
+        let bytes = self.published.lock().expect("radix publication cache")
+            .as_ref().map_or(0, |snapshot| snapshot.descriptor_bytes());
+        #[cfg(feature = "packed-radix")]
+        let bytes = bytes + self.packed_set().map_or(0, PackedSet::allocated_bytes);
+        bytes + self.pair_cache.index.as_ref().map_or(0, |cache| cache.bytes())
+    }
+
+    /// Initialized keys, materialized offsets (if any), and radix directories.
+    pub fn live_bytes(&self) -> usize {
+        self.runs.iter().map(|run| {
+            run.key_count * size_of::<W>()
+                + (run.offsets.as_ref().map_or(0, |_| run.key_count + 1)
+                    + run.directory.len()) * size_of::<O>()
+        }).sum::<usize>() + self.retained_metadata_and_packed_bytes()
+    }
+
+    /// Current backing allocations; older retained snapshots are separate owners.
+    pub fn allocated_bytes(&self) -> usize {
+        self.runs.iter().map(|run| {
+            run.keys.allocated_bytes() + run.offsets.as_ref().map_or(0, Buffer::allocated_bytes)
+                + run.directory.allocated_bytes()
+        }).sum::<usize>() + self.retained_metadata_and_packed_bytes()
+    }
+
+    /// Read-only unique(candidates) minus every committed key, in sorted order.
+    /// Only unique/fresh counts cross the existing admission barrier.
+    /// # Safety
+    /// The input prefix is ready on this stream and has zero padding above
+    /// `active_bits()`, under the same full-heading packing as accepted keys.
+    pub unsafe fn fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+        if !self.full_key_set {
+            return Err("set admission requires a full-key set constructor".into());
+        }
+        crate::phases::admission_scope!(c"admit/fresh", rows);
+        let unique = unsafe { self.sort_unique(candidates, rows)? };
+        self.uncommitted(unique)
+    }
+
+    fn uncommitted(&self, unique: runs::SortedBatch<W>) -> Result<runs::SortedBatch<W>> {
+        if unique.is_empty() || self.is_empty() {
+            return Ok(unique);
+        }
+        #[cfg(feature = "packed-radix")]
+        if let Some(set) = self.packed_set() {
+            // An append invalidates this cache before the next fresh call.
+            // Don't materialize a snapshot just for subtraction on a cold set.
+            let published = self.published.lock().expect("radix publication cache").clone();
+            let views = published.as_ref().map(|snapshot| {
+                debug_assert!(snapshot.packed.is_some());
+                snapshot.tables.runs().wrapping_add(snapshot.run_count()).cast::<PackedView<W>>()
+            });
+            return unsafe { set.subtract_batch(unique, views) };
+        }
+        if let Some(index) = &self.pair_cache.index {
+            return self.set_ops().subtract_indexed(&unique, index);
+        }
+        let accepted = self.runs.iter().map(|run| runs::RunView {
+            ptr: run.keys.ptr(), len: run.key_count,
+        }).collect::<Vec<_>>();
+        self.set_ops().subtract(&unique, &accepted)
+    }
+
+    /// [`Self::fresh`] over one publication's candidate batches, packed in
+    /// `packing`'s relation order; `order` permutes each row into this set's
+    /// column order first. A sort portion within one batch borrows that native
+    /// range on this stream; only discontiguous or cross-stream portions need
+    /// gathering. Each portion is then permuted as requested, sorted, and
+    /// deduplicated against earlier portions before merging into the result.
+    /// # Safety
+    /// As [`Self::fresh`], for every batch and for the permuted rows.
+    pub unsafe fn fresh_batches(
+        &self,
+        packing: &Packing,
+        batches: &[crate::CandidateBatch],
+        order: Option<(&[usize], u32)>,
+    ) -> Result<runs::SortedBatch<W>> {
+        // SAFETY: forwarded premises.
+        unsafe { self.fresh_portions(packing, batches, order, runs::SORT_PORTION_ROWS) }
+    }
+
+    unsafe fn fresh_portions(
+        &self,
+        packing: &Packing,
+        batches: &[crate::CandidateBatch],
+        order: Option<(&[usize], u32)>,
+        portion: usize,
+    ) -> Result<runs::SortedBatch<W>> {
+        if !self.full_key_set {
+            return Err("set admission requires a full-key set constructor".into());
+        }
+        debug_assert_ne!(portion, 0);
+        // Walk the bag one portion at a time without allocating a host list of
+        // pieces. `first` is the first unconsumed row of the leading batch.
+        let mut batches = batches;
+        let mut first = 0;
+        let mut unique: Option<runs::SortedBatch<W>> = None;
+        loop {
+            let mut room = portion;
+            let mut whole = 0;
+            let mut partial_end = 0;
+            for batch in batches {
+                let start = if whole == 0 { first } else { 0 };
+                let remaining = batch.len() - start;
+                if remaining > room {
+                    partial_end = start + room;
+                    break;
+                }
+                room -= remaining;
+                whole += 1;
+            }
+            let piece = &batches[..whole + usize::from(partial_end != 0)];
+            let ranges = piece.iter().enumerate().map(|(i, batch)| {
+                let start = if i == 0 { first } else { 0 };
+                let end = if i == whole { partial_end } else { batch.len() };
+                (batch, start, end - start)
+            });
+            let rows = crate::arena::gather_ranges::<W>(self.pool.clone(), packing, ranges, true)?;
+            let rows = match order {
+                Some((order, threads)) => {
+                    let permuted = packing.permute_device(&rows, rows.len(), order, threads)?;
+                    drop(rows); // release any gathered portion before allocating sort scratch
+                    permuted
+                }
+                None => rows,
+            };
+            // SAFETY: the caller's packing and readiness premises cover every range.
+            let mut next = unsafe { self.sort_unique(&rows, rows.len())? };
+            drop(rows);
+            unique = Some(match unique {
+                None => next,
+                Some(previous) => {
+                    if !next.is_empty() {
+                        next = self.set_ops().subtract(&next, &[previous.view()])?;
+                    }
+                    if next.is_empty() { previous } else { self.set_ops().merge(&previous, &next)? }
+                }
+            });
+            batches = &batches[whole..];
+            if batches.is_empty() {
+                break;
+            }
+            first = partial_end;
+        }
+        let unique = unique.expect("at least one piece");
+        if W::BITS == 64 {
+            self.pair_cache.consider(|| self.len(), unique.len(), packing, order.map(|(columns, _)| columns));
+        }
+        self.uncommitted(unique)
+    }
+
+    /// Sort and deduplicate complete keys without changing committed state.
+    /// # Safety
+    /// The initialized input prefix is ready on this stream, with zero padding
+    /// above `active_bits()`. No input alias may mutate it until sorting finishes.
+    pub unsafe fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+        self.set_ops().sort(input, rows, false)
+    }
+
+    /// Sort an injective permutation without compaction or count readback.
+    /// # Safety
+    /// The initialized input prefix must contain pairwise distinct keys, with
+    /// zero padding above `active_bits()`, ready and immutable during this sort.
+    pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+        self.set_ops().sort(input, rows, true)
+    }
+
+    /// `batch`'s rows re-sorted under a full-column permutation of
+    /// `packing`. One sort portion at a time is permuted and sorted and the
+    /// sorted portions are merged, so beside the result the transient is one
+    /// portion, never a permuted copy of the whole batch.
+    /// # Safety
+    /// `batch` holds initialized pairwise distinct rows in `packing`; the
+    /// permutation is a bijection of its columns of the same active width.
+    pub unsafe fn reorder_unique(
+        &self,
+        packing: &Packing,
+        batch: &runs::SortedBatch<W>,
+        permutation: &[usize],
+        threads: u32,
+    ) -> Result<runs::SortedBatch<W>> {
+        // SAFETY: forwarded premises.
+        unsafe { self.reorder_portions(packing, batch, permutation, threads, runs::SORT_PORTION_ROWS) }
+    }
+
+    unsafe fn reorder_portions(
+        &self,
+        packing: &Packing,
+        batch: &runs::SortedBatch<W>,
+        permutation: &[usize],
+        threads: u32,
+        portion: usize,
+    ) -> Result<runs::SortedBatch<W>> {
+        let mut sorted: Option<runs::SortedBatch<W>> = None;
+        for start in (0..batch.len().max(1)).step_by(portion) {
+            let len = (batch.len() - start).min(portion);
+            let rows = batch.shared_range(start, len)?;
+            let permuted = packing.permute_device(&rows, len, permutation, threads)?;
+            // SAFETY: a bijection of distinct rows yields distinct rows.
+            let next = unsafe { self.sort_known_unique(&permuted, len)? };
+            drop(permuted);
+            sorted = Some(match sorted {
+                None => next,
+                // Portions of distinct rows are disjoint.
+                Some(previous) => self.set_ops().merge(&previous, &next)?,
+            });
+        }
+        Ok(sorted.expect("at least one portion"))
+    }
+
+    fn set_segment(&self, batch: runs::SortedBatch<W>) -> Result<Segment<W, O, ()>> {
+        if !self.pool.shares_memory(batch.buffer().pool()) || !offset_fits::<O>(batch.len()) {
+            return Err("set batch memory or offset carrier differs".into());
+        }
+        let rows = batch.len();
+        let keys = batch.shared_buffer()?;
+        let directory = self.directory(&keys, rows)?;
+        Ok(Segment { keys: Arc::new(keys), offsets: None, directory, items: (), key_count: rows,
+            item_count: rows, radix_bits: self.params.radix_bits })
+    }
+
+    /// Adopt a sorted unique delta, maintaining the ordinary radix ratio law.
+    /// No sort, grouping count download or item-source map is needed.
+    /// # Safety
+    /// `batch` must be disjoint from all committed keys. Publication and all
+    /// input producers must be ordered before this pool's stream reads them.
+    pub unsafe fn append_sorted(&mut self, batch: runs::SortedBatch<W>) -> Result<()> {
+        crate::phases::admission_scope!(c"admit/append", batch.len());
+        if !self.full_key_set {
+            return Err("set admission requires a full-key set publication".into());
+        }
+        if !self.pool.shares_memory(batch.buffer().pool()) {
+            return Err("set batch memory differs".into());
+        }
+        if batch.is_empty() { return Ok(()); }
+        let total = self.len().checked_add(batch.len()).ok_or("set length overflow")?;
+        if !offset_fits::<O>(total) { return Err("set exceeds offset carrier".into()); }
+        crate::stats::trace_step(&self.pool, "append", batch.len(), size_of::<W>());
+        #[cfg(feature = "packed-radix")]
+        if let Some(backing) = self.packed.as_deref_mut() {
+            if let Some(set) = &mut backing.set {
+                unsafe { set.append_maintained(&batch)?; }
+                *self.published.get_mut().expect("radix publication cache") = None;
+                return Ok(());
+            }
+            if let Some(packing) = backing.packing.get().filter(|_| total > SMALL_RUN_ROWS) {
+                let mut set = PackedSet::new(self.pool.clone(), packing.clone(), DEFAULT_BLOCK_ROWS, self.params.ratio)?;
+                // The existing prefix already satisfies the same ratio law. Replay
+                // immutable shared slices; publish only after the new append succeeds.
+                for run in &self.runs {
+                    let keys = unsafe { Buffer::shared_slice(run.keys.clone(), 0, run.key_count)? };
+                    let previous = unsafe { runs::SortedBatch::from_sorted(keys, run.key_count)? };
+                    unsafe { set.append_maintained(&previous)?; }
+                }
+                unsafe { set.append_maintained(&batch)?; }
+                backing.set = Some(set);
+                self.runs.clear();
+                *self.published.get_mut().expect("radix publication cache") = None;
+                return Ok(());
+            }
+        }
+        // Retain the original delta only for the optional acceleration cache;
+        // a merged run below can contain much more than just this publication.
+        let cache_delta = self.pair_cache.update_needed().then(|| batch.clone());
+        let mut merged = batch;
+        let mut keep = self.runs.len();
+        while keep > 0 && self.runs[keep - 1].item_count / self.params.ratio < merged.len() {
+            let previous = &self.runs[keep - 1];
+            // SAFETY: committed set keys are immutable sorted unique prefixes.
+            let owner = previous.keys.clone();
+            let keys = unsafe { Buffer::shared_slice(owner, 0, previous.key_count)? };
+            let previous = unsafe { runs::SortedBatch::from_sorted(keys, previous.key_count)? };
+            merged = self.set_ops().merge(&previous, &merged)?;
+            keep -= 1;
+        }
+        let segment = Arc::new(self.set_segment(merged)?);
+        if let Some(delta) = cache_delta {
+            // Take first: any failed submission invalidates the shadow index,
+            // while leaving the still-published immutable runs untouched.
+            let index = match self.pair_cache.index.take() {
+                Some(index) => Some(index),
+                None => {
+                    let index = self.pair_cache.begin(&self.pool)?;
+                    if let Some(index) = &index {
+                        for run in &self.runs { index.insert(run.keys.ptr().cast(), run.key_count)?; }
+                    }
+                    index
+                }
+            };
+            if let Some(index) = index {
+                index.insert(delta.buffer().ptr().cast(), delta.len())?;
+                if index.complete()? { self.pair_cache.index = Some(index); }
+            }
+        }
+        self.runs.truncate(keep);
+        self.runs.push(segment);
+        *self.published.get_mut().expect("radix publication cache") = None;
+        Ok(())
+    }
+
+    /// Replace a delta publication by adopting its immutable unique batch.
+    pub fn replace_sorted(&mut self, batch: runs::SortedBatch<W>) -> Result<()> {
+        crate::phases::admission_scope!(c"admit/replace", batch.len());
+        if !self.full_key_set {
+            return Err("set replacement requires a full-key set constructor".into());
+        }
+        if !self.pool.shares_memory(batch.buffer().pool()) {
+            return Err("set batch memory differs".into());
+        }
+        self.pair_cache = Default::default();
+        #[cfg(feature = "packed-radix")]
+        if let Some(backing) = self.packed.as_deref_mut() {
+            if let Some(packing) = backing.packing.get().filter(|_| batch.len() > SMALL_RUN_ROWS) {
+                if !offset_fits::<O>(batch.len()) { return Err("set exceeds offset carrier".into()); }
+                let mut set = PackedSet::new(self.pool.clone(), packing.clone(), DEFAULT_BLOCK_ROWS, self.params.ratio)?;
+                // The replacement set is empty; the input is already sorted unique.
+                unsafe { set.append_sorted(&batch)?; }
+                if std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some() {
+                    eprintln!("gpu_datalog_packed_replacement\trows={}\tplain_bytes={}\tstorage_bytes={}",
+                        batch.len(), batch.live_bytes(), set.allocated_bytes());
+                }
+                backing.set = Some(set);
+                self.runs.clear();
+                *self.published.get_mut().expect("radix publication cache") = None;
+                return Ok(());
+            }
+        }
+        let segment = if batch.is_empty() { None } else { Some(Arc::new(self.set_segment(batch)?)) };
+        #[cfg(feature = "packed-radix")]
+        if let Some(backing) = self.packed.as_deref_mut() { backing.set = None; }
+        self.runs.clear();
+        self.runs.extend(segment);
+        self.full_key_set = true;
+        *self.published.get_mut().expect("radix publication cache") = None;
+        Ok(())
+    }
+}
+
+static NEXT_SNAPSHOT: AtomicU64 = AtomicU64::new(1);
+
+/// Immutable descriptors over one publication's runs, retained independently
+/// of later publications and of the [`DeviceRadixRun`] itself. Its identity is
+/// unique per process; reads launch on a caller-named execution pool.
+pub struct RadixSnapshot<W: Word, O: OffsetWord, C> {
+    id: u64,
+    tables: SnapshotTables<W, O>,
+    items: u64,
+    full_key_set: bool,
+    active_bits: u32,
+    runs: Vec<Arc<Segment<W, O, C>>>,
+    #[cfg(feature = "packed-radix")]
+    packed: Option<Box<PackedPublication<W>>>,
+    module: radix_kernels::LoadedModule,
+    order: runs::run_kernels::LoadedModule,
+    pool: Arc<Pool>,
+    block_threads: u32,
+}
+
+/// Formal rule GPU-RadixLaneRead:
+/// Reads of an immutable radix snapshot launch on an execution pool that
+/// shares the snapshot's memory: the publication pool or one of its lanes.
+/// Shared memory is no happens-before proof: a lane reads only after fork
+/// readiness on the publication stream, its results are consumed after join
+/// readiness, and every retained owner outlives those stream users.
+fn check_execution(publication: &Pool, execution: &Pool) -> Result<()> {
+    if !execution.shares_memory(publication) {
+        return Err("radix reads must run on a pool sharing the snapshot's memory".into());
+    }
+    Ok(())
+}
+
+impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
+    /// The publication pool: the stream that uploaded these descriptors.
+    pub fn pool(&self) -> &Arc<Pool> {
+        &self.pool
+    }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    pub fn run_count(&self) -> usize {
+        self.tables.len()
+    }
+    pub fn item_count(&self) -> usize {
+        self.items as usize
+    }
+    pub fn active_bits(&self) -> u32 {
+        self.active_bits
+    }
+    /// Resident logical occurrence count (one `u64`), readable by count-gated
+    /// device consumers after publication readiness, without a host download.
+    pub fn count_ptr(&self) -> *const u64 {
+        self.tables.count()
+    }
+    /// Descriptor, column-table and count bytes uploaded for this snapshot.
+    pub fn descriptor_bytes(&self) -> usize {
+        self.tables.bytes()
+    }
+    fn descriptors_and_packed_bytes(&self) -> usize {
+        let bytes = self.descriptor_bytes();
+        #[cfg(feature = "packed-radix")]
+        let bytes = bytes + self.packed.as_deref().map_or(0, PackedPublication::bytes);
+        bytes
+    }
+    #[cfg(test)]
+    fn download_run_views(&self) -> Result<Vec<RadixRunView<W, O>>> {
+        let n = self.run_count();
+        let mut views = Vec::with_capacity(n);
+        if n != 0 {
+            unsafe {
+                cuda_core::simt::memory::memcpy_dtoh_async(views.as_mut_ptr(), self.tables.runs() as u64,
+                    n * size_of::<RadixRunView<W, O>>(), self.pool.stream().cu_stream())?;
+                self.pool.stream().synchronize()?;
+                views.set_len(n);
+            }
+        }
+        Ok(views)
+    }
+    /// Key-read ABI: keys, offsets and directories only.
+    pub fn keys_view(&self) -> RadixKeysView<W, O> {
+        RadixKeysView {
+            runs: self.tables.runs(),
+            run_count: self.run_count() as u32,
+            reserved: 0,
+            items: self.items,
+            snapshot: self.id,
+        }
+    }
+    /// Item-read ABI, separate from every key read.
+    pub fn items_view(&self) -> RadixItemsView {
+        RadixItemsView {
+            columns: self.tables.columns(),
+            column_count: C::COLUMNS as u32,
+            run_count: self.run_count() as u32,
+            snapshot: self.id,
+        }
+    }
+
+    fn shape(&self) -> LaunchConfig1D {
+        LaunchConfig1D::new(1, self.block_threads, 0)
+    }
+
+    fn config(&self, function: &cuda_core::CudaFunction, parts: usize) -> Result<LaunchConfig1D> {
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            function,
+            parts.div_ceil(self.block_threads as usize),
+            self.block_threads,
+            0,
+        )?;
+        Ok(LaunchConfig1D::new(grid, self.block_threads, 0))
+    }
+
+    fn check_probes(&self, pool: &Pool, probes: &Buffer<W>, count: usize) -> Result<()> {
+        check_execution(&self.pool, pool)?;
+        if !pool.shares_memory(probes.pool()) || count > probes.len() {
+            return Err("probe keys use another pool's memory or exceed their capacity".into());
+        }
+        Ok(())
+    }
+
+    /// Membership, count and logical merged-order range for each probe key,
+    /// on `pool`'s stream. Range positions are counts, not item addresses.
+    pub fn probe_keys(
+        &self,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<KeyProbe>> {
+        self.check_probes(pool, probes, count)?;
+        // SAFETY: one thread initializes each result.
+        let output = unsafe { Buffer::<KeyProbe>::uninitialized(pool.clone(), count)? };
+        if count != 0 {
+            let initial = self.module.prepare_probe_keys::<W, O>(self.shape())?;
+            let config = self.config(initial.function(), count)?;
+            self.module.probe_keys::<W, O>(
+                pool.stream(),
+                &self.module.prepare_probe_keys::<W, O>(config)?,
+                self.keys_view(),
+                probes.ptr(),
+                count as u64,
+                output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+
+    /// Per-run match cursors for each probe, `[probe * run_count + run]`, on
+    /// `pool`'s stream. The result retains this snapshot as its witness.
+    pub fn probe_matches(
+        self: &Arc<Self>,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<RadixMatches<W, O, C>> {
+        self.check_probes(pool, probes, count)?;
+        let len = count
+            .checked_mul(self.run_count())
+            .ok_or("probe match count overflow")?;
+        // SAFETY: one thread initializes every run cursor of its probe.
+        let matches = unsafe { Buffer::<RadixMatch>::uninitialized(pool.clone(), len)? };
+        if len != 0 {
+            let initial = self.module.prepare_probe_matches::<W, O>(self.shape())?;
+            let config = self.config(initial.function(), count)?;
+            self.module.probe_matches::<W, O>(
+                pool.stream(),
+                &self.module.prepare_probe_matches::<W, O>(config)?,
+                self.keys_view(),
+                probes.ptr(),
+                count as u64,
+                matches.ptr(),
+            )?;
+        }
+        Ok(RadixMatches {
+            matches,
+            probes: count,
+            snapshot: self.clone(),
+        })
+    }
+
+    /// Groups and occurrences with keys in each inclusive interval `[low, high]`.
+    pub fn probe_intervals(
+        &self,
+        pool: &Arc<Pool>,
+        low: &Buffer<W>,
+        high: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<IntervalProbe>> {
+        self.check_probes(pool, low, count)?;
+        self.check_probes(pool, high, count)?;
+        // SAFETY: one thread initializes each result.
+        let output = unsafe { Buffer::<IntervalProbe>::uninitialized(pool.clone(), count)? };
+        if count != 0 {
+            let initial = self.module.prepare_probe_intervals::<W, O>(self.shape())?;
+            let config = self.config(initial.function(), count)?;
+            self.module.probe_intervals::<W, O>(
+                pool.stream(),
+                &self.module.prepare_probe_intervals::<W, O>(config)?,
+                self.keys_view(),
+                low.ptr(),
+                high.ptr(),
+                count as u64,
+                output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+}
+
+/// A retained match set: per-run cursors of a batch of probes and the
+/// snapshot they address. It survives later publications and release of the
+/// run and layout, and is consumed only where its owner forces it.
+pub struct RadixMatches<W: Word, O: OffsetWord, C> {
+    matches: Buffer<RadixMatch>,
+    probes: usize,
+    snapshot: Arc<RadixSnapshot<W, O, C>>,
+}
+
+impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixMatches<W, O, C> {
+    pub fn snapshot_id(&self) -> u64 {
+        self.snapshot.id
+    }
+    pub fn probe_count(&self) -> usize {
+        self.probes
+    }
+    pub fn run_count(&self) -> usize {
+        self.snapshot.run_count()
+    }
+    /// Cursors `[probe * run_count + run]`, on the reading pool's memory.
+    pub fn cursors(&self) -> &Buffer<RadixMatch> {
+        &self.matches
+    }
+    /// Explicit diagnostic download of every cursor.
+    pub fn to_host(&self) -> Result<Vec<RadixMatch>> {
+        if self.matches.is_empty() {
+            Ok(Vec::new())
+        } else {
+            self.matches.to_host()
+        }
+    }
+
+    /// Expand every cursor's occurrences of one demanded column on `pool`'s
+    /// stream: cursor `i` writes its items, in stable run order, from
+    /// `bases[i]` of a `total`-entry output. Writes beyond `total` are dropped.
+    /// The column must belong to this match set's snapshot.
+    pub fn gather<T: ItemLane>(
+        &self,
+        pool: &Arc<Pool>,
+        column: &ItemColumn<T>,
+        bases: &Buffer<u64>,
+        total: usize,
+    ) -> Result<Buffer<T>> {
+        check_execution(&self.snapshot.pool, pool)?;
+        if column.view.snapshot != self.snapshot.id {
+            return Err("item column and match cursors belong to different snapshots".into());
+        }
+        let cursors = self.matches.len();
+        if !pool.shares_memory(bases.pool()) || bases.len() < cursors {
+            return Err("gather bases use another pool's memory or miss cursors".into());
+        }
+        // SAFETY: callers supply disjoint bases covering `total`; unwritten
+        // positions are unspecified, never read past the output.
+        let output = unsafe { Buffer::<T>::uninitialized(pool.clone(), total)? };
+        if cursors != 0 && total != 0 {
+            let module = &self.snapshot.module;
+            let initial = module.prepare_gather_matches::<T>(self.snapshot.shape())?;
+            let config = self.snapshot.config(initial.function(), cursors)?;
+            module.gather_matches::<T>(
+                pool.stream(),
+                &module.prepare_gather_matches::<T>(config)?,
+                column.view,
+                self.matches.ptr(),
+                cursors as u64,
+                bases.ptr(),
+                total as u64,
+                output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+}
+
+/// A typed, narrow item-column handle; `T` equals the column's lane type.
+/// It borrows the snapshot's addresses: retain the layout or match set owner.
+#[derive(Clone, Copy, Debug)]
+pub struct ItemColumn<T> {
+    pub view: RadixItemColumn,
+    marker: PhantomData<fn() -> T>,
+}
+
+/// Device field ABI of a [`RadixLayout`]: key reads plus the key packing's
+/// field descriptors and the resident count. Contains no item pointers.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RadixLayoutView<W: Word, O: OffsetWord> {
+    pub keys: RadixKeysView<W, O>,
+    /// Most-significant-first key fields of `K`.
+    pub fields: *const PackedField,
+    pub field_count: u32,
+    /// Significant key bits of the packing (at most `W::BITS`).
+    pub bits: u32,
+    /// Resident logical occurrence count.
+    pub count: *const u64,
+}
+// SAFETY: this C-layout descriptor contains only device pointers and integers.
+unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixLayoutView<W, O> {}
+
+#[doc(hidden)]
+pub struct RadixPublication<W: Word, O: OffsetWord, C> {
+    snapshot: Arc<RadixSnapshot<W, O, C>>,
+    // Constant per packing: a republished layout shares its predecessor's.
+    fields: Arc<Buffer<PackedField>>,
+    packing: Packing,
+}
+
+/// Storage selected by the recorded key carrier, independently of its schema.
+/// Typed words keep the grouped snapshot ABI; runtime-sized rows have a
+/// resident full-row set publication with implicit unit items.
+pub trait LayoutCarrier<O: OffsetWord, C: DeviceItemColumns> {
+    type Publication;
+}
+
+impl<W: Word, O: OffsetWord, C: DeviceItemColumns> LayoutCarrier<O, C> for W {
+    type Publication = RadixPublication<W, O, C>;
+}
+
+/// An encoded heading whose field schema is supplied by the upstream record.
+/// Unlike `ScalarTuple`, its arity and width are not Rust type constants.
+pub struct EncodedRow;
+
+/// Runtime-sized row-major u64 storage, least-significant lane first.
+/// This is not a typed `Word` or its most-significant-first packing ABI.
+pub struct PackedRow;
+
+#[doc(hidden)]
+pub struct PackedRowPublication {
+    keys: Arc<Buffer<u64>>,
+    metadata: Arc<Buffer<OutputCount>>,
+    capacity: usize,
+    lanes: usize,
+    key_bits: u32,
+    params: RadixRunParams,
+}
+
+impl LayoutCarrier<u64, ()> for PackedRow {
+    type Publication = PackedRowPublication;
+}
+
+/// Formal rule GPU-RadixLayout:
+/// An immutable relational publication selected by its ordinary key carrier.
+/// Typed `Word` layouts retain the checked key/value schemas, grouped
+/// snapshot and field descriptors. `PackedRow` layouts retain runtime-sized
+/// encoded full-row keys with one implicit unit item per distinct key and
+/// a resident count; allocation capacity never claims a live row count.
+pub struct RadixLayout<K, V, W: LayoutCarrier<O, C>, O: OffsetWord, C: DeviceItemColumns> {
+    publication: Arc<W::Publication>,
+    marker: PhantomData<fn() -> (K, V)>,
+}
+
+impl<K, V, W: LayoutCarrier<O, C>, O: OffsetWord, C: DeviceItemColumns> Clone
+    for RadixLayout<K, V, W, O, C>
+{
+    fn clone(&self) -> Self {
+        Self {
+            publication: self.publication.clone(),
+            marker: PhantomData,
+        }
+    }
+}
+
+thread_local! {
+    // A lane's pool identity includes its stream: scratch is never borrowed
+    // across unordered streams, and results never retain any of these buffers.
+    static SET_SCRATCH: std::cell::RefCell<Vec<SetScratch>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Release this thread's reusable set-building scratch, not published results.
+/// Frees are ordered after the last use on each retained pool's stream.
+pub fn release_set_scratch() {
+    SET_SCRATCH.with(|cache| cache.borrow_mut().clear());
+    runs::release_radix_controls();
+}
+
+// As in Sequence's scan cache, the final Arc keeps RCCL's borrowed resource
+// and stream stable. Borrowing fields are dropped before that owner; none of
+// their extended references escape this private cache.
+struct SetScratch {
+    compact: Option<
+        rccl_cub::thrust_integration::CompactionWorkspace<
+            'static,
+            &'static gpu_device_columns::MemoryResource,
+        >,
+    >,
+    compact_rows: usize,
+    count: Native<u64>,
+    scalar: Option<runs::KeySortScratch>,
+    wide: Option<runs::RowSortScratch>,
+    cub: rccl_cub::cuda::Program<'static>,
+    module: Option<runs::run_kernels::LoadedModule>,
+    pool: Arc<Pool>,
+}
+
+impl SetScratch {
+    fn new(pool: &Arc<Pool>) -> Result<Self> {
+        let owner = pool.clone();
+        // SAFETY: owner is retained in the last field, including on failure.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&owner) };
+        Ok(Self {
+            compact: None,
+            compact_rows: 0,
+            count: Native::new(pool, 1)?,
+            scalar: None,
+            wide: None,
+            cub: rccl_cub::cuda::Program::load(retained.context())?,
+            module: None,
+            pool: owner,
+        })
+    }
+
+    fn prepare(&mut self, rows: usize, lanes: usize) -> Result<()> {
+        // SAFETY: the stable-owner/drop-order invariant in new() still holds.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&self.pool) };
+        let launch = self.cub.on(retained.stream())?;
+        if self.compact_rows < rows {
+            drop(self.compact.take());
+            self.compact_rows = 0;
+            self.compact = Some(rccl_cub::thrust_integration::compaction_workspace_in(
+                retained.resource(),
+                &launch,
+                rows,
+            )?);
+            self.compact_rows = rows;
+        }
+        if lanes == 1 {
+            if self
+                .scalar
+                .as_ref()
+                .is_none_or(|scratch| scratch.capacity() < rows)
+            {
+                drop(self.scalar.take());
+                self.scalar = Some(runs::KeySortScratch::new(&self.pool, &launch, rows)?);
+            }
+        } else {
+            if self.module.is_none() {
+                self.module = Some(unsafe { runs::run_kernels::load(retained.context())? });
+            }
+            if self
+                .wide
+                .as_ref()
+                .is_none_or(|scratch| scratch.capacity() < rows)
+            {
+                drop(self.wide.take());
+                self.wide = Some(runs::RowSortScratch::new(&self.pool, &launch, rows)?);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod set_scratch_tests {
+    use super::*;
+
+    #[test]
+    fn set_workspace_reuses_capacity_and_releases_only_scratch() -> Result<()> {
+        release_set_scratch();
+        let pool = Pool::new(0, 0, 0)?;
+        let mut scratch = SetScratch::new(&pool)?;
+        scratch.prepare(4097, 1)?;
+        scratch.prepare(4097, 3)?;
+        let count = scratch.count.get().cu_deviceptr();
+        let compact_bytes = scratch.compact.as_ref().unwrap().allocation_bytes();
+        let launch = scratch.cub.on(pool.stream())?;
+        let scalar_input = Buffer::<u64>::zeroed(pool.clone(), 4097)?;
+        let wide_input = Buffer::<u64>::zeroed(pool.clone(), 4097 * 3)?;
+        let scalar_pointer =
+            scratch
+                .scalar
+                .as_mut()
+                .unwrap()
+                .sort(&pool, &launch, scalar_input.ptr(), 4097, 64)?;
+        let wide_pointer = scratch.wide.as_mut().unwrap().sort(
+            &pool,
+            scratch.module.as_ref().unwrap(),
+            &launch,
+            wide_input.ptr(),
+            4097,
+            129,
+            3,
+            false,
+            256,
+        )?;
+        drop(launch);
+        for rows in [17, 1, 4097] {
+            scratch.prepare(rows, 1)?;
+            scratch.prepare(rows, 3)?;
+            assert_eq!(scratch.count.get().cu_deviceptr(), count);
+            assert_eq!(scratch.compact_rows, 4097);
+            assert_eq!(
+                scratch.compact.as_ref().unwrap().allocation_bytes(),
+                compact_bytes
+            );
+            assert_eq!(scratch.scalar.as_ref().unwrap().capacity(), 4097);
+            assert_eq!(scratch.wide.as_ref().unwrap().capacity(), 4097);
+        }
+        let launch = scratch.cub.on(pool.stream())?;
+        assert_eq!(
+            scratch
+                .scalar
+                .as_mut()
+                .unwrap()
+                .sort(&pool, &launch, scalar_input.ptr(), 4097, 64)?,
+            scalar_pointer
+        );
+        assert_eq!(
+            scratch.wide.as_mut().unwrap().sort(
+                &pool,
+                scratch.module.as_ref().unwrap(),
+                &launch,
+                wide_input.ptr(),
+                4097,
+                129,
+                3,
+                false,
+                256,
+            )?,
+            wide_pointer
+        );
+        Ok(())
+    }
+}
+
+impl RadixLayout<EncodedRow, (), PackedRow, u64, ()> {
+    pub fn key_lanes(bits: u32) -> Result<usize> {
+        Ok(usize::try_from(bits.div_ceil(64).max(1))?)
+    }
+
+    fn check_set(
+        pool: &Arc<Pool>,
+        input: &Buffer<u64>,
+        rows: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<usize> {
+        params.validate()?;
+        if params.radix_bits != 0 {
+            return Err("packed row sets require the recorded no-directory policy".into());
+        }
+        if rows > u32::MAX as usize {
+            return Err("packed row set exceeds the u32 build domain".into());
+        }
+        let lanes = Self::key_lanes(key_bits)?;
+        if !pool.shares_memory(input.pool()) || rows > input.len() / lanes {
+            return Err("packed row input uses incompatible memory or exceeds capacity".into());
+        }
+        Ok(lanes)
+    }
+
+    /// Sort and deduplicate complete encoded rows without downloading a count.
+    /// Items and offsets are implicit units: row `i` has item interval `[i,i+1)`.
+    /// Scratch grows per thread/pool and is reused on that pool's stream.
+    /// Each publication separately owns its keys and count, so later builds
+    /// cannot overwrite retained results. [`release_set_scratch`] releases
+    /// cached workspaces at query teardown without a host synchronization.
+    ///
+    /// # Safety
+    /// The first `rows * key_lanes(key_bits)` words must be initialized and
+    /// ready on `pool`'s stream, with zero padding above `key_bits`. Low-first
+    /// lanes encode the entire heading injectively under one shared codec.
+    /// Empty headings use one zero lane. The input must not be mutated until
+    /// this stream finishes reading it.
+    pub unsafe fn build_set(
+        pool: &Arc<Pool>,
+        input: &Buffer<u64>,
+        rows: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<Self> {
+        let lanes = Self::check_set(pool, input, rows, key_bits, params)?;
+        crate::stats::record_sort(crate::stats::SortKind::Canonical, rows, key_bits, lanes != 1);
+        // Empty headings need at most one physical key, regardless of multiplicity.
+        let capacity = if key_bits == 0 { rows.min(1) } else { rows };
+        let keys =
+            Arc::new(unsafe { Buffer::<u64>::uninitialized(pool.clone(), capacity * lanes)? });
+        let metadata = Arc::new(if key_bits == 0 {
+            Buffer::from_host_async(
+                pool.clone(),
+                &[OutputCount {
+                    rows: capacity as u64,
+                    error: 0,
+                    padding: 0,
+                }],
+            )?
+        } else {
+            Buffer::<OutputCount>::zeroed(pool.clone(), 1)?
+        });
+        if rows != 0 {
+            if key_bits == 0 {
+                // A valid empty heading has exactly one possible encoded row.
+                unsafe {
+                    cuda_core::simt::memory::memset_d8_async(
+                        keys.cu_deviceptr(),
+                        0,
+                        8,
+                        pool.stream().cu_stream(),
+                    )?;
+                }
+            } else {
+                pool.context().bind_to_thread()?;
+                SET_SCRATCH.with(|cache| -> Result<()> {
+                    let mut cache = cache.borrow_mut();
+                    let index = match cache
+                        .iter()
+                        .position(|cached| Arc::ptr_eq(&cached.pool, pool))
+                    {
+                        Some(index) => index,
+                        None => {
+                            cache.push(SetScratch::new(pool)?);
+                            cache.len() - 1
+                        }
+                    };
+                    let scratch = &mut cache[index];
+                    scratch.prepare(rows, lanes)?;
+                    let launch = scratch.cub.on(pool.stream())?;
+                    let count = &mut scratch.count;
+                    let compact = scratch.compact.as_mut().unwrap();
+                    if lanes == 1 {
+                        let sorted = scratch.scalar.as_mut().unwrap().sort(
+                            pool,
+                            &launch,
+                            input.ptr(),
+                            rows,
+                            key_bits,
+                        )?;
+                        rccl_cub::thrust_integration::device_unique_copy_by(
+                            &launch,
+                            DeviceSliceRead::new(sorted),
+                            DeviceSliceWrite::new(keys.ptr()),
+                            count.get_mut(),
+                            |a: u64, b: u64| a == b,
+                            rows,
+                            compact,
+                        )?;
+                    } else {
+                        let order = scratch.wide.as_mut().unwrap().sort(
+                            pool,
+                            scratch.module.as_ref().unwrap(),
+                            &launch,
+                            input.ptr(),
+                            rows,
+                            key_bits,
+                            lanes as u32,
+                            false,
+                            params.block_threads,
+                        )?;
+                        let source = input.ptr() as *const u64;
+                        let output = keys.ptr();
+                        rccl_cub::thrust_integration::device_unique_copy_by(
+                            &launch,
+                            DeviceSliceRead::new(order),
+                            rccl_cub::DeviceIndexedWrite::new(move |index, row: u32| unsafe {
+                                for lane in 0..lanes {
+                                    *output.add(index * lanes + lane) =
+                                        *source.add(row as usize * lanes + lane);
+                                }
+                            }),
+                            count.get_mut(),
+                            move |a: u32, b: u32| unsafe {
+                                (0..lanes).all(|lane| {
+                                    *source.add(a as usize * lanes + lane)
+                                        == *source.add(b as usize * lanes + lane)
+                                })
+                            },
+                            rows,
+                            compact,
+                        )?;
+                    }
+                    unsafe {
+                        // OutputCount's first word is length; errors/padding stay zero.
+                        cuda_core::simt::memory::memcpy_dtod_async(
+                            metadata.cu_deviceptr(),
+                            count.get().cu_deviceptr(),
+                            8,
+                            pool.stream().cu_stream(),
+                        )?;
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+        Ok(Self {
+            publication: Arc::new(PackedRowPublication {
+                keys,
+                metadata,
+                capacity,
+                lanes,
+                key_bits,
+                params,
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    /// Adopt an owned, certified sorted unique prefix without sorting or copying.
+    ///
+    /// # Safety
+    /// The first `rows` keys must obey `build_set`'s encoding/readiness contract,
+    /// be strictly increasing in complete packed-key order, and remain immutable
+    /// until all publication clones and their stream readers have been released.
+    pub unsafe fn adopt_sorted_unique(
+        pool: &Arc<Pool>,
+        keys: Arc<Buffer<u64>>,
+        rows: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<Self> {
+        Self::check_set(pool, &keys, rows, key_bits, params)?;
+        if key_bits == 0 && rows > 1 {
+            return Err("an empty heading has at most one distinct row".into());
+        }
+        let metadata = Arc::new(Buffer::from_host_async(
+            pool.clone(),
+            &[OutputCount {
+                rows: rows as u64,
+                error: 0,
+                padding: 0,
+            }],
+        )?);
+        unsafe { Self::adopt_sorted_set(pool, keys, metadata, rows, key_bits, params) }
+    }
+
+    /// Adopt a resident-count certified set, retaining both immutable owners.
+    /// No host read is needed, including when the exact count is unknown here.
+    ///
+    /// # Safety
+    /// `metadata[0]` must be ready on `pool`'s stream, have no error and a length
+    /// at most `capacity`. Exactly that prefix of `keys` must satisfy
+    /// `adopt_sorted_unique`'s sortedness, uniqueness and lifetime contract.
+    /// Both allocations must remain immutable through every reader.
+    pub unsafe fn adopt_sorted_set(
+        pool: &Arc<Pool>,
+        keys: Arc<Buffer<u64>>,
+        metadata: Arc<Buffer<OutputCount>>,
+        capacity: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<Self> {
+        let lanes = Self::check_set(pool, &keys, capacity, key_bits, params)?;
+        if metadata.len() != 1 || !pool.shares_memory(metadata.pool()) {
+            return Err("packed row metadata must be one compatible resident count".into());
+        }
+        Ok(Self {
+            publication: Arc::new(PackedRowPublication {
+                keys,
+                metadata,
+                capacity,
+                lanes,
+                key_bits,
+                params,
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    pub fn keys(&self) -> &Arc<Buffer<u64>> {
+        &self.publication.keys
+    }
+    pub fn metadata(&self) -> &Arc<Buffer<OutputCount>> {
+        &self.publication.metadata
+    }
+    pub fn count_ptr(&self) -> *const u64 {
+        self.metadata().ptr().cast()
+    }
+    pub fn capacity(&self) -> usize {
+        self.publication.capacity
+    }
+    pub fn lanes(&self) -> usize {
+        self.publication.lanes
+    }
+    pub fn key_bits(&self) -> u32 {
+        self.publication.key_bits
+    }
+    pub fn params(&self) -> RadixRunParams {
+        self.publication.params
+    }
+    pub fn pool(&self) -> &Arc<Pool> {
+        self.keys().pool()
+    }
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> {
+        self.publication.clone()
+    }
+    /// Explicit diagnostic synchronization, never part of construction/adoption.
+    pub fn logical_count(&self) -> Result<usize> {
+        let count = self.metadata().to_host()?[0];
+        if count.error != 0 || count.rows > self.capacity() as u64 {
+            return Err("invalid packed row resident count".into());
+        }
+        Ok(usize::try_from(count.rows)?)
+    }
+}
+
+impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns>
+    RadixLayout<K, V, W, O, C>
+{
+    /// The key packing of `K`'s columns in recorded order.
+    pub fn derive_packing() -> Result<Packing> {
+        Packing::build(
+            K::COLUMNS
+                .iter()
+                .map(|column| (column.bits(), column.is_signed())),
+        )
+    }
+
+    /// Construct key fields from loaded domain widths, not native type widths.
+    /// The scalar tuple and packed word are carrier upper bounds.
+    pub fn derive_packing_with_fields(fields: &[(u32, bool)]) -> Result<Packing> {
+        let packing = Packing::with_fields(fields)?;
+        Self::check_schema(&packing)?;
+        Ok(packing)
+    }
+
+    /// Check runtime key widths against their carrier schema and GPU policy.
+    /// Payload lanes retain their independently checked native widths.
+    pub fn check_schema(packing: &Packing) -> Result<()> {
+        if packing.len() != K::COLUMNS.len()
+            || !packing
+                .packed_fields()
+                .zip(K::COLUMNS)
+                .all(|(field, column)| {
+                    field.bits <= 32
+                        && field.bits <= column.bits()
+                        && (field.signed != 0) == column.is_signed()
+                })
+        {
+            return Err("radix key fields must match schema arity/signedness and fit their scalar carrier and 32-bit code limit".into());
+        }
+        if packing.bits() > W::BITS {
+            return Err("radix layout key packing exceeds the key word".into());
+        }
+        let mut lanes = Vec::with_capacity(C::COLUMNS);
+        C::lanes(&mut lanes);
+        if lanes.len() != V::COLUMNS.len()
+            || !lanes
+                .iter()
+                .zip(V::COLUMNS)
+                .all(|(lane, &column)| lane.holds(column))
+        {
+            return Err("radix layout item lanes do not hold its value tuple schema".into());
+        }
+        Ok(())
+    }
+
+    /// Publish `run`'s current snapshot as a layout with key `packing`.
+    pub fn publish(run: &DeviceRadixRun<W, O, C>, packing: Packing) -> Result<Self> {
+        Self::check_schema(&packing)?;
+        #[cfg(feature = "packed-radix")]
+        run.bind_packing(&packing)?;
+        let fields = packing.packed_fields().collect::<Vec<_>>();
+        Ok(Self {
+            publication: Arc::new(RadixPublication {
+                snapshot: run.snapshot()?,
+                fields: Arc::new(Buffer::from_host_async(run.pool().clone(), &fields)?),
+                packing,
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    /// This layout's successor over `run`'s current publication. Unchanged
+    /// runs (the same cached snapshot) return this layout itself with no
+    /// upload; otherwise the successor shares this layout's field descriptors.
+    pub fn republish(&self, run: &DeviceRadixRun<W, O, C>) -> Result<Self> {
+        check_execution(&self.publication.snapshot.pool, run.pool())?;
+        #[cfg(feature = "packed-radix")]
+        run.bind_packing(self.packing())?;
+        let snapshot = run.snapshot()?;
+        if Arc::ptr_eq(&snapshot, &self.publication.snapshot) {
+            return Ok(self.clone());
+        }
+        Ok(Self {
+            publication: Arc::new(RadixPublication {
+                snapshot,
+                fields: self.publication.fields.clone(),
+                packing: self.publication.packing.clone(),
+            }),
+            marker: PhantomData,
+        })
+    }
+}
+
+impl<K, V, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns> RadixLayout<K, V, W, O, C> {
+
+    pub fn snapshot(&self) -> &Arc<RadixSnapshot<W, O, C>> {
+        &self.publication.snapshot
+    }
+    pub fn snapshot_id(&self) -> u64 {
+        self.publication.snapshot.id
+    }
+    pub fn pool(&self) -> &Arc<Pool> {
+        &self.publication.snapshot.pool
+    }
+    pub fn packing(&self) -> &Packing {
+        &self.publication.packing
+    }
+    pub fn run_count(&self) -> usize {
+        self.publication.snapshot.run_count()
+    }
+    /// Occurrences, known on the host from the build's exact counts.
+    pub fn len(&self) -> usize {
+        self.publication.snapshot.item_count()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Resident logical occurrence count, without a host download.
+    pub fn count_ptr(&self) -> *const u64 {
+        self.publication.snapshot.count_ptr()
+    }
+    /// Explicitly synchronize and download the resident count.
+    pub fn logical_count(&self) -> Result<usize> {
+        let count = match &self.publication.snapshot.tables {
+            SnapshotTables::Separate { count, .. } => count.to_host()?[0],
+            #[cfg(feature = "packed-radix")]
+            SnapshotTables::FullKey { words, .. } => words.to_host_prefix(1)?[0],
+        };
+        Ok(usize::try_from(count)?)
+    }
+    /// Field-descriptor buffer address, shared by republished successors.
+    pub fn fields_ptr(&self) -> *const PackedField {
+        self.publication.fields.ptr()
+    }
+    /// Retain runs, descriptors and fields through every stream user.
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> {
+        self.publication.clone()
+    }
+
+    pub fn view(&self) -> RadixLayoutView<W, O> {
+        let publication = &self.publication;
+        RadixLayoutView {
+            keys: publication.snapshot.keys_view(),
+            fields: publication.fields.ptr(),
+            field_count: publication.fields.len() as u32,
+            bits: publication.packing.bits(),
+            count: publication.snapshot.count_ptr(),
+        }
+    }
+
+    /// Pool qualification checks memory compatibility, not stream readiness.
+    pub fn view_on(&self, pool: &Arc<Pool>) -> Result<RadixLayoutView<W, O>> {
+        check_execution(self.pool(), pool)?;
+        Ok(self.view())
+    }
+
+    /// Narrow access to value field `column`, whose lane type must be `T`.
+    pub fn item_column<T: ItemLane>(&self, column: usize) -> Result<ItemColumn<T>> {
+        let mut lanes = Vec::with_capacity(C::COLUMNS);
+        C::lanes(&mut lanes);
+        match lanes.get(column) {
+            Some(&kind) if kind == T::KIND => {}
+            Some(_) => {
+                return Err("item column lane differs from the requested element type".into())
+            }
+            None => return Err("item column outside the value tuple".into()),
+        }
+        let snapshot = &self.publication.snapshot;
+        Ok(ItemColumn {
+            view: RadixItemColumn {
+                columns: snapshot.tables.columns(),
+                snapshot: snapshot.id,
+                column: column as u32,
+                column_count: C::COLUMNS as u32,
+                run_count: snapshot.run_count() as u32,
+                reserved: 0,
+            },
+            marker: PhantomData,
+        })
+    }
+
+    /// Inclusive packed-key interval of a key-prefix (all keys when empty).
+    pub fn prefix_interval(&self, prefix: &[i128]) -> Result<RangeInclusive<W>> {
+        self.publication.packing.prefix_range(prefix)
+    }
+
+    pub fn probe_keys(
+        &self,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<KeyProbe>> {
+        self.publication.snapshot.probe_keys(pool, probes, count)
+    }
+    pub fn probe_matches(
+        &self,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<RadixMatches<W, O, C>> {
+        self.publication.snapshot.probe_matches(pool, probes, count)
+    }
+    pub fn probe_intervals(
+        &self,
+        pool: &Arc<Pool>,
+        low: &Buffer<W>,
+        high: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<IntervalProbe>> {
+        self.publication
+            .snapshot
+            .probe_intervals(pool, low, high, count)
+    }
+
+    /// Every item column's address table (position reads by run).
+    pub fn items_view(&self) -> RadixItemsView {
+        self.publication.snapshot.items_view()
+    }
+}
+
+impl<K: ScalarTuple, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
+    /// Construct an empty set with the caller's recorded sort window.
+    pub fn empty(pool: Arc<Pool>, packing: Packing, params: RadixRunParams, active_bits: u32) -> Result<Self> {
+        if active_bits < packing.bits() {
+            return Err("set active bits do not cover its packing".into());
+        }
+        Self::publish(&DeviceRadixRun::new_set(pool, params, active_bits)?, packing)
+    }
+
+    /// Adopt a sorted unique full-key batch without re-sorting or group readback.
+    pub fn from_sorted(
+        pool: Arc<Pool>, packing: Packing, params: RadixRunParams, batch: runs::SortedBatch<W>,
+        active_bits: u32,
+    ) -> Result<Self> {
+        if active_bits < packing.bits() {
+            return Err("set active bits do not cover its packing".into());
+        }
+        let mut state = DeviceRadixRun::new_set(pool, params, active_bits)?;
+        #[cfg(feature = "packed-radix")]
+        state.bind_packing(&packing)?;
+        state.replace_sorted(batch)?;
+        Self::publish(&state, packing)
+    }
+}
+
+impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
+    pub fn validate(&self, columns: &[Column]) -> Result<()> {
+        self.require_full_key_set()?;
+        if columns.len() == self.packing().len()
+            && self.packing().packed_fields().zip(columns).all(|(field, column)| {
+                field.bits <= 32 && field.bits <= column.bits()
+                    && (field.signed != 0) == column.is_signed()
+            })
+        {
+            Ok(())
+        } else {
+            Err("radix layout differs from recorded physical columns".into())
+        }
+    }
+
+    /// Replace a delta, retaining its recorded active window, kernels and field
+    /// descriptors. An unchanged immutable batch returns this publication with no uploads.
+    pub fn with_sorted(&self, batch: runs::SortedBatch<W>, params: RadixRunParams) -> Result<Self> {
+        params.validate()?;
+        if !self.pool().shares_memory(batch.buffer().pool()) {
+            return Err("set batch memory differs".into());
+        }
+        let snapshot = self.snapshot();
+        let unchanged = snapshot.full_key_set && match snapshot.runs.as_slice() {
+            [] => batch.is_empty(),
+            [run] => run.keys.ptr() == batch.buffer().ptr()
+                && run.key_count == batch.len() && run.radix_bits == params.radix_bits,
+            _ => false,
+        };
+        #[cfg(feature = "packed-radix")]
+        let unchanged = unchanged && snapshot.packed.is_none();
+        if unchanged {
+            return Ok(self.clone());
+        }
+        let mut state = DeviceRadixRun {
+            pool: self.pool().clone(),
+            params,
+            runs: Vec::new(),
+            #[cfg(feature = "packed-radix")]
+            // A replacement delta already owns sorted words and cannot accumulate
+            // future admissions. Share those words; only maintained runs amortize
+            // sealing and its stream barrier over later fixpoint iterations.
+            packed: None,
+            full_key_set: true,
+            pair_cache: Default::default(),
+            active_bits: snapshot.active_bits,
+            published: Mutex::new(None),
+            kernels: ItemKernels {
+                pool: self.pool().clone(),
+                module: snapshot.module.clone(),
+                block_threads: params.block_threads,
+            },
+            order: snapshot.order.clone(),
+        };
+        state.replace_sorted(batch)?;
+        Ok(Self {
+            publication: Arc::new(RadixPublication {
+                snapshot: state.snapshot()?,
+                fields: self.publication.fields.clone(),
+                packing: self.publication.packing.clone(),
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    fn require_full_key_set(&self) -> Result<()> {
+        if self.snapshot().full_key_set {
+            Ok(())
+        } else {
+            Err("full-key set reader cannot consume an occurrence publication".into())
+        }
+    }
+
+    /// Explicit diagnostic download, sorted across all retained runs.
+    pub fn to_host(&self) -> Result<Vec<W>> {
+        let mut keys = Vec::with_capacity(self.len());
+        #[cfg(feature = "packed-radix")]
+        if let Some(packed) = &self.snapshot().packed {
+            for run in &packed.runs { keys.extend(run.unpack()?.to_host()?); }
+        }
+        for run in &self.snapshot().runs {
+            keys.extend(run.keys.to_host_prefix(run.key_count)?);
+        }
+        keys.sort_unstable();
+        Ok(keys)
+    }
+
+    /// Explicit output reconstruction, never part of publication or admission.
+    // DECODE ?: radix to_rows unpacks host fields for diagnostics and intermediate fallback; caller publication evidence is required.
+    pub fn to_rows(&self) -> Result<Vec<Vec<i128>>> {
+        self.to_host()?.into_iter().map(|key| self.packing().unpack(key)).collect()
+    }
+
+    /// Final answers in key order: every retained run is downloaded once and
+    /// `row` writes each key's host row straight into the result.
+    pub fn publish_rows<T: Send>(
+        &self, staging: &mut crate::OutputStaging,
+        row: impl Fn(crate::PackedRow<'_, W>) -> T + Sync,
+    ) -> Result<Vec<T>> {
+        let snapshot = self.snapshot();
+        let mut sizes = Vec::with_capacity(snapshot.runs.len());
+        #[cfg(feature = "packed-radix")]
+        let packed = snapshot.packed.as_ref().map_or(&[][..], |packed| &packed.runs);
+        #[cfg(feature = "packed-radix")]
+        sizes.extend(packed.iter().map(|run| run.len()));
+        let plain = sizes.len();
+        sizes.extend(snapshot.runs.iter().map(|run| run.key_count));
+        crate::publish::rows(staging, self.packing(), &sizes, |index| {
+            #[cfg(feature = "packed-radix")]
+            if let Some(run) = packed.get(index) {
+                return Ok(Arc::new(run.unpack()?));
+            }
+            Ok(snapshot.runs[index - plain].keys.clone())
+        }, &row)
+    }
+
+    pub fn live_bytes(&self) -> usize {
+        self.snapshot().runs.iter().map(|run| {
+            run.key_count * size_of::<W>()
+                + (run.offsets.as_ref().map_or(0, |_| run.key_count + 1)
+                    + run.directory.len()) * size_of::<O>()
+        }).sum::<usize>() + self.snapshot().descriptors_and_packed_bytes() + self.publication.fields.len() * size_of::<PackedField>()
+    }
+
+    /// Includes metadata. Aliased publications must not be summed as disjoint owners.
+    pub fn allocated_bytes(&self) -> usize {
+        let snapshot = self.snapshot();
+        snapshot.runs.iter().map(|run| {
+            run.keys.allocated_bytes() + run.offsets.as_ref().map_or(0, Buffer::allocated_bytes)
+                + run.directory.allocated_bytes()
+        }).sum::<usize>() + snapshot.descriptors_and_packed_bytes()
+            + self.publication.fields.allocated_bytes()
+    }
+
+    /// Device allocation identities for the generated full-state ownership census.
+    /// Called only at fixpoint completion when memory tracing is enabled.
+    pub fn trace_full_state(&self, relation: &str, layout: usize, owner: usize) {
+        let snapshot = self.snapshot();
+        eprintln!(
+            "gpu_datalog_full_state\trelation={relation}\tlayout={layout}\towner={owner}\tpublication={:p}\tdescriptors={}\tcolumns={}\tcount={}\tfields={}",
+            Arc::as_ptr(&self.publication), snapshot.tables.runs() as usize,
+            snapshot.tables.columns() as usize, snapshot.count_ptr() as usize,
+            self.publication.fields.ptr() as usize,
+        );
+        #[cfg(feature = "packed-radix")]
+        if let Some(packed) = &snapshot.packed {
+            for (index, run) in packed.runs.iter().enumerate() {
+                eprintln!("gpu_datalog_packed_run\trelation={relation}\tlayout={layout}\towner={owner}\trun={index}\tpacked={}\trows={}\tword_bytes={}\tstorage_bytes={}",
+                    run.plain_batch().is_none(), run.len(), size_of::<W>(), run.allocated_bytes());
+            }
+        }
+        for (index, run) in snapshot.runs.iter().enumerate() {
+            eprintln!(
+                "gpu_datalog_full_run\tlayout={layout}\trun={index}\tkeys={}\tkey_bytes={}\tdirectory={}\tdirectory_bytes={}",
+                run.keys.ptr() as usize, run.keys.allocated_bytes(),
+                run.directory.ptr() as usize, run.directory.allocated_bytes(),
+            );
+        }
+    }
+
+    /// Bijective full-heading permutation: unique input still requires sorting.
+    pub fn permuted_provider<P: ScalarTuple>(
+        &self, pool: &Arc<Pool>, order: &[usize], params: RadixRunParams,
+        permutation_threads: u32, active_bits: u32,
+    ) -> Result<RadixLayout<P, (), W, O, ()>> {
+        check_execution(self.pool(), pool)?;
+        self.require_full_key_set()?;
+        let packing = self.packing().permute(order)?;
+        RadixLayout::<P, (), W, O, ()>::check_schema(&packing)?;
+        if permutation_threads != 256 {
+            return Err("permutation kernel requires exactly 256 threads per block".into());
+        }
+        if active_bits < packing.bits() {
+            return Err("set active bits do not cover its packing".into());
+        }
+        let mut state = DeviceRadixRun::<W, O, ()>::new_set(pool.clone(), params, active_bits)?;
+        #[cfg(feature = "packed-radix")]
+        state.bind_packing(&packing)?;
+        #[cfg(feature = "packed-radix")]
+        if let Some(source) = &self.snapshot().packed {
+            let set = PackedSet::permuted(pool.clone(), packing.clone(), order, params.ratio,
+                &source.runs, |words, rows| unsafe { state.sort_known_unique(words, rows) })?;
+            state.packed = Some(Box::new(PackedBacking { packing: OnceLock::from(packing.clone()), set: Some(set) }));
+        }
+        for run in &self.snapshot().runs {
+            let permuted = self.packing().permute_device_on(
+                pool, &run.keys, run.key_count, order, permutation_threads,
+            )?;
+            // SAFETY: a full-column permutation is bijective on the full-key set.
+            let batch = unsafe { state.sort_known_unique(&permuted, run.key_count)? };
+            unsafe { state.append_sorted(batch)?; }
+        }
+        RadixLayout::publish(&state, packing)
+    }
+}
+
+impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: SourceItemColumns>
+    RadixLayout<K, V, W, O, C>
+{
+    /// Formal rule GPU-RadixSourceBuild: one publication of `rows` occurrences
+    /// read from resident source columns (through `positions` unless null):
+    /// key fields packed by `K`'s packing into whole `W` keys, one item lane
+    /// per value source. Grouping is the ordinary GPU-RadixPublish build.
+    /// Native-width sources retain its single group-count synchronization.
+    ///
+    /// # Safety
+    /// Every source must describe initialized values of its schema column at
+    /// every read row, ready on `pool`'s stream and immutable during the
+    /// build; `positions`, unless null, addresses `rows` such device rows.
+    pub unsafe fn from_sources(
+        pool: Arc<Pool>,
+        params: RadixRunParams,
+        keys: &[SourceView],
+        values: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self> {
+        let packing = Self::derive_packing()?;
+        unsafe { Self::build_sources(pool, params, packing, keys, values, positions, rows, W::BITS) }
+    }
+
+    /// Build with recorded runtime field widths and significant sort bits.
+    /// Values outside a supplied field are refused before publication, never
+    /// silently truncated. Validation shares the existing group-count readback.
+    /// Native fields omit validation work. Scalar types and W are upper bounds.
+    ///
+    /// # Safety
+    /// The source initialization, lifetime and selected-position obligations
+    /// are exactly those of [`Self::from_sources`].
+    pub unsafe fn from_sources_with_packing(
+        pool: Arc<Pool>,
+        params: RadixRunParams,
+        packing: Packing,
+        keys: &[SourceView],
+        values: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self> {
+        let active_bits = packing.bits();
+        unsafe { Self::build_sources(pool, params, packing, keys, values, positions, rows, active_bits) }
+    }
+
+    unsafe fn build_sources(
+        pool: Arc<Pool>, params: RadixRunParams, packing: Packing,
+        keys: &[SourceView], values: &[SourceView], positions: *const u32,
+        rows: usize, active_bits: u32,
+    ) -> Result<Self> {
+        Self::check_schema(&packing)?;
+        if keys.len() != K::COLUMNS.len() || values.len() != C::COLUMNS {
+            return Err("radix sources differ from the layout's key and value schema".into());
+        }
+        let mut run = DeviceRadixRun::<W, O, C>::new(pool.clone(), params)?;
+        run.active_bits = active_bits;
+        if rows != 0 {
+            u32::try_from(rows).map_err(|_| "radix source build exceeds the u32 row domain")?;
+            let sources = Buffer::from_host_async(pool.clone(), keys)?;
+            let fields = Buffer::from_host_async(
+                pool.clone(),
+                &packing.packed_fields().collect::<Vec<_>>(),
+            )?;
+            // SAFETY: the pack kernel initializes every key before grouping.
+            let words = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
+            // Equality here selects only the native validation-free fast path;
+            // schema compatibility itself accepts widths up to the carrier.
+            let native = packing.packed_fields().zip(K::COLUMNS)
+                .all(|(field, column)| field.bits == column.bits());
+            let control = if native { None } else { Some(Buffer::<u64>::zeroed(pool.clone(), 2)?) };
+            let error = control.as_ref().map_or(std::ptr::null_mut(), |control| unsafe {
+                control.ptr().add(1).cast::<u32>()
+            });
+            let module = &run.kernels.module;
+            let initial = module.prepare_pack_sources::<W>(run.kernels.shape())?;
+            let config = run.kernels.config(initial.function(), rows)?;
+            module.pack_sources::<W>(
+                pool.stream(),
+                &module.prepare_pack_sources::<W>(config)?,
+                sources.ptr(),
+                fields.ptr(),
+                keys.len() as u32,
+                positions,
+                rows as u64,
+                words.ptr(),
+                error,
+            )?;
+            let items = C::from_sources(&run.kernels, values, positions, rows)?;
+            run.publish_with_control(&words, &items, rows, control.as_ref())?;
+        }
+        Self::publish(&run, packing)
+    }
+}
+
+/// Pointer-only reads usable inside generated device kernels.
+pub mod device {
+    use super::{
+        OffsetWord, RadixItemColumn, RadixItemsView, RadixKeysView, RadixLayoutView, RadixMatch,
+        RadixRunView,
+    };
+    use crate::Word;
+
+    #[cfg(feature = "packed-radix")]
+    pub use crate::packed_run::device::RowCursor;
+    #[cfg(not(feature = "packed-radix"))]
+    pub type RowCursor = u64;
+
+    /// Scan positions are already resolved; range endpoints carry an ordinal.
+    #[cfg(feature = "packed-radix")]
+    pub trait KeyPosition: Copy {
+        /// # Safety
+        /// `index` must select the same live run that supplied this position.
+        unsafe fn codes<W: Word, O: OffsetWord>(self, view: RadixLayoutView<W, O>, index: u32, column: u32, field: crate::PackedField) -> (u64, u64);
+    }
+    #[cfg(feature = "packed-radix")]
+    impl KeyPosition for RowCursor {
+        #[inline(always)]
+        unsafe fn codes<W: Word, O: OffsetWord>(self, _: RadixLayoutView<W, O>, _: u32, column: u32, field: crate::PackedField) -> (u64, u64) {
+            unsafe { row_codes::<W>(self, column, field) }
+        }
+    }
+    #[cfg(feature = "packed-radix")]
+    impl KeyPosition for u64 {
+        #[inline(always)]
+        unsafe fn codes<W: Word, O: OffsetWord>(self, view: RadixLayoutView<W, O>, index: u32, column: u32, field: crate::PackedField) -> (u64, u64) {
+            let run = unsafe { run(view.keys, index) };
+            if W::BITS <= 128 && run.unit_offsets == super::FIXED_UNIT {
+                return unsafe { crate::packed_run::device::direct_code(fixed_row(run, self), column) };
+            }
+            if run.unit_offsets < super::PACKED_UNIT {
+                return (unsafe { (*run.keys.add(self as usize)).extract(field.shift, field.bits) }, 0);
+            }
+            let row = unsafe { crate::packed_run::device::resolve_row::<W>(run.offsets.cast(), self) };
+            unsafe { row_codes::<W>(row, column, field) }
+        }
+    }
+    #[cfg(feature = "packed-radix")]
+    #[inline(always)]
+    unsafe fn resolve_slot<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, position: u64) -> RowCursor {
+        if W::BITS <= 128 && run.unit_offsets == super::FIXED_UNIT { return unsafe { fixed_row(run, position) }; }
+        if run.unit_offsets < super::PACKED_UNIT { return RowCursor::plain(unsafe { run.keys.add(position as usize) }); }
+        unsafe { crate::packed_run::device::resolve_row::<W>(run.offsets.cast(), position) }
+    }
+    #[cfg(feature = "packed-radix")]
+    #[inline(always)]
+    unsafe fn fixed_row<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, position: u64) -> RowCursor {
+        let block = position / crate::packed_run::DEFAULT_BLOCK_ROWS as u64;
+        let local = position % crate::packed_run::DEFAULT_BLOCK_ROWS as u64;
+        RowCursor {
+            words: run.keys.cast(),
+            frames: unsafe { run.directory.cast::<crate::packed_run::Frame>().add(block as usize * run.radix_bits as usize) },
+            bit: local as u32,
+        }
+    }
+    #[cfg(feature = "packed-radix")]
+    #[inline(always)]
+    unsafe fn row_codes<W: Word>(row: RowCursor, column: u32, field: crate::PackedField) -> (u64, u64) {
+        if !row.frames.is_null() {
+            if W::BITS <= 128 { unsafe { crate::packed_run::device::direct_code(row, column) } }
+            else { unsafe { crate::packed_run::device::field_code(row, column) } }
+        } else if W::BITS <= 128 || row.bit == 0 {
+            (unsafe { (*row.words.cast::<W>()).extract(field.shift, field.bits) }, 0)
+        } else {
+            (unsafe { crate::packed_run::device::read_code(row.words, field.shift as u64, field.bits) }, 0)
+        }
+    }
+
+    /// Locate a key in concatenated run-local distinct-key arrays.
+    /// # Safety
+    /// All descriptors must remain live and readable on this device.
+    #[inline(always)]
+    pub unsafe fn locate_key<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>, mut position: u64,
+    ) -> (u32, RowCursor) {
+        let mut index = 0;
+        while index < view.run_count {
+            let descriptor = unsafe { run(view, index) };
+            if position < descriptor.keys_len {
+                #[cfg(feature = "packed-radix")]
+                let position = unsafe { resolve_slot(descriptor, position) };
+                return (index, position);
+            }
+            position -= descriptor.keys_len;
+            index += 1;
+        }
+        #[cfg(feature = "packed-radix")]
+        let missing = RowCursor::plain(std::ptr::null::<W>());
+        #[cfg(not(feature = "packed-radix"))]
+        let missing = 0;
+        (view.run_count, missing)
+    }
+
+    /// Decode one demanded physical key field for expression/output use.
+    /// # Safety
+    /// The key position and field index must designate initialized storage.
+    #[inline(always)]
+    pub unsafe fn decode_key<W: Word, O: OffsetWord>(
+        view: RadixLayoutView<W, O>, index: u32,
+        #[cfg(not(feature = "packed-radix"))] position: u64,
+        #[cfg(feature = "packed-radix")] position: impl KeyPosition,
+        column: u32,
+    ) -> i64 {
+        // DECODE ?: invert only the demanded radix field, extracting its plain bits or adding its leaf base to its residual; relational callers still require publication evidence.
+        #[cfg(not(feature = "packed-radix"))]
+        let descriptor = unsafe { run(view.keys, index) };
+        #[cfg(not(feature = "packed-radix"))]
+        let key = unsafe { *descriptor.keys.add(position as usize) };
+        let field = unsafe { *view.fields.add(column as usize) };
+        #[cfg(not(feature = "packed-radix"))]
+        let encoded = key.extract(field.shift, field.bits);
+        #[cfg(feature = "packed-radix")]
+        let (code, base) = unsafe { position.codes(view, index, column, field) };
+        #[cfg(feature = "packed-radix")]
+        let encoded = base + code;
+        if field.signed != 0 {
+            encoded.wrapping_sub(1_u64 << (field.bits - 1)) as i64
+        } else {
+            encoded as i64
+        }
+    }
+
+    /// `a - b` for `a >= b`, lane-wise with borrow.
+    #[inline(always)]
+    pub fn difference<W: Word>(a: W, b: W) -> W {
+        let mut output = W::zero();
+        let mut borrow = 0_u64;
+        let mut lane = 0;
+        while lane < W::BITS / 64 {
+            let (partial, first) = a.lane(lane).overflowing_sub(b.lane(lane));
+            let (value, second) = partial.overflowing_sub(borrow);
+            output.set_lane(lane, value);
+            borrow = (first | second) as u64;
+            lane += 1;
+        }
+        output
+    }
+
+    /// Number of significant bits, zero for the zero word.
+    #[inline(always)]
+    pub fn significant_bits<W: Word>(word: W) -> u32 {
+        let mut lane = W::BITS / 64;
+        while lane != 0 {
+            lane -= 1;
+            let value = word.lane(lane);
+            if value != 0 {
+                return lane * 64 + 64 - value.leading_zeros();
+            }
+        }
+        0
+    }
+
+    /// The directory bucket of `key` in `[min, max]`: the top `radix_bits`
+    /// bits of `key - min` at the run span's resolution. Monotone in `key`.
+    #[inline(always)]
+    pub fn prefix<W: Word>(key: W, min: W, max: W, radix_bits: u32) -> u64 {
+        let shift = significant_bits(difference(max, min)).saturating_sub(radix_bits);
+        difference(key, min).extract(shift, radix_bits)
+    }
+
+    /// Lower-bound slot of `key` in one run and whether it is present.
+    /// # Safety
+    /// `run` must describe a live run readable on this device.
+    #[inline(always)]
+    pub unsafe fn search<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, key: W) -> (u64, bool) {
+        let len = run.keys_len;
+        if len == 0 {
+            return (0, false);
+        }
+        #[cfg(feature = "packed-radix")]
+        if run.unit_offsets >= super::PACKED_UNIT {
+            let packed = unsafe { *run.offsets.cast::<crate::packed_run::PackedView<W>>() };
+            return unsafe { packed_search(packed, key) };
+        }
+        let min = unsafe { *run.keys };
+        if key.compare(&min).is_lt() {
+            return (0, false);
+        }
+        let max = unsafe { *run.keys.add(len as usize - 1) };
+        let last = key.compare(&max);
+        if last.is_gt() {
+            return (len, false);
+        }
+        if last.is_eq() {
+            return (len - 1, true);
+        }
+        let (mut low, mut high) = if run.radix_bits == 0 {
+            (0, len)
+        } else {
+            let bucket = prefix(key, min, max, run.radix_bits) as usize;
+            unsafe {
+                (
+                    (*run.directory.add(bucket)).to_u64(),
+                    (*run.directory.add(bucket + 1)).to_u64(),
+                )
+            }
+        };
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if unsafe { &*run.keys.add(middle as usize) }
+                .compare(&key)
+                .is_lt()
+            {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        (
+            low,
+            low < len
+                && unsafe { &*run.keys.add(low as usize) }
+                    .compare(&key)
+                    .is_eq(),
+        )
+    }
+
+    #[cfg(feature = "packed-radix")]
+    #[inline(never)]
+    unsafe fn packed_search<W: Word>(packed: crate::packed_run::PackedView<W>, key: W) -> (u64, bool) {
+        let (first, end) = unsafe { crate::packed_run::device::range(packed, key, key) };
+        (first, end != first)
+    }
+
+    #[cfg(feature = "packed-radix")]
+    #[inline(never)]
+    unsafe fn packed_interval<W: Word>(packed: crate::packed_run::PackedView<W>, low: W, high: W) -> (u64, u64) {
+        let (first, last) = unsafe { crate::packed_run::device::range(packed, low, high) };
+        (first, last.max(first))
+    }
+
+    /// Item position of a slot's group start (`slot <= keys_len`).
+    /// # Safety
+    /// `run` must be live and `slot` at most its key count.
+    #[inline(always)]
+    pub unsafe fn offset<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, slot: u64) -> u64 {
+        if run.unit_offsets != 0 {
+            slot
+        } else {
+            unsafe { (*run.offsets.add(slot as usize)).to_u64() }
+        }
+    }
+
+    /// The run's half-open item group for `key`, empty at `(items, items)` if absent.
+    /// # Safety
+    /// `run` must describe a live run readable on this device.
+    #[inline(always)]
+    pub unsafe fn group<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, key: W) -> (u64, u64) {
+        let (slot, found) = unsafe { search(run, key) };
+        if found {
+            unsafe { (offset(run, slot), offset(run, slot + 1)) }
+        } else {
+            (run.items, run.items)
+        }
+    }
+
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn run<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        run: u32,
+    ) -> RadixRunView<W, O> {
+        unsafe { *view.runs.add(run as usize) }
+    }
+
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn contains<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, key: W) -> bool {
+        let mut index = 0;
+        while index < view.run_count {
+            if unsafe { search(run(view, index), key) }.1 {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    /// Occurrences of `key` across all runs, from offsets only.
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn count<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, key: W) -> u64 {
+        let mut total = 0;
+        let mut index = 0;
+        while index < view.run_count {
+            let (begin, end) = unsafe { group(run(view, index), key) };
+            total += end - begin;
+            index += 1;
+        }
+        total
+    }
+
+    /// The exact range of `key` in the stable concatenation of all runs'
+    /// merged order (the CPU `RadixRun::range`), `(items, items)` if absent.
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn range<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, key: W) -> (u64, u64) {
+        let mut begin = 0;
+        let mut count = 0;
+        let mut index = 0;
+        while index < view.run_count {
+            let current = unsafe { run(view, index) };
+            let (slot, found) = unsafe { search(current, key) };
+            let start = unsafe { offset(current, slot) };
+            begin += start;
+            if found {
+                count += unsafe { offset(current, slot + 1) } - start;
+            }
+            index += 1;
+        }
+        if count == 0 {
+            (view.items, view.items)
+        } else {
+            (begin, begin + count)
+        }
+    }
+
+    /// Slot interval `[first, last)` of one run's keys within inclusive `[low, high]`.
+    /// # Safety
+    /// `run` must describe a live run readable on this device.
+    #[inline(always)]
+    pub unsafe fn interval<W: Word, O: OffsetWord>(
+        run: RadixRunView<W, O>,
+        low: W,
+        high: W,
+    ) -> (u64, u64) {
+        #[cfg(feature = "packed-radix")]
+        if run.unit_offsets >= super::PACKED_UNIT {
+            return unsafe { packed_interval(*run.offsets.cast::<crate::packed_run::PackedView<W>>(), low, high) };
+        }
+        let (first, _) = unsafe { search(run, low) };
+        let (last, found) = unsafe { search(run, high) };
+        let last = if found { last + 1 } else { last };
+        (first, if last < first { first } else { last })
+    }
+
+    /// Read one item of column `column` at a run position.
+    /// # Safety
+    /// `T` must be the column's element type and the position live.
+    #[inline(always)]
+    pub unsafe fn item<T: Copy>(items: RadixItemsView, run: u32, column: u32, position: u64) -> T {
+        let address = unsafe {
+            *items
+                .columns
+                .add((run * items.column_count + column) as usize)
+        };
+        unsafe { *(address as *const T).add(position as usize) }
+    }
+
+    /// The match cursor of `key` in run `index`: snapshot identity, run index
+    /// and the run-local group `[begin, end)` (`(items, items)` if absent).
+    /// # Safety
+    /// `view` must describe live runs readable on this device; `index < run_count`.
+    #[inline(always)]
+    pub unsafe fn cursor<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        index: u32,
+        key: W,
+    ) -> RadixMatch {
+        let (begin, end) = unsafe { group(run(view, index), key) };
+        RadixMatch {
+            snapshot: view.snapshot,
+            run: index,
+            reserved: 0,
+            begin,
+            end,
+        }
+    }
+
+    /// Whether `cursor` addresses the snapshot `column` belongs to.
+    #[inline(always)]
+    pub fn same_snapshot(column: RadixItemColumn, cursor: RadixMatch) -> bool {
+        column.snapshot == cursor.snapshot
+    }
+
+    /// Item `offset` of a cursor's group in one demanded column.
+    /// # Safety
+    /// `T` must be the column's lane, `same_snapshot(column, cursor)` must hold,
+    /// the snapshot must be live and `offset < cursor.end - cursor.begin`.
+    #[inline(always)]
+    pub unsafe fn cursor_item<T: Copy>(
+        column: RadixItemColumn,
+        cursor: RadixMatch,
+        offset: u64,
+    ) -> T {
+        let address = unsafe {
+            *column
+                .columns
+                .add((cursor.run * column.column_count + column.column) as usize)
+        };
+        unsafe { *(address as *const T).add((cursor.begin + offset) as usize) }
+    }
+
+    /// Formal rule GPU-RadixEncodedProbe: the inclusive key interval of the
+    /// leading `count` key fields bound to `values` (each as its i64 bit
+    /// pattern), encoded once into whole words: the bound fields' sign-bit
+    /// encodings, then all-zero (low) or all-one (high) remaining key bits.
+    /// No `high + 1` is formed. `false` when a value lies outside its
+    /// field's domain (no key can match).
+    /// # Safety
+    /// `view.fields` must address `count <= view.field_count` live descriptors
+    /// and `values` `count` initialized values readable on this device.
+    #[inline(always)]
+    pub unsafe fn encode_prefix<W: Word, O: OffsetWord>(
+        view: RadixLayoutView<W, O>,
+        values: *const i64,
+        count: u32,
+    ) -> (W, W, bool) {
+        let mut low = W::zero();
+        let mut remaining = view.bits;
+        let mut index = 0;
+        while index < count {
+            let field = unsafe { *view.fields.add(index as usize) };
+            let value = unsafe { *values.add(index as usize) };
+            let fits = if field.bits >= 64 {
+                true
+            } else if field.signed != 0 {
+                let half = 1_i64 << (field.bits - 1);
+                value >= -half && value < half
+            } else {
+                value >= 0 && value < (1_i64 << field.bits)
+            };
+            if !fits {
+                return (low, low, false);
+            }
+            let mask = u64::MAX >> (64 - field.bits);
+            let sign = if field.signed != 0 {
+                1_u64 << (field.bits - 1)
+            } else {
+                0
+            };
+            low.insert(field.shift, field.bits, ((value as u64) & mask) ^ sign);
+            remaining = field.shift;
+            index += 1;
+        }
+        let mut high = low;
+        let mut lane = 0;
+        while lane * 64 < remaining {
+            let bits = (remaining - lane * 64).min(64);
+            high.set_lane(lane, high.lane(lane) | (u64::MAX >> (64 - bits)));
+            lane += 1;
+        }
+        (low, high, true)
+    }
+
+    /// Run-local item interval `[begin, end)` of the keys in inclusive `[low, high]`.
+    /// # Safety
+    /// `run` must describe a live run readable on this device.
+    #[inline(always)]
+    pub unsafe fn interval_items<W: Word, O: OffsetWord>(
+        run: RadixRunView<W, O>,
+        low: W,
+        high: W,
+    ) -> (u64, u64) {
+        let (first, last) = unsafe { interval(run, low, high) };
+        unsafe { (offset(run, first), offset(run, last)) }
+    }
+
+    /// Whether a run older than `before` holds `key`.
+    #[inline(always)]
+    unsafe fn older<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        before: u32,
+        key: W,
+    ) -> bool {
+        let mut index = 0;
+        while index < before {
+            if unsafe { search(run(view, index), key) }.1 {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    /// Formal rule GPU-RadixCandidates: the exact number of distinct keys in
+    /// inclusive `[low, high]` over the union of all runs. Keys are distinct
+    /// within a run, so one run's count is its slot interval; across runs a
+    /// key counts once, in its oldest run (never a sum of per-run counts).
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn distinct<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        low: W,
+        high: W,
+    ) -> u64 {
+        let mut total = 0;
+        let mut index = 0;
+        while index < view.run_count {
+            let current = unsafe { run(view, index) };
+            let (first, last) = unsafe { interval(current, low, high) };
+            if index == 0 || (cfg!(feature = "packed-radix") && current.unit_offsets != 0) {
+                total += last - first;
+            } else {
+                let mut slot = first;
+                while slot < last {
+                    let key = unsafe { *current.keys.add(slot as usize) };
+                    total += !unsafe { older(view, index, key) } as u64;
+                    slot += 1;
+                }
+            }
+            index += 1;
+        }
+        total
+    }
+
+    /// The `ordinal`-th distinct key of [`distinct`]'s enumeration (runs
+    /// oldest first, keys ascending within a run, each key in its oldest
+    /// run) as `(run, slot)`. Requires `ordinal < distinct(view, low, high)`.
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn distinct_at<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        low: W,
+        high: W,
+        mut ordinal: u64,
+    ) -> (u32, u64) {
+        let mut index = 0;
+        while index < view.run_count {
+            let current = unsafe { run(view, index) };
+            let (first, last) = unsafe { interval(current, low, high) };
+            if index == 0 || (cfg!(feature = "packed-radix") && current.unit_offsets != 0) {
+                if ordinal < last - first {
+                    return (index, first + ordinal);
+                }
+                ordinal -= last - first;
+            } else {
+                let mut slot = first;
+                while slot < last {
+                    let key = unsafe { *current.keys.add(slot as usize) };
+                    if !unsafe { older(view, index, key) } {
+                        if ordinal == 0 {
+                            return (index, slot);
+                        }
+                        ordinal -= 1;
+                    }
+                    slot += 1;
+                }
+            }
+            index += 1;
+        }
+        (view.run_count, 0)
+    }
+}
+
+#[cuda_host::cuda_module]
+mod radix_kernels {
+    use crate::{
+        layout::PackedField,
+        radix_run::{
+            device, IntervalProbe, ItemLane, KeyProbe, OffsetWord, RadixItemColumn, RadixKeysView,
+            RadixMatch, RadixRunView, SourceLane, SIDE,
+        },
+        Word,
+    };
+    use cuda_device::{kernel, launch_bounds, launch_contract, thread};
+    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
+    use gpu_device_columns::{decode_source, SourceView};
+
+    /// Pack each read row's key fields (most significant first, sign bit
+    /// flipped for signed fields) into one whole key word.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn pack_sources<W: Word>(
+        sources: *const SourceView,
+        fields: *const PackedField,
+        field_count: u32,
+        positions: *const u32,
+        rows: u64,
+        keys: *mut W,
+        error: *mut u32,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while row < rows {
+            let source = if positions.is_null() {
+                row
+            } else {
+                unsafe { *positions.add(row as usize) as u64 }
+            };
+            let mut key = W::zero();
+            let mut index = 0;
+            while index < field_count {
+                let field = unsafe { *fields.add(index as usize) };
+                // DECODE V: radix source build reconstructs resident FOR values before key packing; P4 pack encoded order keys directly.
+                let value = unsafe { decode_source(*sources.add(index as usize), source) };
+                if !error.is_null() {
+                    let (minimum, maximum) = if field.signed != 0 {
+                        let half = 1_i64 << (field.bits - 1);
+                        (-half, half)
+                    } else { (0, 1_i64 << field.bits) };
+                    if value < minimum || value >= maximum {
+                        unsafe { DeviceAtomicU32::from_ptr(error).store(1, AtomicOrdering::Relaxed) };
+                    }
+                }
+                let mask = u64::MAX >> (64 - field.bits);
+                let sign = if field.signed != 0 {
+                    1_u64 << (field.bits - 1)
+                } else {
+                    0
+                };
+                key.insert(field.shift, field.bits, (value as u64 & mask) ^ sign);
+                index += 1;
+            }
+            unsafe {
+                *keys.add(row as usize) = key;
+            }
+            row += stride;
+        }
+    }
+
+    /// Fill one item lane with each read row's source value.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn source_lane<T: SourceLane>(
+        input: SourceView,
+        positions: *const u32,
+        rows: u64,
+        output: *mut T,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while row < rows {
+            let source = if positions.is_null() {
+                row
+            } else {
+                unsafe { *positions.add(row as usize) as u64 }
+            };
+            unsafe {
+                // DECODE V: radix source build reconstructs resident FOR payloads into native item lanes; P4 retain encoded lanes.
+                *output.add(row as usize) = T::from_source(decode_source(input, source));
+            }
+            row += stride;
+        }
+    }
+
+    /// Mark group starts of the permuted keys; entry `rows` is the terminal.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn group_flags<W: Word>(input: *const W, order: *const u32, rows: u64, flags: *mut u32) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while row <= rows {
+            let start = row == 0
+                || row == rows
+                || unsafe {
+                    !(*input.add(*order.add(row as usize) as usize))
+                        .compare(&*input.add(*order.add(row as usize - 1) as usize))
+                        .is_eq()
+                };
+            unsafe {
+                *flags.add(row as usize) = start as u32;
+            }
+            row += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn gather_items<T: ItemLane>(
+        input: *const T,
+        order: *const u32,
+        rows: u64,
+        output: *mut T,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while row < rows {
+            unsafe {
+                *output.add(row as usize) = *input.add(*order.add(row as usize) as usize);
+            }
+            row += stride;
+        }
+    }
+
+    /// Merge two runs' key directories by stable merge-path tiles. Each slot
+    /// records its source (`SIDE` marks the newer run), the items preceding it
+    /// and whether it starts a new distinct key. Entry `slots` is the terminal.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn merge_slots<W: Word, O: OffsetWord>(
+        left: RadixRunView<W, O>,
+        right: RadixRunView<W, O>,
+        tile_rows: u64,
+        tags: *mut u64,
+        positions: *mut O,
+        flags: *mut u32,
+    ) {
+        let (left_len, right_len) = (left.keys_len as usize, right.keys_len as usize);
+        let slots = left_len + right_len;
+        let mut tile = thread::index_1d().get() as usize;
+        let stride = thread::gridDim_x() as usize * thread::blockDim_x() as usize;
+        if tile == 0 {
+            unsafe {
+                *positions.add(slots) = O::from_u64(left.items + right.items);
+                *flags.add(slots) = 1;
+            }
+        }
+        let tiles = slots.div_ceil(tile_rows as usize);
+        while tile < tiles {
+            let start = tile * tile_rows as usize;
+            let end = start + (slots - start).min(tile_rows as usize);
+            let mut a =
+                unsafe { crate::runs::corank(left.keys, left_len, right.keys, right_len, start) };
+            let mut b = start - a;
+            let mut slot = start;
+            while slot < end {
+                let take_left = a < left_len
+                    && (b == right_len
+                        || !unsafe { &*left.keys.add(a) }
+                            .compare(unsafe { &*right.keys.add(b) })
+                            .is_gt());
+                let position =
+                    unsafe { device::offset(left, a as u64) + device::offset(right, b as u64) };
+                // Runs hold distinct keys, so only the other run's predecessor can repeat this key.
+                let (tag, repeat) = if take_left {
+                    let key = unsafe { &*left.keys.add(a) };
+                    (
+                        a as u64,
+                        b > 0 && unsafe { &*right.keys.add(b - 1) }.compare(key).is_eq(),
+                    )
+                } else {
+                    let key = unsafe { &*right.keys.add(b) };
+                    (
+                        b as u64 | SIDE,
+                        a > 0 && unsafe { &*left.keys.add(a - 1) }.compare(key).is_eq(),
+                    )
+                };
+                unsafe {
+                    *tags.add(slot) = tag;
+                    *positions.add(slot) = O::from_u64(position);
+                    *flags.add(slot) = !repeat as u32;
+                }
+                if take_left {
+                    a += 1;
+                } else {
+                    b += 1;
+                }
+                slot += 1;
+            }
+            tile += stride;
+        }
+    }
+
+    /// Map each merged item position to its source in `left ++ right` items.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn item_sources<W: Word, O: OffsetWord>(
+        left: RadixRunView<W, O>,
+        right: RadixRunView<W, O>,
+        tags: *const u64,
+        positions: *const O,
+        slots: u64,
+        total: u64,
+        sources: *mut O,
+    ) {
+        let mut item = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while item < total {
+            // Slot positions strictly increase: every group is nonempty.
+            let (mut low, mut high) = (0_u64, slots);
+            while low < high {
+                let middle = low + (high - low) / 2;
+                if unsafe { *positions.add(middle as usize) }.to_u64() <= item {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            let slot = low - 1;
+            let tag = unsafe { *tags.add(slot as usize) };
+            let base = if tag & SIDE == 0 {
+                unsafe { device::offset(left, tag) }
+            } else {
+                left.items + unsafe { device::offset(right, tag & !SIDE) }
+            };
+            let start = unsafe { *positions.add(slot as usize) }.to_u64();
+            unsafe {
+                *sources.add(item as usize) = O::from_u64(base + item - start);
+            }
+            item += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn merge_items<T: ItemLane, O: OffsetWord>(
+        left: *const T,
+        right: *const T,
+        left_items: u64,
+        sources: *const O,
+        rows: u64,
+        output: *mut T,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while row < rows {
+            let source = unsafe { *sources.add(row as usize) }.to_u64();
+            unsafe {
+                *output.add(row as usize) = if source < left_items {
+                    *left.add(source as usize)
+                } else {
+                    *right.add((source - left_items) as usize)
+                };
+            }
+            row += stride;
+        }
+    }
+
+    /// `directory[bucket]` is the first slot whose key prefix is at least `bucket`.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn build_directory<W: Word, O: OffsetWord>(
+        keys: *const W,
+        len: u64,
+        radix_bits: u32,
+        directory: *mut O,
+    ) {
+        let entries = (1_u64 << radix_bits) + 1;
+        let mut bucket = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        let min = unsafe { *keys };
+        let max = unsafe { *keys.add(len as usize - 1) };
+        while bucket < entries {
+            let (mut low, mut high) = (0_u64, len);
+            while low < high {
+                let middle = low + (high - low) / 2;
+                if device::prefix(unsafe { *keys.add(middle as usize) }, min, max, radix_bits)
+                    < bucket
+                {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            unsafe {
+                *directory.add(bucket as usize) = O::from_u64(low);
+            }
+            bucket += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn probe_keys<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        probes: *const W,
+        count: u64,
+        output: *mut KeyProbe,
+    ) {
+        let mut probe = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while probe < count {
+            let key = unsafe { *probes.add(probe as usize) };
+            let (begin, end) = unsafe { device::range(view, key) };
+            let contains = unsafe { device::contains(view, key) };
+            let total = unsafe { device::count(view, key) };
+            unsafe {
+                *output.add(probe as usize) = KeyProbe {
+                    contains: contains as u64,
+                    count: total,
+                    begin,
+                    end,
+                };
+            }
+            probe += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn probe_matches<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        probes: *const W,
+        count: u64,
+        output: *mut RadixMatch,
+    ) {
+        let mut probe = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while probe < count {
+            let key = unsafe { *probes.add(probe as usize) };
+            let mut index = 0;
+            while index < view.run_count {
+                let cursor = unsafe { device::cursor(view, index, key) };
+                unsafe {
+                    *output.add((probe * view.run_count as u64 + index as u64) as usize) = cursor;
+                }
+                index += 1;
+            }
+            probe += stride;
+        }
+    }
+
+    /// Copy each cursor's group of one column to `output[bases[i]..]`.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn gather_matches<T: ItemLane>(
+        column: RadixItemColumn,
+        cursors: *const RadixMatch,
+        count: u64,
+        bases: *const u64,
+        total: u64,
+        output: *mut T,
+    ) {
+        let mut index = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while index < count {
+            let cursor = unsafe { *cursors.add(index as usize) };
+            let base = unsafe { *bases.add(index as usize) };
+            if device::same_snapshot(column, cursor) {
+                let mut offset = 0;
+                while offset < cursor.end - cursor.begin && base + offset < total {
+                    unsafe {
+                        *output.add((base + offset) as usize) =
+                            device::cursor_item::<T>(column, cursor, offset);
+                    }
+                    offset += 1;
+                }
+            }
+            index += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn probe_intervals<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        low: *const W,
+        high: *const W,
+        count: u64,
+        output: *mut IntervalProbe,
+    ) {
+        let mut probe = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while probe < count {
+            let (lo, hi) = unsafe { (*low.add(probe as usize), *high.add(probe as usize)) };
+            let mut result = IntervalProbe {
+                groups: 0,
+                items: 0,
+            };
+            let mut index = 0;
+            while index < view.run_count {
+                let run = unsafe { device::run(view, index) };
+                let (first, last) = unsafe { device::interval(run, lo, hi) };
+                result.groups += last - first;
+                result.items += unsafe { device::offset(run, last) - device::offset(run, first) };
+                index += 1;
+            }
+            unsafe {
+                *output.add(probe as usize) = result;
+            }
+            probe += stride;
+        }
+    }
+}
+
+#[cfg(test)]
+mod set_representation_tests {
+    use super::*;
+
+    const PARAMS: RadixRunParams = RadixRunParams {
+        ratio: 4,
+        radix_bits: 0,
+        merge_tile_rows: 32,
+        block_threads: 256,
+    };
+
+    #[test]
+    fn implicit_offsets_survive_merges_and_retained_snapshots() -> Result<()> {
+        for radix_bits in [0, 4] {
+            let pool = Pool::new(0, 0, 0)?;
+            let params = RadixRunParams { radix_bits, ..PARAMS };
+            let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), params, 32)?;
+            crate::reset_work_counters();
+            for values in [(0..64).collect::<Vec<u64>>(), vec![100, 101]] {
+                let input = Buffer::from_host(pool.clone(), &values)?;
+                let batch = unsafe { state.fresh(&input, values.len())? };
+                unsafe { state.append_sorted(batch)?; }
+            }
+            assert_eq!(state.run_count(), 2);
+            assert!(state.runs.iter().all(|run| run.offsets.is_none()));
+            let live = state.runs.iter().map(|run| {
+                run.key_count * size_of::<u64>() + run.directory.len() * size_of::<u32>()
+            }).sum::<usize>();
+            assert_eq!(state.live_bytes(), live);
+            let retained = state.snapshot()?;
+            let descriptors = retained.download_run_views()?;
+            assert!(descriptors.iter().all(|run| run.unit_offsets == 1 && run.offsets.is_null()));
+            assert_eq!(state.live_bytes(), live + retained.descriptor_bytes());
+            assert_eq!(state.allocated_bytes(), state.runs.iter().map(|run| {
+                run.keys.allocated_bytes() + run.directory.allocated_bytes()
+            }).sum::<usize>() + retained.descriptor_bytes());
+            for diagnostic in state.to_host()? {
+                assert_eq!(diagnostic.offsets, (0..=diagnostic.keys.len() as u32).collect::<Vec<_>>());
+            }
+            let next = Buffer::from_host(pool.clone(), &(200..232).collect::<Vec<u64>>())?;
+            let batch = unsafe { state.fresh(&next, 32)? };
+            unsafe { state.append_sorted(batch)?; }
+            assert!(state.runs.iter().all(|run| run.offsets.is_none()));
+            #[cfg(feature = "radix-counters")]
+            assert!(crate::work_counters().merges > 0);
+            assert_eq!(crate::work_counters().offset_materializations, 0);
+            assert_eq!(crate::work_counters().offset_bytes, 0);
+            assert_eq!(crate::work_counters().grouping_readbacks, 0);
+            let current = state.snapshot()?;
+            let probes = Buffer::from_host(pool.clone(), &[7_u64, 100, 200, 999])?;
+            assert!(state.publish(&probes, &(), 4).is_err());
+            assert!(Arc::ptr_eq(&current, &state.snapshot()?));
+            drop(state);
+            let old = retained.probe_keys(&pool, &probes, 4)?.to_host()?;
+            assert_eq!(old.iter().map(|probe| probe.count).collect::<Vec<_>>(), [1, 1, 0, 0]);
+            assert_eq!((old[0].begin, old[0].end), (7, 8));
+            assert_eq!((old[2].begin, old[2].end), (66, 66));
+            let new = current.probe_keys(&pool, &probes, 4)?.to_host()?;
+            assert_eq!(new.iter().map(|probe| probe.count).collect::<Vec<_>>(), [1, 1, 1, 0]);
+            let low = Buffer::from_host(pool.clone(), &[0_u64])?;
+            let high = Buffer::from_host(pool.clone(), &[101_u64])?;
+            let interval = retained.probe_intervals(&pool, &low, &high, 1)?.to_host()?;
+            assert_eq!(interval[0], IntervalProbe { groups: 66, items: 66 });
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pair_cache_is_read_only_until_publication_and_falls_back_exactly() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let sorted = |xs: &[u64]| -> Result<runs::SortedBatch<u64>> {
+            assert!(xs.windows(2).all(|p| p[0] < p[1]));
+            unsafe { runs::SortedBatch::from_sorted(Buffer::from_host(pool.clone(), xs)?, xs.len()) }
+        };
+        let packing = Packing::new(&[8, 8])?;
+        let mut arena = crate::CandidateArena::new(pool.clone());
+        let lease = arena.reserve(packing.clone(), 4)?;
+        // SAFETY: all four packed rows are initialized in relation order.
+        let batch = unsafe {
+            lease.buffer().write_async(&[1 << 8 | 1, 0, 1, 1])?;
+            lease.finish(4, vec![])?
+        };
+        for overflow in [2u64, 2 << 8, 8 << 8, 255] { // pages, ranks, major domain, minor domain
+            let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 16)?;
+            state.pair_cache.index = Some(crate::pair_bitmap::Index::tiny(&pool)?);
+            unsafe { state.append_sorted(sorted(&[0, 1 << 8 | 1])?)?; }
+            let snapshot = state.snapshot()?;
+            let keys = sorted(&[0, 1, 1 << 8 | 1])?;
+            for _ in 0..2 {
+                // Grouped publication produces one unsorted batch for this head.
+                let fresh = unsafe { state.fresh_batches(&packing, std::slice::from_ref(&batch), None)? };
+                assert_eq!(fresh.buffer().to_host()?, [1]);
+            }
+            assert!(state.pair_cache.index.is_some());
+            unsafe { state.append_sorted(sorted(&[overflow])?)?; }
+            assert!(state.pair_cache.index.is_none());
+            assert!(state.uncommitted(sorted(&[overflow])?)?.is_empty());
+            let probe = Buffer::from_host(pool.clone(), &[overflow])?;
+            assert_eq!(snapshot.probe_keys(&pool, &probe, 1)?.to_host()?[0].count, 0);
+            state.replace_sorted(sorted(&[1])?)?;
+            assert_eq!(state.uncommitted(keys.clone())?.buffer().to_host()?, [0, 1 << 8 | 1]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unit_item_occurrences_keep_materialized_group_offsets() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let mut state = DeviceRadixRun::<u64, u32, ()>::new(pool.clone(), PARAMS)?;
+        assert_eq!(state.active_bits(), 64);
+        let input = Buffer::from_host(pool.clone(), &[1_u64 << 63, 7, 7, 9])?;
+        crate::reset_work_counters();
+        state.publish(&input, &(), 4)?;
+        let retained = state.snapshot()?;
+        let descriptor = retained.download_run_views()?[0];
+        assert_eq!(descriptor.unit_offsets, 0);
+        assert!(!descriptor.offsets.is_null());
+        let host = state.to_host()?;
+        assert_eq!(host[0].keys, [7, 9, 1_u64 << 63]);
+        assert_eq!(host[0].offsets, [0, 2, 3, 4]);
+        #[cfg(feature = "radix-counters")]
+        {
+            let work = crate::work_counters();
+            assert_eq!(work.occurrence.radix_bits, 64);
+            assert_eq!(work.occurrence.passes, 8);
+            assert_eq!(work.grouping_readbacks, 1);
+            assert_eq!(work.offset_materializations, 1);
+            assert_eq!(work.offset_bytes, 5 * size_of::<u32>() as u64);
+        }
+        let batch = unsafe { state.sort_unique(&input, 4)? };
+        assert!(unsafe { state.append_sorted(batch.clone()) }.is_err());
+        assert!(state.replace_sorted(batch).is_err());
+        let more = Buffer::from_host(pool.clone(), &[7_u64, 7, 9, 9])?;
+        state.publish(&more, &(), 4)?;
+        assert_eq!(state.item_count(), 8);
+        assert_eq!(state.to_host()?[0].offsets, [0, 4, 7, 8]);
+        assert!(state.runs.iter().all(|run| run.offsets.is_some()));
+        let old = retained.probe_keys(&pool, &more, 4)?.to_host()?;
+        assert_eq!(old[0].count, 2);
+        assert_eq!(old[2].count, 1);
+        let current = state.snapshot()?.probe_keys(&pool, &more, 4)?.to_host()?;
+        assert_eq!(current[0].count, 4);
+        assert_eq!(current[2].count, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_batches_admit_by_portions_in_either_column_order() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let packing = Packing::with_columns(&[crate::Column::U32, crate::Column::U32])?;
+        let pack = |packing: &Packing, rows: &[(i128, i128)]| -> Result<Vec<u64>> {
+            rows.iter().map(|&(a, b)| packing.pack::<u64>(&[a, b])).collect()
+        };
+        // Duplicates inside a batch, across batches and against the committed row.
+        let groups: [&[(i128, i128)]; 3] =
+            [&[(1, 2), (3, 4), (1, 2)], &[(5, 6)], &[(3, 4), (7, 8), (9, 1), (1, 2)]];
+        let mut arena = crate::CandidateArena::new(pool.clone());
+        let mut batches = Vec::new();
+        for group in groups {
+            let lease = arena.reserve(packing.clone(), group.len())?;
+            // SAFETY: the lease's only writer initializes the published prefix.
+            unsafe {
+                lease.buffer().write_async(&pack(&packing, group)?)?;
+                batches.push(lease.finish(group.len(), vec![])?);
+            }
+        }
+        let swapped = packing.permute(&[1, 0])?;
+        for portion in [2, 3, 64] {
+            for (order, stored, committed, expected) in [
+                (None, &packing, (5, 6), [(1, 2), (3, 4), (7, 8), (9, 1)]),
+                (Some((&[1usize, 0][..], 256u32)), &swapped, (6, 5), [(1, 9), (2, 1), (4, 3), (8, 7)]),
+            ] {
+                let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 64)?;
+                let seen = Buffer::from_host(pool.clone(), &pack(stored, &[committed])?)?;
+                // SAFETY: one initialized row in the stored packing.
+                unsafe {
+                    let seen = state.sort_unique(&seen, 1)?;
+                    state.append_sorted(seen)?;
+                }
+                // SAFETY: every batch holds initialized rows in `packing`.
+                let fresh = unsafe { state.fresh_portions(&packing, &batches, order, portion)? };
+                assert_eq!(fresh.buffer().to_host()?, pack(stored, &expected)?);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_rows_reorder_by_portions() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let packing = Packing::with_columns(&[crate::Column::U32, crate::Column::U32])?;
+        let swapped = packing.permute(&[1, 0])?;
+        let pack = |packing: &Packing, rows: &[(i128, i128)]| -> Result<Vec<u64>> {
+            rows.iter().map(|&(a, b)| packing.pack::<u64>(&[a, b])).collect()
+        };
+        let state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 64)?;
+        let rows = [(1, 9), (2, 3), (4, 8), (5, 0), (6, 7)];
+        let input = Buffer::from_host(pool.clone(), &pack(&packing, &rows)?)?;
+        // SAFETY: initialized distinct rows; the swap is a column bijection.
+        let batch = unsafe { state.sort_unique(&input, rows.len())? };
+        for portion in [2, 3, 64] {
+            let reordered = unsafe { state.reorder_portions(&packing, &batch, &[1, 0], 256, portion)? };
+            assert_eq!(
+                reordered.buffer().to_host()?,
+                pack(&swapped, &[(0, 5), (3, 2), (7, 6), (8, 4), (9, 1)])?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn long_inputs_sort_by_portions() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        // Duplicates fall inside one portion and across portions; at three
+        // rows per portion the second portion repeats only the first.
+        let repeated = [9_u64, 3, 9, 3, 9, 3, 1, 7, 1, 8, 2, 9, 0];
+        let distinct = [5_u64, 2, 8, 1, 9, 0, 4];
+        let narrow = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 32)?;
+        let wide = DeviceRadixRun::<u128, u32, ()>::new_set(pool.clone(), PARAMS, 96)?;
+        let lift = |values: &[u64]| values.iter().map(|&v| (v as u128) << 64 | 1).collect::<Vec<_>>();
+        for portion in [3, 4, 64] {
+            let input = Buffer::from_host(pool.clone(), &repeated)?;
+            let unique = narrow.set_ops().sort_by_portions(&input, repeated.len(), false, portion)?;
+            assert_eq!(unique.buffer().to_host()?, [0, 1, 2, 3, 7, 8, 9]);
+            let input = Buffer::from_host(pool.clone(), &distinct)?;
+            let sorted = narrow.set_ops().sort_by_portions(&input, distinct.len(), true, portion)?;
+            assert_eq!(sorted.buffer().to_host()?, [0, 1, 2, 4, 5, 8, 9]);
+            let input = Buffer::from_host(pool.clone(), &lift(&repeated))?;
+            let unique = wide.set_ops().sort_by_portions(&input, repeated.len(), false, portion)?;
+            assert_eq!(unique.buffer().to_host()?, lift(&[0, 1, 2, 3, 7, 8, 9]));
+            let input = Buffer::from_host(pool.clone(), &lift(&distinct))?;
+            let sorted = wide.set_ops().sort_by_portions(&input, distinct.len(), true, portion)?;
+            assert_eq!(sorted.buffer().to_host()?, lift(&[0, 1, 2, 4, 5, 8, 9]));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn work_counters_are_feature_controlled_and_reset_without_device_access() {
+        crate::reset_work_counters();
+        crate::stats::record_work(|work| work.merges += 1);
+        #[cfg(not(feature = "radix-counters"))]
+        assert_eq!(crate::work_counters(), crate::WorkCounters::default());
+        #[cfg(feature = "radix-counters")]
+        assert_eq!(crate::work_counters().merges, 1);
+        crate::reset_work_counters();
+        assert_eq!(crate::work_counters(), crate::WorkCounters::default());
+    }
+}

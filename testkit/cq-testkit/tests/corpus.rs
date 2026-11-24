@@ -9,12 +9,24 @@ fn every_corpus_stage_parses_and_satisfies_its_language_contract() {
     assert_eq!(names.len(), SCENARIOS.len());
     for scenario in SCENARIOS {
         let check = || -> syn::Result<()> {
-            cq::contract::check(&scenario.parse_cq()?)?;
-            vo::contract::check(&scenario.parse_vo()?)?;
+            let cq = scenario.parse_cq()?;
+            cq::contract::check(&cq)?;
+            let valuation = scenario.parse_vo(&cq)?;
+            vo::contract::check(&cq, &valuation)?;
+            let tokens = quote::ToTokens::to_token_stream(&valuation);
+            assert!(tokens.to_string().starts_with("valuation"));
+            assert_eq!(
+                syn::parse::Parser::parse2(
+                    |input: syn::parse::ParseStream<'_>| vo::Program::parse(input, &cq),
+                    tokens,
+                )?,
+                valuation,
+            );
             ra::contract::check(&scenario.parse_ra()?)?;
             ix::contract::check(&scenario.parse_ix()?)?;
-            physical::contract::check(&scenario.parse_physical()?)?;
-            structures::contract::check(&scenario.parse_structures()?)?;
+            let physical = scenario.parse_physical()?;
+            physical::contract::check(&physical)?;
+            structures::contract::check(&physical, &scenario.parse_structures(&physical)?)?;
             Ok(())
         };
         check().unwrap_or_else(|error| panic!("{}: {error}", scenario.name));

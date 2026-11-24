@@ -1,6 +1,6 @@
 //! Hybrid publication with exclusive ownership of each original native layout.
 use cq_datalog_partition::{LayoutOwnership, PublicationBarrier, ShardCertificate};
-use cq_lang_datalog_round::RoundContext;
+use cq_lang_datalog_round::{Publication, RoundContext};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Ident;
@@ -26,109 +26,100 @@ pub fn phase_publication(
     phase: &str,
 ) -> Vec<TokenStream> {
     let early = early_members(schedule, phase);
-    let mut barrier = barrier.clone();
-    barrier.relations.retain(|index| !early.contains(index));
-    barrier
-        .layouts
-        .retain(|&index| !early.contains(&context.layouts[index].relation));
-    barrier
-        .delta_layouts
-        .retain(|&index| !early.contains(&context.delta_layouts[index].relation));
-    publication(context, &barrier, certificate)
+    publication(context, barrier, certificate, &early)
 }
 
 /// Publish a completed member in one task, after its last reader has joined.
-pub fn member(context: &RoundContext, index: usize, certificate: &ShardCertificate) -> TokenStream {
-    let relation = &context.relations[index];
-    let mut layouts: Vec<_> = certificate
-        .layouts
-        .iter()
-        .filter(|entry| context.layouts[entry.index].relation == index)
-        .collect();
-    layouts.sort_unstable_by_key(|entry| owner(&certificate.layouts, entry.index));
-    let full = layouts.iter().map(|entry| {
-        cq_datalog_print::full_insert(
-            std::iter::once(&context.layouts[entry.index]),
-            &relation.next,
-        )
-    });
-    let extend = cq_datalog_print::all_extend(relation);
-    let swap = cq_datalog_print::delta_swap(relation);
-    let mut layouts: Vec<_> = certificate
-        .delta_layouts
-        .iter()
-        .filter(|entry| context.delta_layouts[entry.index].relation == index)
-        .collect();
-    layouts.sort_unstable_by_key(|entry| owner(&certificate.delta_layouts, entry.index));
-    let delta = relation
-        .delta_host
-        .as_ref()
-        .expect("checked IDB delta host");
-    let rebuild = layouts
-        .iter()
-        .map(|entry| cq_datalog_print::delta_rebuild(&context.delta_layouts[entry.index], delta));
-    quote!(#(#full)* #extend #swap #(#rebuild)*)
+/// It is a publication of its own (PS-After): it ticks the clock.
+pub fn member(
+    context: &RoundContext,
+    publication: &Publication,
+    certificate: &ShardCertificate,
+) -> TokenStream {
+    let next = &context.relations[publication.relation].next;
+    let threshold = certificate.threshold;
+    let inline = Ident::new("__cq_publication_inline", Span::mixed_site());
+    let operations = operations(context, publication, certificate, &inline);
+    let tick = cq_datalog_print::publication_tick();
+    quote!({
+        let #inline = #next.len() < #threshold || ::rayon::current_num_threads() == 1;
+        #tick
+        #operations
+    })
 }
 
-/// Formal rule DL-LayoutPublication: Publish each native layout through one exclusive owner and join before evaluation.
 pub fn publication(
     context: &RoundContext,
     barrier: &PublicationBarrier,
     certificate: &ShardCertificate,
+    excluded: &[usize],
 ) -> Vec<TokenStream> {
-    // Coverage comes from the checked barrier; owner labels determine task
-    // identity and scheduling order, independently of the producer's ordering.
-    let full_updates = barrier
-        .layouts
+    context.strata[barrier.stratum]
+        .publication
         .iter()
-        .map(|&index| {
-            let layout = &context.layouts[index];
-            let next = &context.relations[layout.relation].next;
-            (
-                owner(&certificate.layouts, index),
-                cq_datalog_print::full_insert(std::iter::once(layout), next),
-            )
+        .filter(|publication| {
+            barrier.relations.contains(&publication.relation)
+                && !excluded.contains(&publication.relation)
         })
-        .collect();
-    let delta_updates = barrier
-        .delta_layouts
-        .iter()
-        .map(|&index| {
-            let layout = &context.delta_layouts[index];
-            let delta = context.relations[layout.relation]
-                .delta_host
-                .as_ref()
-                .expect("checked IDB delta host");
-            (
-                owner(&certificate.delta_layouts, index),
-                cq_datalog_print::delta_rebuild(layout, delta),
-            )
-        })
-        .collect();
-    let relation_updates = barrier.relations.iter().map(|&index| {
-        let relation = &context.relations[index];
-        let extend = cq_datalog_print::all_extend(relation);
-        let swap = cq_datalog_print::delta_swap(relation);
-        quote!(#extend #swap)
-    });
-    let threshold = certificate.threshold;
+        .map(|publication| member(context, publication, certificate))
+        .collect()
+}
 
-    let inline = Ident::new("__cq_publication_inline", Span::mixed_site());
-    let lengths = barrier.relations.iter().map(|&index| {
-        let next = &context.relations[index].next;
-        quote!(#next.len())
-    });
-    let full_phase = layout_phase(full_updates, &inline);
-    let delta_phase = layout_phase(delta_updates, &inline);
-    // Both scopes join before proceeding: no next vector moves while a full
-    // layout reads it, and no observer or next evaluation sees partial maps.
-    vec![quote!({
-        let #inline = (0usize #(+ #lengths)*) < #threshold
-            || ::rayon::current_num_threads() == 1;
-        #full_phase
-        #(#relation_updates)*
-        #delta_phase
-    })]
+/// Formal rule P-DL-PublicationOrder: Execute the recorded operations in order, joining each layout operation before the next.
+fn operations(
+    context: &RoundContext,
+    publication: &Publication,
+    certificate: &ShardCertificate,
+    inline: &Ident,
+) -> TokenStream {
+    let relation = &context.relations[publication.relation];
+    let operations =
+        publication
+            .operations
+            .iter()
+            .map(|operation| match operation.kind.to_string().as_str() {
+                "full_layouts" => layout_phase(
+                    operation
+                        .layouts
+                        .iter()
+                        .map(|&index| {
+                            (
+                                owner(&certificate.layouts, index),
+                                cq_datalog_print::full_insert(
+                                    std::iter::once(&context.layouts[index]),
+                                    &relation.next,
+                                ),
+                            )
+                        })
+                        .collect(),
+                    inline,
+                ),
+                "delta_swap" => cq_datalog_print::delta_swap(relation),
+                "delta_rebuild" => {
+                    let delta = relation
+                        .delta_host
+                        .as_ref()
+                        .expect("checked IDB delta host");
+                    layout_phase(
+                        operation
+                            .layouts
+                            .iter()
+                            .map(|&index| {
+                                (
+                                    owner(&certificate.delta_layouts, index),
+                                    cq_datalog_print::delta_rebuild(
+                                        &context.delta_layouts[index],
+                                        delta,
+                                    ),
+                                )
+                            })
+                            .collect(),
+                        inline,
+                    )
+                }
+                _ => unreachable!("checked publication operation"),
+            });
+    quote!(#(#operations)*)
 }
 
 fn owner(ownership: &[LayoutOwnership], index: usize) -> usize {
@@ -139,11 +130,11 @@ fn owner(ownership: &[LayoutOwnership], index: usize) -> usize {
         .owner
 }
 
-fn layout_phase(mut updates: Vec<(usize, TokenStream)>, inline: &Ident) -> TokenStream {
+/// Formal rule DL-LayoutPublication: Give each recorded layout one exclusive owner and join before the next operation.
+fn layout_phase(updates: Vec<(usize, TokenStream)>, inline: &Ident) -> TokenStream {
     if updates.is_empty() {
         return TokenStream::new();
     }
-    updates.sort_unstable_by_key(|(owner, _)| *owner);
     let scope = Ident::new("__cq_publication_scope", Span::mixed_site());
     let tasks: Vec<_> = updates
         .iter()
@@ -180,7 +171,13 @@ mod tests {
             key: 1,
             name: syn::parse_quote!(layout),
             host,
-            provider,
+            // Printers read only the protocol; the token is irrelevant here.
+            provider: cq_lang_datalog_round::storage::Provider {
+                token: syn::parse_quote!(test_layout),
+                ty: provider,
+            },
+            hasher: cq_lang_datalog_round::storage::Hasher::None,
+            protocol: cq_lang_datalog_round::storage::LayoutProtocol::GroupedMap,
             maintenance: syn::parse_quote!(insert),
         }
     }
@@ -241,7 +238,8 @@ mod tests {
             syn::parse_quote!(::std::collections::HashMap<(u32,), Vec<(u32, u32)>>),
             syn::parse_quote!(map),
         );
-        let sharded = layout(provider, syn::parse_quote!(sharded));
+        let mut sharded = layout(provider, syn::parse_quote!(sharded));
+        sharded.protocol = cq_lang_datalog_round::storage::LayoutProtocol::Bulk;
         let insert = cq_datalog_print::insert_layout(&map, false);
         let bulk = quote!(
             sharded.extend_from(
@@ -276,40 +274,116 @@ mod tests {
 
     fn assert_bulk_delta(provider: syn::Type) {
         let mut layout = layout(provider, syn::parse_quote!(sharded));
+        layout.protocol = cq_lang_datalog_round::storage::LayoutProtocol::Bulk;
         layout.key = 3;
-        assert_eq!(
-            cq_datalog_print::delta_rebuild(&layout, &syn::parse_quote!(delta)).to_string(),
-            quote!({
-                sharded.clear();
-                sharded.extend_from(
-                    &delta,
-                    |row| (
-                        ::core::clone::Clone::clone(&row.1),
-                        ::core::clone::Clone::clone(&row.0),
-                        ::core::clone::Clone::clone(&row.2),
-                    ),
-                    |row| ()
-                );
-            })
-            .to_string(),
-        );
-        assert_eq!(
-            cq_datalog_print::insert_layout(&layout, false).to_string(),
-            quote!(
-                sharded.push(
-                    (::core::clone::Clone::clone(&row.1), ::core::clone::Clone::clone(&row.0), ::core::clone::Clone::clone(&row.2),),
-                    ()
-                );
-            ).to_string(),
-        );
+        let rebuilt: syn::Block = syn::parse2(cq_datalog_print::delta_rebuild(
+            &layout,
+            &syn::parse_quote!(delta),
+        ))
+        .unwrap();
+        // Statement order is significant: stale rows must be removed before filling.
+        let [
+            syn::Stmt::Expr(syn::Expr::MethodCall(clear), Some(_)),
+            syn::Stmt::Expr(syn::Expr::MethodCall(extend), Some(_)),
+        ] = rebuilt.stmts.as_slice()
+        else {
+            panic!("expected clear followed by extend_from");
+        };
+        assert_bulk_receiver(&clear.receiver);
+        assert_eq!(clear.method, "clear");
+        assert!(clear.args.is_empty());
+        assert_bulk_receiver(&extend.receiver);
+        assert_eq!(extend.method, "extend_from");
+        assert_eq!(extend.args.len(), 3);
+        let syn::Expr::Reference(rows) = &extend.args[0] else {
+            panic!("expected borrowed delta rows");
+        };
+        assert!(rows.mutability.is_none());
+        assert!(matches!(&*rows.expr, syn::Expr::Path(path) if path.path.is_ident("delta")));
+        for (projection, columns) in [
+            (&extend.args[1], &[1, 0, 2][..]),
+            (&extend.args[2], &[][..]),
+        ] {
+            let syn::Expr::Closure(closure) = projection else {
+                panic!("expected row projection closure");
+            };
+            assert_eq!(closure.inputs.len(), 1);
+            assert!(matches!(&closure.inputs[0], syn::Pat::Ident(row)
+                if row.ident == "row" && row.by_ref.is_none()
+                    && row.mutability.is_none() && row.subpat.is_none()));
+            assert_bulk_projection(&closure.body, columns);
+        }
+
+        let inserted: syn::Stmt =
+            syn::parse2(cq_datalog_print::insert_layout(&layout, false)).unwrap();
+        let syn::Stmt::Expr(syn::Expr::MethodCall(push), Some(_)) = inserted else {
+            panic!("expected one push statement");
+        };
+        assert_bulk_receiver(&push.receiver);
+        assert_eq!(push.method, "push");
+        assert_eq!(push.args.len(), 2);
+        assert_bulk_projection(&push.args[0], &[1, 0, 2]);
+        assert_bulk_projection(&push.args[1], &[]);
+    }
+
+    fn assert_bulk_receiver(receiver: &syn::Expr) {
+        assert!(matches!(receiver, syn::Expr::Path(path) if path.path.is_ident("sharded")));
+    }
+
+    fn assert_bulk_projection(mut projection: &syn::Expr, columns: &[u32]) {
+        // A single tail-expression block and tuple trailing commas do not change
+        // the projection. Do not discard statements or reorder tuple elements.
+        while let syn::Expr::Block(block) = projection {
+            assert!(block.label.is_none());
+            let [syn::Stmt::Expr(tail, None)] = block.block.stmts.as_slice() else {
+                panic!("expected a trivial projection block");
+            };
+            projection = tail;
+        }
+        let syn::Expr::Tuple(tuple) = projection else {
+            panic!("expected a tuple projection (including unit for empty payload)");
+        };
+        assert_eq!(tuple.elems.len(), columns.len());
+        for (element, column) in tuple.elems.iter().zip(columns) {
+            let syn::Expr::Call(clone) = element else {
+                panic!("expected cloned column");
+            };
+            let syn::Expr::Path(function) = &*clone.func else {
+                panic!("expected Clone::clone");
+            };
+            assert!(function.qself.is_none());
+            assert!(function.path.leading_colon.is_some());
+            assert_eq!(function.path.segments.len(), 4);
+            for (segment, expected) in function
+                .path
+                .segments
+                .iter()
+                .zip(["core", "clone", "Clone", "clone"])
+            {
+                assert_eq!(segment.ident, expected);
+                assert!(matches!(segment.arguments, syn::PathArguments::None));
+            }
+            assert_eq!(clone.args.len(), 1);
+            let syn::Expr::Reference(borrow) = &clone.args[0] else {
+                panic!("expected borrowed column");
+            };
+            assert!(borrow.mutability.is_none());
+            let syn::Expr::Field(field) = &*borrow.expr else {
+                panic!("expected positional row field");
+            };
+            assert!(matches!(&*field.base, syn::Expr::Path(path) if path.path.is_ident("row")));
+            assert!(matches!(&field.member, syn::Member::Unnamed(index) if index.index == *column));
+        }
     }
 
     #[test]
-    fn provider_detection_uses_only_last_path_segment() {
+    fn grouped_protocol_ignores_provider_spelling() {
         for provider in [
             syn::parse_quote!(ShardedLayout::HashMap<(u32,), Vec<(u32, u32)>>),
             syn::parse_quote!(RunLayout::HashMap<(u32,), Vec<(u32, u32)>>),
             syn::parse_quote!(HashMap<(u32,), Vec<RunLayout>>),
+            syn::parse_quote!(ShardedLayout<(u32,), (u32, u32)>),
+            syn::parse_quote!(RunLayout<(u32,), (u32, u32)>),
         ] {
             let layout = layout(provider, syn::parse_quote!(map));
             let printed =
@@ -324,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn certified_owners_drive_task_identity_and_order() {
+    fn certified_owners_name_tasks_without_reordering_them() {
         let ownership = [
             LayoutOwnership { index: 0, owner: 9 },
             LayoutOwnership { index: 1, owner: 3 },
@@ -335,10 +409,10 @@ mod tests {
         ];
         let printed = layout_phase(updates, &syn::parse_quote!(inline)).to_string();
         assert!(
-            printed.find("__cq_publish_layout_3").unwrap()
-                < printed.find("__cq_publish_layout_9").unwrap()
+            printed.find("__cq_publish_layout_9").unwrap()
+                < printed.find("__cq_publish_layout_3").unwrap()
         );
-        assert!(printed.find("first_map").unwrap() < printed.find("second_map").unwrap());
+        assert!(printed.find("second_map").unwrap() < printed.find("first_map").unwrap());
         assert_eq!(printed.matches("first_map").count(), 1);
         assert_eq!(printed.matches("second_map").count(), 1);
     }

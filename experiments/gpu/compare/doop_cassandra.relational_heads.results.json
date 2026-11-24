@@ -1,0 +1,835 @@
+{
+ "schema_version": 1,
+ "dataset": "/data/doop-bench/doop-data/cassandra (GPU); xalan, batik (CPU)",
+ "base_revision": "aad2670d (GPU main binary); 598f45c0 (CPU baseline binaries)",
+ "change": "DOOP heads written as variables; fork batch key holes project plain variables; Round holes record answer ownership (DL-AnswerOwnership); DL-InsertNew clones borrowed columns only for new rows; DL-Source range restriction by free variables",
+ "cause": {
+  "origin_commit": "0124315f (contract 7): removed cq_syntax::arithmetic::capture_binding, which admitted `*x` as capturable; added BE-RustRepresentation (rust_requires_host) and GPU-Representation (IStr columns encoded by symbols(IStr => DoopSymbols))",
+  "sequence_programs_with_host_maps": {
+   "4944b917": 0,
+   "aad2670d": 155,
+   "this_change": 0,
+   "total": 155
+  },
+  "row_dependent_bindings_aad2670d": {
+   "deref_head_copies": 303,
+   "other": 0
+  },
+  "host_stage_mechanism": "complete-row downloads (rows.rs GPU-Transfer) + upload_numeric_columns (H2D, numeric_bounds, headers/offsets/encode) per dispatch",
+  "top_holes_by_added_wall": [
+   {
+    "hole_main": 125,
+    "hole_4944b917": 131,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* to"
+    ],
+    "dispatch_launches_main": 607,
+    "dispatch_launches_4944b917": 275,
+    "wall_ms_main": 420.9,
+    "wall_ms_4944b917": 74.3,
+    "d2h_mb_main": 312.1,
+    "h2d_mb_main": 307.9,
+    "encoded_uploads_main": 1840
+   },
+   {
+    "hole_main": 131,
+    "hole_4944b917": 137,
+    "head": "instancefieldpointsto",
+    "host_maps_main": 3,
+    "head_bindings": [
+     "* heap",
+     "* fld",
+     "* baseheap"
+    ],
+    "dispatch_launches_main": 990,
+    "dispatch_launches_4944b917": 330,
+    "wall_ms_main": 345.0,
+    "wall_ms_4944b917": 18.8,
+    "d2h_mb_main": 78.8,
+    "h2d_mb_main": 101.6,
+    "encoded_uploads_main": 2950
+   },
+   {
+    "hole_main": 112,
+    "hole_4944b917": 118,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* to"
+    ],
+    "dispatch_launches_main": 664,
+    "dispatch_launches_4944b917": 309,
+    "wall_ms_main": 327.8,
+    "wall_ms_4944b917": 20.9,
+    "d2h_mb_main": 150.6,
+    "h2d_mb_main": 172.5,
+    "encoded_uploads_main": 1414
+   },
+   {
+    "hole_main": 129,
+    "hole_4944b917": 135,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* this"
+    ],
+    "dispatch_launches_main": 710,
+    "dispatch_launches_4944b917": 355,
+    "wall_ms_main": 330.8,
+    "wall_ms_4944b917": 42.6,
+    "d2h_mb_main": 75.7,
+    "h2d_mb_main": 99.7,
+    "encoded_uploads_main": 2470
+   },
+   {
+    "hole_main": 132,
+    "hole_4944b917": 138,
+    "head": "instancefieldpointsto",
+    "host_maps_main": 3,
+    "head_bindings": [
+     "* baseheap",
+     "* fld",
+     "* heap"
+    ],
+    "dispatch_launches_main": 835,
+    "dispatch_launches_4944b917": 220,
+    "wall_ms_main": 293.8,
+    "wall_ms_4944b917": 19.2,
+    "d2h_mb_main": 37.4,
+    "h2d_mb_main": 63.5,
+    "encoded_uploads_main": 2571
+   },
+   {
+    "hole_main": 115,
+    "hole_4944b917": 121,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* to",
+     "* heap"
+    ],
+    "dispatch_launches_main": 713,
+    "dispatch_launches_4944b917": 179,
+    "wall_ms_main": 240.6,
+    "wall_ms_4944b917": 12.6,
+    "d2h_mb_main": 139.7,
+    "h2d_mb_main": 131.5,
+    "encoded_uploads_main": 1132
+   },
+   {
+    "hole_main": 138,
+    "hole_4944b917": 144,
+    "head": "callgraphedge",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* invocation",
+     "* tomethod"
+    ],
+    "dispatch_launches_main": 1065,
+    "dispatch_launches_4944b917": 355,
+    "wall_ms_main": 250.8,
+    "wall_ms_4944b917": 41.6,
+    "d2h_mb_main": 102.9,
+    "h2d_mb_main": 69.0,
+    "encoded_uploads_main": 2464
+   },
+   {
+    "hole_main": 114,
+    "hole_4944b917": 120,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* to"
+    ],
+    "dispatch_launches_main": 710,
+    "dispatch_launches_4944b917": 355,
+    "wall_ms_main": 229.0,
+    "wall_ms_4944b917": 22.1,
+    "d2h_mb_main": 42.7,
+    "h2d_mb_main": 68.7,
+    "encoded_uploads_main": 1590
+   },
+   {
+    "hole_main": 124,
+    "hole_4944b917": 130,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* to",
+     "* heap"
+    ],
+    "dispatch_launches_main": 989,
+    "dispatch_launches_4944b917": 326,
+    "wall_ms_main": 229.2,
+    "wall_ms_4944b917": 23.5,
+    "d2h_mb_main": 69.5,
+    "h2d_mb_main": 64.6,
+    "encoded_uploads_main": 2124
+   },
+   {
+    "hole_main": 146,
+    "hole_4944b917": 152,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* this"
+    ],
+    "dispatch_launches_main": 666,
+    "dispatch_launches_4944b917": 333,
+    "wall_ms_main": 225.3,
+    "wall_ms_4944b917": 26.6,
+    "d2h_mb_main": 19.6,
+    "h2d_mb_main": 46.9,
+    "encoded_uploads_main": 1766
+   },
+   {
+    "hole_main": 119,
+    "hole_4944b917": 125,
+    "head": "arrayindexpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* baseheap"
+    ],
+    "dispatch_launches_main": 578,
+    "dispatch_launches_4944b917": 283,
+    "wall_ms_main": 195.2,
+    "wall_ms_4944b917": 20.4,
+    "d2h_mb_main": 19.9,
+    "h2d_mb_main": 46.8,
+    "encoded_uploads_main": 1346
+   },
+   {
+    "hole_main": 134,
+    "hole_4944b917": 140,
+    "head": "staticfieldpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* fld"
+    ],
+    "dispatch_launches_main": 484,
+    "dispatch_launches_4944b917": 242,
+    "wall_ms_main": 181.6,
+    "wall_ms_4944b917": 16.0,
+    "d2h_mb_main": 18.2,
+    "h2d_mb_main": 45.6,
+    "encoded_uploads_main": 912
+   },
+   {
+    "hole_main": 118,
+    "hole_4944b917": 124,
+    "head": "arrayindexpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* baseheap",
+     "* heap"
+    ],
+    "dispatch_launches_main": 448,
+    "dispatch_launches_4944b917": 223,
+    "wall_ms_main": 172.2,
+    "wall_ms_4944b917": 18.0,
+    "d2h_mb_main": 18.4,
+    "h2d_mb_main": 45.8,
+    "encoded_uploads_main": 856
+   },
+   {
+    "hole_main": 136,
+    "hole_4944b917": 142,
+    "head": "?",
+    "host_maps_main": 1,
+    "head_bindings": [
+     "* tomethod"
+    ],
+    "dispatch_launches_main": 710,
+    "dispatch_launches_4944b917": 355,
+    "wall_ms_main": 184.4,
+    "wall_ms_4944b917": 39.5,
+    "d2h_mb_main": 47.1,
+    "h2d_mb_main": 44.3,
+    "encoded_uploads_main": 1584
+   },
+   {
+    "hole_main": 116,
+    "hole_4944b917": 122,
+    "head": "varpointsto",
+    "host_maps_main": 2,
+    "head_bindings": [
+     "* heap",
+     "* to"
+    ],
+    "dispatch_launches_main": 626,
+    "dispatch_launches_4944b917": 306,
+    "wall_ms_main": 228.8,
+    "wall_ms_4944b917": 90.2,
+    "d2h_mb_main": 31.7,
+    "h2d_mb_main": 56.8,
+    "encoded_uploads_main": 1521
+   }
+  ]
+ },
+ "gpu": {
+  "device": "NVIDIA RTX 6000 Ada (sm_89), CUDA 13.0, other CPU work running",
+  "exactness": "exact full-tuple sets, all 26 outputs vs doop-mini (one run)",
+  "paired_runs_interleaved": {
+   "main": [
+    {
+     "fixpoint_s": 6.97712,
+     "gpu_evaluation_s": 7.26804
+    },
+    {
+     "fixpoint_s": 6.84918,
+     "gpu_evaluation_s": 7.132641
+    },
+    {
+     "fixpoint_s": 6.77507,
+     "gpu_evaluation_s": 7.069195
+    },
+    {
+     "fixpoint_s": 6.792816,
+     "gpu_evaluation_s": 7.097928
+    },
+    {
+     "fixpoint_s": 6.891421,
+     "gpu_evaluation_s": 7.176127
+    }
+   ],
+   "new": [
+    {
+     "fixpoint_s": 1.942106,
+     "gpu_evaluation_s": 2.240226
+    },
+    {
+     "fixpoint_s": 1.858981,
+     "gpu_evaluation_s": 2.144642
+    },
+    {
+     "fixpoint_s": 1.969869,
+     "gpu_evaluation_s": 2.31184
+    },
+    {
+     "fixpoint_s": 2.020238,
+     "gpu_evaluation_s": 2.318592
+    },
+    {
+     "fixpoint_s": 1.94026,
+     "gpu_evaluation_s": 2.250936
+    }
+   ]
+  },
+  "page_faults": {
+   "main": [
+    {
+     "major": 1,
+     "minor": 717775,
+     "maxrss_kb": 2389908
+    },
+    {
+     "major": 0,
+     "minor": 662576,
+     "maxrss_kb": 2390504
+    },
+    {
+     "major": 0,
+     "minor": 750678,
+     "maxrss_kb": 2389916
+    },
+    {
+     "major": 0,
+     "minor": 727745,
+     "maxrss_kb": 2389640
+    },
+    {
+     "major": 0,
+     "minor": 766851,
+     "maxrss_kb": 2390100
+    }
+   ],
+   "new": [
+    {
+     "major": 0,
+     "minor": 434781,
+     "maxrss_kb": 1741344
+    },
+    {
+     "major": 0,
+     "minor": 434831,
+     "maxrss_kb": 1741104
+    },
+    {
+     "major": 0,
+     "minor": 434782,
+     "maxrss_kb": 1740956
+    },
+    {
+     "major": 0,
+     "minor": 434774,
+     "maxrss_kb": 1741132
+    },
+    {
+     "major": 0,
+     "minor": 434851,
+     "maxrss_kb": 1741348
+    }
+   ]
+  },
+  "fixpoint": {
+   "ratio_mean": 0.2839,
+   "bootstrap_ci95": [
+    0.2762,
+    0.2921
+   ],
+   "main_median_s": 6.84918,
+   "new_median_s": 1.942106
+  },
+  "gpu_evaluation": {
+   "ratio_mean": 0.3153,
+   "bootstrap_ci95": [
+    0.3063,
+    0.3242
+   ],
+   "main_median_s": 7.132641,
+   "new_median_s": 2.250936
+  },
+  "4944b917_fixpoint_s": [
+   2.116609,
+   2.13838
+  ],
+  "nsys_main_aad2670d": {
+   "fixpoint_ms": 8160.986925,
+   "idle_pct": 80.09024800637087,
+   "idle_outside_api_ms": 4413.798299,
+   "kernel_sum_ms": 1319.580053,
+   "launches": 307461,
+   "copies": {
+    "D2H": {
+     "calls": 99304,
+     "MB": 1391.994752,
+     "ms": 171.813487
+    },
+    "H2D": {
+     "calls": 84233,
+     "MB": 1718.683224,
+     "ms": 110.596418
+    },
+    "D2D": {
+     "calls": 5553,
+     "MB": 233.416304,
+     "ms": 5.699895
+    }
+   },
+   "categories_ms": {
+    "other": 770.61807,
+    "join": 477.907645,
+    "sort_unique": 56.598125,
+    "merge_layout": 8.360072,
+    "admission": 6.096141
+   }
+  },
+  "nsys_4944b917": {
+   "fixpoint_ms": 2372.990024,
+   "idle_pct": 68.93010650937318,
+   "idle_outside_api_ms": 1172.276834,
+   "kernel_sum_ms": 699.037769,
+   "launches": 39447,
+   "copies": {
+    "D2H": {
+     "calls": 13572,
+     "MB": 0.243404,
+     "ms": 13.290642
+    },
+    "D2D": {
+     "calls": 7113,
+     "MB": 341.397472,
+     "ms": 7.47307
+    },
+    "H2D": {
+     "calls": 11901,
+     "MB": 0.362784,
+     "ms": 4.702679
+    }
+   },
+   "categories_ms": {
+    "join": 598.950275,
+    "sort_unique": 76.283553,
+    "merge_layout": 10.711443,
+    "other": 6.891013,
+    "admission": 6.201485
+   }
+  },
+  "nsys_this_change": {
+   "fixpoint_ms": 2291.483795,
+   "idle_pct": 75.87971648736884,
+   "idle_outside_api_ms": 1302.680375,
+   "kernel_sum_ms": 520.025113,
+   "launches": 34492,
+   "copies": {
+    "H2D": {
+     "calls": 9968,
+     "MB": 8.473048,
+     "ms": 4.190944
+    },
+    "D2H": {
+     "calls": 13079,
+     "MB": 0.240496,
+     "ms": 12.599765
+    },
+    "D2D": {
+     "calls": 5462,
+     "MB": 233.7534,
+     "ms": 5.589345
+    }
+   },
+   "categories_ms": {
+    "join": 441.505718,
+    "sort_unique": 57.457781,
+    "merge_layout": 8.199515,
+    "other": 6.998672,
+    "admission": 5.863427
+   }
+  },
+  "codec_launches_in_fixpoint": {
+   "main_encode": 44439,
+   "this_change_encode": 7
+  }
+ },
+ "cpu": {
+  "note": "five interleaved pairs, machine shared with other agents (load average 13-19); compute_seconds from the harness; minor faults and max RSS from /usr/bin/time",
+  "summary": {
+   "xalan/mini": {
+    "base_median_s": 10.637756,
+    "new_median_s": 9.961429,
+    "ratio_mean": 0.9852543237155332,
+    "ci95": [
+     0.9342933079907907,
+     1.0362153394402758
+    ],
+    "base_minor_faults_median": 457950,
+    "new_minor_faults_median": 459379,
+    "base_rss_kb_median": 1657884,
+    "new_rss_kb_median": 1660160
+   },
+   "xalan/mini-keyed": {
+    "base_median_s": 11.318656,
+    "new_median_s": 11.570875,
+    "ratio_mean": 0.9897836669092351,
+    "ci95": [
+     0.9669211280679068,
+     1.009791648393249
+    ],
+    "base_minor_faults_median": 459923,
+    "new_minor_faults_median": 458671,
+    "base_rss_kb_median": 1658020,
+    "new_rss_kb_median": 1660492
+   },
+   "batik/mini-par": {
+    "base_median_s": 7.113454,
+    "new_median_s": 7.33101,
+    "ratio_mean": 1.0083167820288093,
+    "ci95": [
+     0.9712062050759136,
+     1.0513391885765002
+    ],
+    "base_minor_faults_median": 2068800,
+    "new_minor_faults_median": 2082560,
+    "base_rss_kb_median": 6194008,
+    "new_rss_kb_median": 6322660
+   },
+   "batik/mini-par-keyed": {
+    "base_median_s": 8.429025,
+    "new_median_s": 11.307123,
+    "ratio_mean": 1.0623984391983015,
+    "ci95": [
+     0.9877812605155474,
+     1.2024380189995112
+    ],
+    "base_minor_faults_median": 2239410,
+    "new_minor_faults_median": 2106877,
+    "base_rss_kb_median": 6215300,
+    "new_rss_kb_median": 6235368
+   }
+  },
+  "runs": {
+   "xalan/mini": {
+    "base": [
+     {
+      "compute": 10.637756,
+      "minor": 457950,
+      "major": 1,
+      "rss_kb": 1657884
+     },
+     {
+      "compute": 9.111982,
+      "minor": 457978,
+      "major": 0,
+      "rss_kb": 1657864
+     },
+     {
+      "compute": 9.957955,
+      "minor": 457887,
+      "major": 0,
+      "rss_kb": 1658048
+     },
+     {
+      "compute": 11.724161,
+      "minor": 487431,
+      "major": 0,
+      "rss_kb": 1657572
+     },
+     {
+      "compute": 10.801885,
+      "minor": 457890,
+      "major": 0,
+      "rss_kb": 1658056
+     }
+    ],
+    "new": [
+     {
+      "compute": 9.961429,
+      "minor": 484603,
+      "major": 1,
+      "rss_kb": 1660200
+     },
+     {
+      "compute": 9.764568,
+      "minor": 503525,
+      "major": 0,
+      "rss_kb": 1660052
+     },
+     {
+      "compute": 10.164127,
+      "minor": 459379,
+      "major": 0,
+      "rss_kb": 1660160
+     },
+     {
+      "compute": 11.682321,
+      "minor": 458105,
+      "major": 0,
+      "rss_kb": 1659672
+     },
+     {
+      "compute": 9.733531,
+      "minor": 458190,
+      "major": 0,
+      "rss_kb": 1660392
+     }
+    ]
+   },
+   "xalan/mini-keyed": {
+    "base": [
+     {
+      "compute": 11.236412,
+      "minor": 458119,
+      "major": 0,
+      "rss_kb": 1658264
+     },
+     {
+      "compute": 11.049225,
+      "minor": 457769,
+      "major": 0,
+      "rss_kb": 1658020
+     },
+     {
+      "compute": 12.15201,
+      "minor": 459923,
+      "major": 0,
+      "rss_kb": 1657776
+     },
+     {
+      "compute": 13.380124,
+      "minor": 493878,
+      "major": 0,
+      "rss_kb": 1658048
+     },
+     {
+      "compute": 11.318656,
+      "minor": 463025,
+      "major": 0,
+      "rss_kb": 1657992
+     }
+    ],
+    "new": [
+     {
+      "compute": 11.014886,
+      "minor": 458671,
+      "major": 0,
+      "rss_kb": 1660496
+     },
+     {
+      "compute": 11.037905,
+      "minor": 458561,
+      "major": 0,
+      "rss_kb": 1660312
+     },
+     {
+      "compute": 12.174161,
+      "minor": 480184,
+      "major": 0,
+      "rss_kb": 1660348
+     },
+     {
+      "compute": 12.651597,
+      "minor": 459012,
+      "major": 0,
+      "rss_kb": 1660496
+     },
+     {
+      "compute": 11.570875,
+      "minor": 458353,
+      "major": 0,
+      "rss_kb": 1660492
+     }
+    ]
+   },
+   "batik/mini-par": {
+    "base": [
+     {
+      "compute": 6.773303,
+      "minor": 2032411,
+      "major": 1,
+      "rss_kb": 6257660
+     },
+     {
+      "compute": 6.802949,
+      "minor": 2068800,
+      "major": 0,
+      "rss_kb": 6108660
+     },
+     {
+      "compute": 7.113454,
+      "minor": 2014294,
+      "major": 1,
+      "rss_kb": 6194008
+     },
+     {
+      "compute": 10.34614,
+      "minor": 2212148,
+      "major": 0,
+      "rss_kb": 6146872
+     },
+     {
+      "compute": 10.712295,
+      "minor": 2282367,
+      "major": 0,
+      "rss_kb": 6229988
+     }
+    ],
+    "new": [
+     {
+      "compute": 7.33101,
+      "minor": 3036791,
+      "major": 1,
+      "rss_kb": 6356472
+     },
+     {
+      "compute": 6.786864,
+      "minor": 2071775,
+      "major": 0,
+      "rss_kb": 6322660
+     },
+     {
+      "compute": 6.771513,
+      "minor": 2077492,
+      "major": 0,
+      "rss_kb": 6205176
+     },
+     {
+      "compute": 10.681475,
+      "minor": 2082560,
+      "major": 0,
+      "rss_kb": 6341964
+     },
+     {
+      "compute": 10.468776,
+      "minor": 2245653,
+      "major": 0,
+      "rss_kb": 6255844
+     }
+    ]
+   },
+   "batik/mini-par-keyed": {
+    "base": [
+     {
+      "compute": 7.6471,
+      "minor": 2165824,
+      "major": 0,
+      "rss_kb": 6214688
+     },
+     {
+      "compute": 7.754888,
+      "minor": 2387773,
+      "major": 0,
+      "rss_kb": 6264536
+     },
+     {
+      "compute": 8.429025,
+      "minor": 2330620,
+      "major": 0,
+      "rss_kb": 6198640
+     },
+     {
+      "compute": 11.569126,
+      "minor": 2207115,
+      "major": 0,
+      "rss_kb": 6215300
+     },
+     {
+      "compute": 11.402986,
+      "minor": 2239410,
+      "major": 0,
+      "rss_kb": 6384812
+     }
+    ],
+    "new": [
+     {
+      "compute": 7.591194,
+      "minor": 2052832,
+      "major": 0,
+      "rss_kb": 6262496
+     },
+     {
+      "compute": 7.603878,
+      "minor": 2069074,
+      "major": 0,
+      "rss_kb": 6235368
+     },
+     {
+      "compute": 11.307123,
+      "minor": 2320265,
+      "major": 0,
+      "rss_kb": 6193596
+     },
+     {
+      "compute": 11.498771,
+      "minor": 2310557,
+      "major": 0,
+      "rss_kb": 6218560
+     },
+     {
+      "compute": 11.441827,
+      "minor": 2106877,
+      "major": 0,
+      "rss_kb": 6291824
+     }
+    ]
+   }
+  }
+ },
+ "verification": {
+  "cpu_check": "doop --check and doop-parallel --check on xalan and batik: mini, mini-keyed, mini-par, mini-par-keyed, ascent-par all check=ok (26 relations, full tuple sets)",
+  "gpu_tests": "cq-gpu-datalog: oracle 1 passed (1 ignored timing probe), symbols 1, heapalloc 1; srd-doop-gpu exactness 1 passed",
+  "features_datalog_workspace": "290 passed, 0 failed, 2 ignored",
+  "features_datalog_parallel_workspace": "105 passed, 0 failed",
+  "formal_check": "python3 doc/formal/check.py passed",
+  "expanded_gate": "tools/expanded_gate.py (598f45c0 version) --baseline 598f45c0 --targets all: 17 identical; 29 TPC-H/retail targets differ only by the same 5 bench-worker hunks (getrusage page-fault sampling added on main in 9152ebb1, which this branch predates); no query-expansion hunk",
+  "gpu_dumps": "CQ_GPU_SEQUENCE_DUMP: 155/155 doop-gpu Sequence programs with no host-graded map (aad2670d: 155/155 with 1-4)"
+ }
+}

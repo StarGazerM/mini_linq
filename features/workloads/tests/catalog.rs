@@ -1,3 +1,14 @@
+#![recursion_limit = "512"]
+
+// Compile the real aggregate routes in the default regression inventory.
+// Evidence must reach the core hole only after aggregate surface expansion.
+#[allow(unused_imports, unused_macros, dead_code)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+#[allow(dead_code)]
+#[path = "../src/queries/tpch/tpch_q06.rs"]
+mod q06_dispatch;
+
 use std::{
     collections::BTreeSet,
     fs,
@@ -528,6 +539,87 @@ fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
         implemented, full_queries,
         "coverage and executable catalogue differ"
     );
+}
+
+/// R-TpchEvidence premises: the checked document imports SF1 counts and uses
+/// file-authored compiler/table mappings. Every kernel must bind those inputs
+/// to the declared dbgen table, and counts retain their scale-free ordering
+/// (SF 0.1 counts: DuckDB v1.5.5 `CALL dbgen(sf=0.1)`).
+#[test]
+fn tpch_evidence_names_bind_their_tables_and_count_order_is_scale_free() {
+    use cq_workloads::tpch;
+    use std::collections::BTreeMap;
+
+    let mappings: serde_json::Value =
+        serde_json::from_str(include_str!("../authored/tpch-evidence.json")).unwrap();
+    let recorded: BTreeMap<String, String> =
+        serde_json::from_value(mappings["bindings"].clone()).unwrap();
+    let declarations = vec![syn::parse_quote!(relation Orders(o_orderkey: i64);)];
+    let declared = cq_workload_authored::tpch_evidence::load_sf1(&declarations)
+        .unwrap().unwrap();
+    let tables: BTreeMap<String, u64> = declared.document.relations.iter()
+        .map(|(name, relation)| (name.clone(), relation.rows.as_ref().unwrap().value.unwrap()))
+        .collect();
+    assert_eq!(
+        tables.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"],
+    );
+    let sf01 = BTreeMap::from([
+        ("customer", 15_000u64),
+        ("lineitem", 600_572),
+        ("nation", 25),
+        ("orders", 150_000),
+        ("part", 20_000),
+        ("partsupp", 80_000),
+        ("region", 5),
+        ("supplier", 1_000),
+    ]);
+    fn order(mut counts: Vec<(&str, u64)>) -> Vec<&str> {
+        counts.sort_by_key(|&(table, rows)| (std::cmp::Reverse(rows), table));
+        counts.into_iter().map(|(table, _)| table).collect()
+    }
+    assert_eq!(
+        order(tables.iter().map(|(table, &rows)| (table.as_str(), rows)).collect()),
+        order(sf01.into_iter().collect()),
+        "recorded SF1 counts order the tables differently from SF 0.1",
+    );
+
+    for case in tpch::CASES {
+        let mut source = fs::read_to_string(repository_root().join(case.rust_path)).unwrap();
+        // Loader schemas (`relation_loaders!`, `interned_relation_loaders!`)
+        // declare dbgen tables, not query relations; the driver never reads them.
+        if let Some(start) = source.find("relation_loaders! {") {
+            let end = start + source[start..].find("\n}").expect("loader block closes");
+            source.replace_range(start..end, "");
+        }
+        for (name, table) in &recorded {
+            let declared = source.contains(&format!("relation {name}("))
+                || source.contains(&format!("relation {name} =>"));
+            if !declared {
+                continue;
+            }
+            let mapped = source.contains(&format!("relation {name} => {table}("));
+            let bound = source.contains(&format!("let {name} = data.{table}.as_slice();"));
+            assert!(
+                mapped || bound,
+                "{}: {name} is declared but not bound to data.{table}",
+                case.name
+            );
+            for (index, _) in source.match_indices(&format!("let {name}")) {
+                let rest = &source[index + 4 + name.len()..];
+                if rest.starts_with([' ', ':', '=']) {
+                    // Zone configurations bind `&zones.<table>`, the ZoneRows
+                    // built from the whole `data.<table>`.
+                    assert!(
+                        rest.starts_with(&format!(" = data.{table}.as_slice();"))
+                            || rest.starts_with(&format!(" = &zones.{table};")),
+                        "{}: {name} is rebound to something other than data.{table}",
+                        case.name
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

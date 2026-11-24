@@ -3,14 +3,15 @@
 //! protocol rewrite checks validate Physical and Structures correspondence.
 //! The stacked consumer forwards union/anti and occurrence paths through its wrapper; canonicality analysis preserves anti's left facts and does not assume union arms are unique.
 //!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! Core blocks denote Set: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Rust is opaque, pure and total; placement follows free-variable binders within
+//! each branch, not written order. Fallback keeps its relational anti steps.
+//! Relational constraints use `where`; Rust `||` is not a relational operator.
+//! Only fallback construction proves union arms disjoint; literal values prove
+//! nothing, and no data keys or constraints are assumed.
 //!
 use cq_lang_physical as physical;
 use cq_lang_structures::Structure;
@@ -41,12 +42,12 @@ fn planned(input: TokenStream, options: cq_order::Options, reductions: bool) -> 
                     cq_reduce::Reductions::None
                 },
             };
-            let reduced = cq_reduce::compile(&plan, &options)?;
-            cq_reduce::check(&plan, &reduced, &options)?;
+            let reduced = cq_reduce::compile(&normal, &plan, &options)?;
+            cq_reduce::check(&normal, &plan, &reduced, &options)?;
             plan = reduced;
         }
-        let target = cq_elaborate::compile(&plan)?;
-        cq_elaborate::check(&plan, &target)?;
+        let (target, steps) = cq_relational_lowering::compile(&normal, &plan)?;
+        cq_relational_lowering::check(&normal, &plan, &target, &steps)?;
         Ok(target)
     })
     .into()
@@ -99,25 +100,21 @@ pub fn smallest(input: TokenStream) -> TokenStream {
     .into()
 }
 #[proc_macro]
-pub fn ordered_dedup(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, args| {
-        no_arguments(args)?;
-        cq_testkit::rewrites::ordered_dedup(source)
-    })
-    .into()
-}
-#[proc_macro]
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, args| {
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, args| {
         no_arguments(args)?;
+        let sorted_index: cq_lang_structures::Declaration = syn::parse_quote!(
+            sorted_index = SortedIndex<_, _> { reads [exact, membership], build typed };
+        );
         let mut target = source.clone();
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
-                keyed.ty = syn::parse_quote!(SortedIndex<_, _>);
+                keyed.provider = sorted_index.instance();
                 keyed.supports = None;
             }
         }
-        Ok(target)
+        target.structures.declare(&[sorted_index])?;
+        Ok((physical.clone(), target))
     })
     .into()
 }

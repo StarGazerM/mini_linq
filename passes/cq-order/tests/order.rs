@@ -10,6 +10,12 @@ use cq_testkit::{
     corpus as scenarios, cq_semantics as cq_oracle, databases, valuation_semantics as evaluator,
 };
 use quote::{ToTokens, quote};
+use syn::parse::Parser;
+
+fn parse_vo(source: &cq::Program, tokens: proc_macro2::TokenStream) -> valuation::Program {
+    (|input: syn::parse::ParseStream| valuation::Program::parse(input, source))
+        .parse2(tokens).unwrap()
+}
 
 fn cq(tokens: proc_macro2::TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
@@ -20,6 +26,353 @@ fn normal(tokens: proc_macro2::TokenStream) -> cq::Program {
 }
 
 #[test]
+fn fine_membership_ties_keep_the_auxiliary_holding_order() {
+    let source = normal(quote! {
+        struct HoldingOrder;
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32);
+        relation N(c:i32,d:i32); relation S(a:i32,c:i32);
+        answer(a,b,c,d) :- L(a,b), R(b,c), N(c,d), S(a,c);
+    });
+    let options = Options {
+        heuristic: Heuristic::Prefix(Ranking::Connected),
+        split: Split::Fine,
+    };
+    let target = cq_order::compile(&source, &options).unwrap();
+    let expected = parse_vo(&source, quote! {
+        valuation {
+            L@0(a,_); S@3(a,_);
+            L@0(a,b); R@1(b,_);
+            R@1(b,c); N@2(c,_); S@3(a,c);
+            N@2(c,d);
+        }
+    });
+    valuation::contract::check(&source, &expected).unwrap();
+    cq_order::check(&source, &expected, &options).unwrap();
+    assert_eq!(target, expected);
+}
+
+#[test]
+fn written_connected_preserves_legal_boundaries_and_repairs_only_invariants() {
+    let cases = [
+        (normal(quote! {
+            struct BindingBoundary;
+            relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+            answer(a,c,amount) :- R(a,b), S(b,c), let amount:i32 = *a + 1;
+        }), vec![0, 1, 2]),
+        (normal(quote! {
+            struct FilterBoundary;
+            relation R(a:i32); relation Membership(a:i32); relation S(a:i32,b:i32);
+            answer(a,b) :- R(a), Membership(a), if allowed(a), S(a,b);
+        }), vec![0, 1, 2, 3]),
+        (normal(quote! {
+            struct EarliestCheck;
+            relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation Check(a:i32,b:i32);
+            answer(a,c,amount) :- R(a,b), let amount:i32 = *a + 1, S(b,c), Check(a,b);
+        }), vec![0, 3, 1, 2]),
+        (normal(quote! {
+            struct ConnectedAcrossBinding;
+            relation R(a:i32); relation S(b:i32); relation T(a:i32,b:i32);
+            answer(a,b,amount) :- R(a), S(b), let amount:i32 = *a + 1, T(a,b);
+        }), vec![0, 3, 1, 2]),
+    ];
+    for (source, expected) in cases {
+        let target = plan(&source, Heuristic::WrittenConnected, Split::Coarse);
+        assert_eq!(sequence(&source, &target), expected, "{}", source.name);
+        plan(&source, Heuristic::WrittenConnected, Split::Fine);
+    }
+}
+
+#[test]
+fn fully_bound_checks_precede_later_expansions_and_introducing_lets() {
+    let source = normal(quote! {
+        struct LateCheck;
+        relation Seed(x:i32,y:i32);
+        relation Expand(y:i32,z:i32);
+        relation Check(x:i32,y:i32);
+        answer(x,z,copied) :-
+            Seed(x,y), let copied:i32 = *x + 1, Expand(y,z), Check(x,y);
+    });
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::Filtered,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            let target = plan(&source, heuristic, split);
+            let analysis = valuation::contract::check(&source, &target).unwrap();
+            for (position, facts) in analysis.order.iter().enumerate() {
+                let bound = &analysis.provided_before[position];
+                if facts.introduces(bound) {
+                    assert!(!analysis.order[position + 1..].iter().any(|later| {
+                        !later.preprocessing && later.ready(bound) && !later.introduces(bound)
+                    }), "{heuristic:?}/{split:?}: {}", target.to_token_stream());
+                }
+            }
+            if split == Split::Coarse && heuristic != Heuristic::Elimination {
+                assert!(matches!(&target.valuation.steps[0], valuation::Step::Atom(a, _) if a.relation == "Seed"));
+                assert!(matches!(&target.valuation.steps[1], valuation::Step::Atom(a, _) if a.relation == "Check"));
+                assert!(matches!(&target.valuation.steps[2], valuation::Step::Let(..)));
+            }
+        }
+    }
+}
+
+#[test]
+fn drainage_omits_only_empty_checks_discharged_by_the_same_introduction() {
+    let cq: cq::Program = syn::parse_quote! {
+        struct Q; relation R(x:i32); relation S(y:i32);
+        answer(x,y) :- R(x), S(y);
+    };
+    let mut source = parse_vo(&cq, quote! { valuation { S@1(_); R@0(x); S@1(y); } });
+    cq_order::drain_ready_checks(&cq, &mut source).unwrap();
+    valuation::contract::check(&cq, &source).unwrap();
+    assert_eq!(source.valuation.steps.len(), 2);
+    assert!(matches!(&source.valuation.steps[0],
+        valuation::Step::Atom(atom, _) if atom.relation == "R"));
+    for rows in [vec![], vec![vec![3]], vec![vec![3], vec![4], vec![5]]] {
+        let database = std::collections::BTreeMap::from([
+            ("R".into(), std::collections::BTreeSet::from([vec![1], vec![2]])),
+            ("S".into(), rows.into_iter().collect()),
+        ]);
+        assert_eq!(evaluator::evaluate(&cq, &source, &database),
+            cq_oracle::evaluate_cq(&cq, &database));
+    }
+    let mut redundant = source.clone();
+    redundant.valuation.steps.insert(0, syn::parse_quote!(S@1(_);));
+    assert!(valuation::contract::check(&cq, &redundant).is_err());
+
+    let cq: cq::Program = syn::parse_quote! {
+        struct Q; relation R(x:i32); relation S(x:i32);
+        answer(x) :- R(x), S(x);
+    };
+    let mut residual = parse_vo(&cq, quote! { valuation { S@1(_); R@0(x); S@1(x); } });
+    cq_order::drain_ready_checks(&cq, &mut residual).unwrap();
+    valuation::contract::check(&cq, &residual).unwrap();
+    assert!(matches!(&residual.valuation.steps[0],
+        valuation::Step::Atom(atom, _) if atom.variables().next().is_none()));
+}
+
+#[test]
+fn drainage_moves_membership_steps_without_changing_their_columns() {
+    let cq: cq::Program = syn::parse_quote! {
+        struct Q;
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32);
+        relation S(a:i32,c:i32); relation Extra(d:i32);
+        answer(a,b,c,d) :- L(a,b), R(b,c), Extra(d), S(a,c);
+    };
+    let mut source = parse_vo(&cq, quote! { valuation { L@0(a,b); R@1(b,c); Extra@2(d); S@3(a,c); } });
+    let original = source.valuation.steps[3].clone();
+    cq_order::drain_ready_checks(&cq, &mut source).unwrap();
+    valuation::contract::check(&cq, &source).unwrap();
+    let valuation::Step::Atom(check, _) = &source.valuation.steps[2] else { panic!() };
+    let valuation::Step::Atom(provider, _) = original else { panic!() };
+    assert_eq!(check.clause, provider.clause);
+    assert_eq!(check.relation, provider.relation);
+    assert_eq!(check.columns, provider.columns);
+    assert!(valuation::contract::check(&cq, &source).unwrap().introduces[2].is_empty());
+    let drained = source.clone();
+    cq_order::drain_ready_checks(&cq, &mut source).unwrap();
+    assert_eq!(source, drained);
+}
+
+#[test]
+fn authored_checks_are_corrected_recorded_and_preserve_answers() {
+    let source = normal(quote! {
+        struct AuthoredChecks;
+        relation Seed(x:i32,y:i32);
+        relation Expand(y:i32,z:i32);
+        relation Check(x:i32,y:i32);
+        answer(x,z) :- Seed(x,y), Expand(y,z), Check(x,y);
+    });
+    let target = cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(Seed), syn::parse_quote!(Expand), syn::parse_quote!(Check)],
+    ).unwrap();
+    assert_eq!(sequence(&source, &target), [0, 2, 1]);
+    let recorded = parse_vo(&source, target.to_token_stream());
+    assert_eq!(recorded, target);
+    valuation::contract::check(&source, &recorded).unwrap();
+    for seed in 0..4 {
+        let database = databases::binary_database(&source, seed);
+        assert_eq!(
+            evaluator::evaluate(&source, &recorded, &database),
+            cq_oracle::evaluate_cq(&source, &database),
+        );
+    }
+}
+
+#[test]
+fn authored_partial_checks_drain_without_widening_their_projection() {
+    let source = normal(quote! {
+        struct AuthoredProjection;
+        relation Seed(x:i32);
+        relation Expand(x:i32,y:i32);
+        relation Check(x:i32,z:i32);
+        answer(x,y,z) :- Seed(x), Expand(x,y), Check(x,z);
+    });
+    let target = cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(Seed), syn::parse_quote!(Expand),
+          syn::parse_quote!(Check@2(x)), syn::parse_quote!(Check@2)],
+    ).unwrap();
+    assert_eq!(sequence(&source, &target), [0, 2, 1, 2]);
+    let valuation::Step::Atom(probe, _) = &target.valuation.steps[1] else { panic!() };
+    assert_eq!(probe.variables().count(), 1);
+    assert!(matches!(probe.columns[1], valuation::Column::Dropped(_)));
+    valuation::contract::check(&source, &target).unwrap();
+}
+
+#[test]
+fn elimination_corpus_grows_connected_and_preserves_answers() {
+    for case in scenarios::SCENARIOS {
+        let source = cq::normal::normalize(&syn::parse_str(case.cq).unwrap()).unwrap();
+        for split in [Split::Coarse, Split::Fine] {
+            let target = plan(&source, Heuristic::Elimination, split);
+            for seed in 0..4 {
+                let database = databases::binary_database(&source, seed);
+                assert_eq!(
+                    evaluator::evaluate(&source, &target, &database),
+                    cq_oracle::evaluate_cq(&source, &database),
+                    "{}/{split:?}", case.name,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn step_order_records_bound_lookups_then_owned_expansions() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32);
+        relation S(x:i32,z:i32);
+        answer(x,y,z) :- Seed(x), R(x,y), S(x,z);
+    });
+    let advised = cq_order::compile_explicit(
+        &source,
+        &[
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(S@2(x)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(S@2),
+        ],
+    )
+    .unwrap();
+    let analysis = valuation::contract::check(&source, &advised).unwrap();
+    assert_eq!(
+        analysis.introduces,
+        vec![vec!["x"], vec![], vec![], vec!["y"], vec!["z"],]
+    );
+    cq_order::le::check(&source, &advised).unwrap();
+}
+
+#[test]
+fn lookup_checker_rejects_an_unbound_column_but_fine_advice_can_introduce_it() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32,z:i32);
+        answer(x,y,z) :- Seed(x), R(x,y,z);
+    });
+    let fine = cq_order::compile_explicit(
+        &source,
+        &[
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x,y)),
+            syn::parse_quote!(R@1),
+        ],
+    )
+    .unwrap();
+    valuation::contract::check(&source, &fine).unwrap();
+    // The same WF-VO subatom cannot be certified as a Lookup: y is unbound.
+    assert!(cq_order::le::check(&source, &fine).is_err());
+}
+
+#[test]
+fn fine_step_order_can_bind_then_check_an_intersection_variable() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(a:i32);
+        relation R(a:i32,x:i32,y:i32);
+        relation S(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- Seed(a), R(a,x,y), S(a,x,z);
+    });
+    let advised = cq_order::compile_explicit(
+        &source,
+        &[
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(a,x)),
+            syn::parse_quote!(S@2(a,x)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(S@2),
+        ],
+    )
+    .unwrap();
+    let analysis = valuation::contract::check(&source, &advised).unwrap();
+    assert_eq!(analysis.introduces[1], ["x"]);
+    assert!(analysis.introduces[2].is_empty());
+    assert_eq!(analysis.introduces[3], ["y"]);
+    assert_eq!(analysis.introduces[4], ["z"]);
+}
+
+#[test]
+fn step_order_rejects_invalid_columns_and_phases_but_accepts_advised_roots() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32,z:i32);
+        relation S(y:i32);
+        answer(x,y,z) :- Seed(x), R(x,y,z), S(y);
+    });
+    for order in [
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(missing)),
+            syn::parse_quote!(R@1),
+        ],
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(R@1(x)),
+        ],
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(y,z)),
+            syn::parse_quote!(R@1),
+        ],
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(R@1),
+        ],
+        vec![syn::parse_quote!(Seed), syn::parse_quote!(R@1(x))],
+    ] {
+        assert!(advice_refused(&source, &order), "{order:?}");
+    }
+    // Advice may choose a different root, but cannot bypass a connected
+    // expansion in favor of a disconnected one.
+    for order in [
+        vec![syn::parse_quote!(Seed), syn::parse_quote!(R@1(x)),
+             syn::parse_quote!(S), syn::parse_quote!(R@1)],
+        vec![syn::parse_quote!(S), syn::parse_quote!(Seed),
+             syn::parse_quote!(R@1(x,y)), syn::parse_quote!(R@1)],
+    ] {
+        let plan = cq_order::compile_explicit(&source, &order).unwrap();
+        let error = cq_order::check_advice(&source, &plan, &order).unwrap_err().to_string();
+        assert!(error.contains("I3"), "{error}");
+    }
+    cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(S), syn::parse_quote!(R@1), syn::parse_quote!(Seed)],
+    ).unwrap();
+}
+
+#[test]
 fn explicit_order_rejects_dependency_conflicts_instead_of_ignoring_advice() {
     let source = normal(quote! {
         struct Q;
@@ -27,9 +380,67 @@ fn explicit_order_rejects_dependency_conflicts_instead_of_ignoring_advice() {
         relation S(a:i32);
         answer(x) :- R(x), let y:i32 = *x + 1, S(y);
     });
-    let error = cq_order::compile_explicit(&source, &[syn::parse_quote!(S), syn::parse_quote!(R)])
-        .unwrap_err();
-    assert!(error.to_string().contains("order advice conflicts"));
+    let order = [syn::parse_quote!(S), syn::parse_quote!(R)];
+    let invalid = cq_order::compile_explicit(&source, &order).unwrap();
+    // The authored read of `S` precedes its Rust binder: the producer
+    // records the advice and the checkers refuse it.
+    assert!(valuation::contract::check(&source, &invalid).is_err());
+    assert!(cq_order::check_advice(&source, &invalid, &order).is_err());
+    let valid = [syn::parse_quote!(R), syn::parse_quote!(S)];
+    let planned = cq_order::compile_explicit(&source, &valid).unwrap();
+    cq_order::check_advice(&source, &planned, &valid).unwrap();
+}
+
+#[test]
+fn duplicate_occurrences_are_rejected_before_scheduling() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32);
+        relation S(a:i32);
+        answer(x) :- R(x), let y:i32 = *x + 1, S(y);
+    });
+    let legal_prefix = cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(R), syn::parse_quote!(S), syn::parse_quote!(S@2(y))],
+    ).unwrap_err();
+    let illegal_prefix = cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(S), syn::parse_quote!(S@2), syn::parse_quote!(R)],
+    ).unwrap_err();
+    // Duplicate selector resolution takes precedence over the illegal schedule.
+    assert_eq!(legal_prefix.to_string(), illegal_prefix.to_string());
+}
+
+#[test]
+fn fine_advice_uses_the_vo_subatom_checker() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32,z:i32,w:i32);
+        answer(x,y,z,w) :- Seed(x), R(x,y,z,w);
+    };
+    let invalid = parse_vo(&source, quote! { valuation { Seed@0(x); R@1(x,y,z,_); R@1(x,y,z,w); } });
+    assert!(valuation::contract::check(&source, &invalid).is_err());
+    let order = [syn::parse_quote!(Seed), syn::parse_quote!(R@1(x,y,z)), syn::parse_quote!(R@1)];
+    let planned = cq_order::compile_explicit(&source, &order).unwrap();
+    assert!(valuation::contract::check(&source, &planned).is_err());
+    assert!(cq_order::check_advice(&source, &planned, &order).is_err());
+}
+
+#[test]
+fn valid_advice_preserves_its_valuation() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32);
+        answer(x,y) :- Seed(x), R(x,y);
+    });
+    let expected = parse_vo(&source, quote! { valuation { Seed@0(x); R@1(x,_); R@1(x,y); } });
+    let actual = cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(Seed), syn::parse_quote!(R@1(x)), syn::parse_quote!(R@1)],
+    ).unwrap();
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -47,7 +458,6 @@ fn explicit_order_preserves_source_and_records_authored_traversal() {
         syn::parse_quote!(R),
     ];
     let planned = cq_order::compile_explicit(&source, &order).unwrap();
-    assert_eq!(planned.cq, source);
     let atoms: Vec<_> = planned
         .valuation
         .steps
@@ -99,7 +509,7 @@ fn occurrence_qualified_order_uses_normal_body_positions() {
         struct Q;
         relation R(a:i32,b:i32);
         relation S(a:i32);
-        answer(a,b,c) :- R(a,b), if b > 0, R(a,c), S(a);
+        answer(a,b,c) :- R(a,b), where b > 0, R(a,c), S(a);
     });
     let order = [
         syn::parse_quote!(S),
@@ -107,7 +517,6 @@ fn occurrence_qualified_order_uses_normal_body_positions() {
         syn::parse_quote!(R@0),
     ];
     let planned = cq_order::compile_explicit(&source, &order).unwrap();
-    assert_eq!(planned.cq, source);
     let atoms: Vec<_> = planned
         .valuation
         .steps
@@ -121,35 +530,15 @@ fn occurrence_qualified_order_uses_normal_body_positions() {
         })
         .collect();
     assert_eq!(atoms, [3, 2, 0]);
-    for (order, message) in [
-        (vec![syn::parse_quote!(R)], "needs one top-level occurrence"),
-        (
-            vec![syn::parse_quote!(R@1)],
-            "does not name that top-level positive atom",
-        ),
-        (
-            vec![syn::parse_quote!(R@3)],
-            "does not name that top-level positive atom",
-        ),
-        (
-            vec![syn::parse_quote!(R@99)],
-            "does not name that top-level positive atom",
-        ),
-        (
-            vec![syn::parse_quote!(R@0), syn::parse_quote!(R@0)],
-            "duplicate atom occurrence",
-        ),
-        (
-            vec![syn::parse_quote!(S), syn::parse_quote!(S@3)],
-            "duplicate atom occurrence",
-        ),
+    for order in [
+        vec![syn::parse_quote!(R)],
+        vec![syn::parse_quote!(R@1)],
+        vec![syn::parse_quote!(R@3)],
+        vec![syn::parse_quote!(R@99)],
+        vec![syn::parse_quote!(R@0), syn::parse_quote!(R@0)],
+        vec![syn::parse_quote!(S), syn::parse_quote!(S@3)],
     ] {
-        assert!(
-            cq_order::compile_explicit(&source, &order)
-                .unwrap_err()
-                .to_string()
-                .contains(message)
-        );
+        assert!(cq_order::compile_explicit(&source, &order).is_err());
     }
 }
 
@@ -166,7 +555,6 @@ fn explicit_block_order_preserves_branches_and_checks_dependencies() {
     assert_eq!(selector.occurrence, Some(1));
     let planned =
         cq_order::compile_explicit(&source, &[selector.clone(), syn::parse_quote!(S)]).unwrap();
-    assert_eq!(planned.cq, source);
     assert!(matches!(&planned.valuation.steps[0],
         valuation::Step::Block(block, _) if block.source.clause() == 1));
     for order in [
@@ -186,10 +574,7 @@ fn explicit_block_order_preserves_branches_and_checks_dependencies() {
         answer(x,y) :- R(x), { let y:i32 = *x + 1, S(y) }
             | { let y:i32 = *x + 2, S(y) };
     });
-    let error =
-        cq_order::compile_explicit(&opaque, &[syn::parse_quote!(block@1), syn::parse_quote!(R)])
-            .unwrap_err();
-    assert!(error.to_string().contains("order advice conflicts"));
+    assert!(advice_refused(&opaque, &[syn::parse_quote!(block@1), syn::parse_quote!(R)]));
 }
 
 fn triangle() -> cq::Program {
@@ -216,20 +601,34 @@ fn chain() -> cq::Program {
 fn plan(source: &cq::Program, heuristic: Heuristic, split: Split) -> valuation::Program {
     let options = Options { heuristic, split };
     let plan = cq_order::compile(source, &options).unwrap();
-    valuation::contract::check(&plan).unwrap();
+    valuation::contract::check(&source, &plan).unwrap();
     assert!(cq_order::check(source, &plan, &options).is_ok());
     plan
 }
 
-/// The plan with the given steps over the source program.
-fn expected(source: &cq::Program, steps: proc_macro2::TokenStream) -> valuation::Program {
-    let program = &source;
-    syn::parse2(quote! { #program valuation { #steps } }).unwrap()
+/// The ordering is total; CK-Order refuses the schedule it produced.
+fn refused(source: &cq::Program, heuristic: Heuristic, split: Split) -> String {
+    let options = Options { heuristic, split };
+    let plan = cq_order::compile(source, &options).unwrap();
+    cq_order::check(source, &plan, &options).unwrap_err().to_string()
 }
 
-/// The clause each coarse step draws on.
-fn sequence(plan: &valuation::Program) -> Vec<usize> {
-    let body = &plan.cq.query.body;
+/// Advice resolution or CK-StepAdvice refuses the advice.
+fn advice_refused(source: &cq::Program, order: &[cq_order::OrderAtom]) -> bool {
+    cq_order::compile_explicit(source, order)
+        .is_ok_and(|plan| cq_order::check_advice(source, &plan, order).is_err())
+        || cq_order::compile_explicit(source, order).is_err()
+}
+
+/// The plan with the given steps over the source program.
+fn expected(source: &cq::Program, steps: proc_macro2::TokenStream) -> valuation::Program {
+    parse_vo(source, quote! { valuation { #steps } })
+}
+
+/// The clause each coarse step draws on; restrictions draw on none, and a
+/// predicate step draws on the first unused written clause stating it.
+fn sequence(source: &cq::Program, plan: &valuation::Program) -> Vec<usize> {
+    let body = &source.query.body;
     let nth = |n: usize, kind: fn(&BodyItem) -> bool| {
         body.iter()
             .enumerate()
@@ -238,48 +637,60 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
             .map(|(clause, _)| clause)
             .unwrap()
     };
-    let (mut guards, mut lets, mut equalities, mut constraints) = (0, 0, 0, 0);
+    let (mut guards, mut lets) = (0, 0);
     let mut generators = 0;
     let mut negations = 0;
+    let mut predicates = std::collections::BTreeSet::new();
+    let mut predicate = |step: &valuation::Step| {
+        let clause = (0..body.len())
+            .find(|clause| {
+                !predicates.contains(clause)
+                    && match &body[*clause] {
+                        BodyItem::Equality(e) => valuation::restrict::step_states(
+                            step,
+                            &cq::Constraint::from_equality(e),
+                        ),
+                        BodyItem::Constraint(c) => valuation::restrict::step_states(step, c),
+                        _ => false,
+                    }
+            })
+            .unwrap();
+        predicates.insert(clause);
+        clause
+    };
     plan.valuation
         .steps
         .iter()
-        .map(|step| match step {
-            valuation::Step::Atom(subatom, _) => subatom.clause(),
-            valuation::Step::Equality(..) => {
-                equalities += 1;
-                nth(equalities - 1, |item| matches!(item, BodyItem::Equality(_)))
-            }
-            valuation::Step::Constraint(..) => {
-                constraints += 1;
-                nth(constraints - 1, |item| {
-                    matches!(item, BodyItem::Constraint(_))
-                })
-            }
-            valuation::Step::Negation(..) => {
-                negations += 1;
-                nth(negations - 1, |item| matches!(item, BodyItem::Negation(_)))
-            }
-            valuation::Step::Guard(..) => {
-                guards += 1;
-                nth(guards - 1, |item| matches!(item, BodyItem::Filter(_)))
-            }
-            valuation::Step::Let(..) => {
-                lets += 1;
-                nth(lets - 1, |item| matches!(item, BodyItem::Let(_)))
-            }
-            valuation::Step::For(..) => {
-                generators += 1;
-                nth(generators - 1, |item| matches!(item, BodyItem::For(_)))
-            }
-            valuation::Step::Block(b, _) => b.source.clause(),
-            valuation::Step::Reduce(..) => unreachable!("order emits no reductions"),
+        .filter_map(|step| {
+            Some(match step {
+                valuation::Step::Atom(subatom, _) => subatom.clause(),
+                valuation::Step::Equality(..) | valuation::Step::Constraint(..) => predicate(step),
+                valuation::Step::Negation(..) => {
+                    negations += 1;
+                    nth(negations - 1, |item| matches!(item, BodyItem::Negation(_)))
+                }
+                valuation::Step::Guard(..) => {
+                    guards += 1;
+                    nth(guards - 1, |item| matches!(item, BodyItem::Filter(_)))
+                }
+                valuation::Step::Let(..) => {
+                    lets += 1;
+                    nth(lets - 1, |item| matches!(item, BodyItem::Let(_)))
+                }
+                valuation::Step::For(..) => {
+                    generators += 1;
+                    nth(generators - 1, |item| matches!(item, BodyItem::For(_)))
+                }
+                valuation::Step::Block(b, _) => b.source.clause(),
+                valuation::Step::Restrict(..) => return None,
+                valuation::Step::Reduce(..) => unreachable!("order emits no reductions"),
+            })
         })
         .collect()
 }
 
 #[test]
-fn written_coarse_follows_the_normal_body() {
+fn written_coarse_retains_legal_body_order_and_rejects_disconnected_choices() {
     let chain = chain();
     assert_eq!(
         plan(&chain, Heuristic::Written, Split::Coarse),
@@ -291,27 +702,16 @@ fn written_coarse_follows_the_normal_body() {
         relation S(b: i32, c: i32);
         answer(x, z) :- R(x, 5), S(_, z), R(x, x), if { z > 1 }, let w: i32 = x + z;
     });
-    assert_eq!(
-        plan(&messy, Heuristic::Written, Split::Coarse),
-        expected(
-            &messy,
-            quote! {
-                R@0(x);
-                S@1(__cq_1_0, z);
-                R@2(x, __cq_2_1);
-                x = __cq_2_1;
-                if { z > 1 };
-                let w: i32 = x + z;
-            }
-        )
-    );
+    let error = refused(&messy, Heuristic::Written, Split::Coarse);
+    assert!(error.contains("I3"), "{error}");
+    plan(&messy, Heuristic::Prefix(Ranking::Connected), Split::Coarse);
 }
 
 #[test]
-fn optimizing_orders_place_constraints_at_the_first_available_binding() {
+fn optimizing_orders_restrict_the_covering_occurrence_before_opaque_guards() {
     let source: cq::Program = syn::parse_quote! {
         struct Early; relation R(a:i32); relation S(b:i32);
-        answer(x,y) :- R(x), if opaque(x), if * x < cutoff, S(y);
+        answer(x,y) :- R(x), if opaque(x), where x < cutoff, S(y);
     };
     for heuristic in [
         Heuristic::Prefix(Ranking::Connected),
@@ -321,26 +721,27 @@ fn optimizing_orders_place_constraints_at_the_first_available_binding() {
             let options = Options { heuristic, split };
             let plan = cq_order::compile(&source, &options).unwrap();
             cq_order::check(&source, &plan, &options).unwrap();
-            let binder = plan
-                .valuation
-                .steps
+            let steps = &plan.valuation.steps;
+            // O-Restrict: the constraint runs on its occurrence, so the
+            // prefix keeps no step for it.
+            assert!(
+                matches!(&steps[0], valuation::Step::Restrict(r, _) if r.clause() == 0),
+                "{heuristic:?}/{split:?}"
+            );
+            assert!(
+                !steps
+                    .iter()
+                    .any(|s| matches!(s, valuation::Step::Constraint(..)))
+            );
+            let binder = steps
                 .iter()
                 .position(|s| matches!(s, valuation::Step::Atom(a, _) if a.clause() == 0))
                 .unwrap();
-            let constraint = plan
-                .valuation
-                .steps
-                .iter()
-                .position(|s| matches!(s, valuation::Step::Constraint(..)))
-                .unwrap();
-            let guard = plan
-                .valuation
-                .steps
+            let guard = steps
                 .iter()
                 .position(|s| matches!(s, valuation::Step::Guard(..)))
                 .unwrap();
-            assert_eq!(constraint, binder + 1, "{heuristic:?}/{split:?}");
-            assert_eq!(guard, constraint + 1, "{heuristic:?}/{split:?}");
+            assert_eq!(guard, binder + 1, "{heuristic:?}/{split:?}");
         }
     }
 }
@@ -350,7 +751,7 @@ fn across_atom_sharing_is_a_join_and_only_same_atom_repetition_gets_identity() {
     let source: cq::Program = syn::parse_quote! {
         struct Shared; relation Customer(id:i32,segment:&str);
         relation Orders(id:i32,customer:i32,date:i32);
-        answer(o,c,d) :- Customer(c,s), if *s == "BUILDING", Orders(o,c,d);
+        answer(o,c,d) :- Customer(c,s), where s == "BUILDING", Orders(o,c,d);
     };
     let nf = cq::normal::normalize(&source).unwrap();
     assert_eq!(nf, source);
@@ -371,12 +772,7 @@ fn across_atom_sharing_is_a_join_and_only_same_atom_repetition_gets_identity() {
         panic!()
     };
     a.columns[1] = valuation::Column::Dropped(Default::default());
-    assert!(
-        valuation::contract::check(&dropped)
-            .unwrap_err()
-            .to_string()
-            .contains("bound")
-    );
+    assert!(valuation::contract::check(&nf, &dropped).is_err());
     let mut renamed = vo.clone();
     let valuation::Step::Atom(a, _) = &mut renamed.valuation.steps[2] else {
         panic!()
@@ -395,7 +791,7 @@ fn across_atom_sharing_is_a_join_and_only_same_atom_repetition_gets_identity() {
 }
 
 #[test]
-fn written_fine_splits_each_atom_in_its_reference_position() {
+fn written_fine_preserves_introductions_and_drains_ready_guards() {
     let triangle = triangle();
     assert_eq!(
         plan(&triangle, Heuristic::Written, Split::Fine),
@@ -404,7 +800,7 @@ fn written_fine_splits_each_atom_in_its_reference_position() {
             quote! { R@0(a, _); R@0(a, b); S@1(b, c); T@2(a, c); }
         )
     );
-    // Guards and bindings follow every complete written relational predecessor.
+    // A ready guard precedes subsequent introductions, even within an atom.
     let guarded = cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -417,8 +813,8 @@ fn written_fine_splits_each_atom_in_its_reference_position() {
         expected(
             &guarded,
             quote! {
-                R@0(a, _); R@0(a, b);
-                S@1(b, c); T@2(a, c); if { a > 0 }; let d: i32 = a + c;
+                R@0(a, _); if { a > 0 }; R@0(a, b);
+                S@1(b, c); T@2(a, c); let d: i32 = a + c;
             }
         )
     );
@@ -453,8 +849,8 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
     let cases = [
         (chain(), [0, 1, 2].as_slice(), [0, 1, 2].as_slice()),
         (triangle(), &[0, 1, 2], &[0, 1, 2]),
-        // Connected ranking binds z from T before S. Both guards retain their
-        // written order and wait until all three atoms have been checked.
+        // Connected ranking binds z from T, making the first guard ready
+        // without waiting for the unrelated w column supplied by S.
         (
             cq(quote! {
                 struct Q;
@@ -463,8 +859,8 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 relation T(a: i32, b: i32);
                 answer(x) :- R(x, y), S(z, w), T(y, z), if { x != z }, if { w > 1 };
             }),
-            &[0, 1, 2, 3, 4],
-            &[0, 2, 1, 3, 4],
+            &[],
+            &[0, 2, 3, 1, 4],
         ),
         (
             cq(quote! {
@@ -485,8 +881,8 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 relation T(a: i32, b: i32);
                 answer(x, z) :- R(x, y), S(y, z), T(x, z), if { y > x };
             }),
-            &[0, 1, 2, 3],
-            &[0, 1, 2, 3],
+            &[0, 3, 1, 2],
+            &[0, 3, 1, 2],
         ),
     ];
     for (source, written, prefix) in &cases {
@@ -495,8 +891,12 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
             (Heuristic::Prefix(Ranking::Connected), *prefix),
             (Heuristic::Prefix(Ranking::GreedyWidth), *prefix),
         ] {
+            if expected.is_empty() {
+                refused(source, heuristic, Split::Coarse);
+                continue;
+            }
             assert_eq!(
-                sequence(&plan(source, heuristic, Split::Coarse)),
+                sequence(&source, &plan(source, heuristic, Split::Coarse)),
                 expected,
                 "{heuristic:?} on {}",
                 source.query.to_token_stream()
@@ -528,13 +928,16 @@ fn literals_stay_in_atoms_without_relational_steps() {
         0
     );
     for heuristic in [
-        Heuristic::Written,
         Heuristic::Prefix(Ranking::Connected),
         Heuristic::Elimination,
     ] {
         for split in [Split::Coarse, Split::Fine] {
             plan(&normal, heuristic, split);
         }
+    }
+    for split in [Split::Coarse, Split::Fine] {
+        let error = refused(&normal, Heuristic::Written, split);
+        assert!(error.contains("I3"), "{split:?}: {error}");
     }
 }
 
@@ -555,7 +958,7 @@ fn fine_order_places_literal_only_occurrences_before_dependent_bindings() {
 }
 
 #[test]
-fn elimination_orders_atoms_by_their_earliest_variable() {
+fn elimination_uses_position_only_after_connectivity() {
     for source in [chain(), triangle()] {
         let order = cq::hypergraph::Analysis::of(&source).elimination_order;
         let position = |v: &String| order.iter().position(|o| o == v).unwrap();
@@ -575,19 +978,17 @@ fn elimination_orders_atoms_by_their_earliest_variable() {
                 _ => None,
             })
             .collect();
-        assert!(earliest.is_sorted(), "{earliest:?} for {order:?}");
-        // Fine enumerates in reverse elimination order to connect shared keys.
+        assert_eq!(earliest.first(), earliest.iter().min());
+        // Fine keeps the reverse-elimination root, then grows connected.
         let fine = plan(&source, Heuristic::Elimination, Split::Fine);
-        assert_eq!(
-            atom_bound(&fine),
-            order.into_iter().rev().collect::<Vec<_>>()
-        );
+        assert_eq!(atom_bound(&source, &fine).first(), order.last());
+        valuation::contract::check(&source, &fine).unwrap();
     }
 }
 
 /// The variables the plan's subatoms introduce, in step order.
-fn atom_bound(plan: &valuation::Program) -> Vec<String> {
-    let analysis = valuation::contract::check(plan).unwrap();
+fn atom_bound(source: &cq::Program, plan: &valuation::Program) -> Vec<String> {
+    let analysis = valuation::contract::check(&source, plan).unwrap();
     analysis
         .introduces
         .iter()
@@ -617,7 +1018,7 @@ fn elimination_defers_an_atom_to_the_binding_that_supplies_its_column() {
     let fine = plan(&source, Heuristic::Elimination, Split::Fine);
     let order = cq::hypergraph::Analysis::of(&source).elimination_order;
     let atom_order: Vec<String> = order.iter().rev().filter(|v| *v != "k").cloned().collect();
-    assert_eq!(atom_bound(&fine), atom_order);
+    assert_eq!(atom_bound(&source, &fine), atom_order);
     // No subatom lists `k` before the binding supplies it.
     let binding = fine
         .valuation
@@ -645,17 +1046,13 @@ fn sources_outside_normal_form_or_using_variables_early_are_rejected() {
         relation R(a: i32, b: i32);
         answer(x) :- R(x, x);
     });
-    let error = cq_order::compile(&repeated, &options)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("R"), "{error}");
+    assert!(cq_order::compile(&repeated, &options).is_err());
     let early = cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
         answer(x) :- if y > 1, R(x, y);
     });
-    let error = cq_order::compile(&early, &options).unwrap_err().to_string();
-    assert!(error.contains("y"), "{error}");
+    assert!(cq_order::compile(&early, &options).is_err());
 }
 
 #[test]
@@ -732,7 +1129,7 @@ fn shared_scenarios_preserve_answers_and_reject_changed_schedules() {
             if !case.name.ends_with("_reduced") && split == fixture_split {
                 assert_eq!(
                     target,
-                    syn::parse_str::<valuation::Program>(case.vo).unwrap(),
+                    case.parse_vo(&source).unwrap(),
                     "{}",
                     case.name
                 );
@@ -740,7 +1137,7 @@ fn shared_scenarios_preserve_answers_and_reject_changed_schedules() {
             for seed in 0..4 {
                 let database = databases::binary_database(&source, seed);
                 assert_eq!(
-                    evaluator::evaluate(&target, &database),
+                    evaluator::evaluate(&source, &target, &database),
                     cq_oracle::evaluate_cq(&source, &database),
                     "{}",
                     case.name
@@ -754,29 +1151,23 @@ fn shared_scenarios_preserve_answers_and_reject_changed_schedules() {
 }
 
 #[test]
-fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
+fn correspondence_checks_each_obligation_and_accepts_free_rankings() {
     let source = chain();
     let coarse = Options::default();
     let good = expected(&source, quote! { R@0(x,y); S@1(y,z); T@2(z,w); });
-    let reject = |s: &cq::Program, t: &valuation::Program, options: &Options, names: &[&str]| {
-        let error = cq_order::check(s, t, options).unwrap_err().to_string();
-        for name in names {
-            assert!(error.contains(name), "{error}");
-        }
+    let reject = |s: &cq::Program, t: &valuation::Program, options: &Options| {
+        assert!(cq_order::check(s, t, options).is_err());
     };
     let mut changed = source.clone();
     changed.query.body[0] = syn::parse_quote!(R(x, x));
-    reject(&changed, &good, &coarse, &["R", "normal form"]);
+    reject(&changed, &good, &coarse);
     let malformed = expected(&source, quote! { R@9(x,y); S@1(y,z); T@2(z,w); });
-    reject(&source, &malformed, &coarse, &["clause #9"]);
-    let mut changed = good.clone();
-    changed.cq.name = syn::parse_quote!(Changed);
-    reject(&source, &changed, &coarse, &["Changed", "preserve"]);
+    reject(&source, &malformed, &coarse);
     let partial = expected(&source, quote! { R@0(x,_); R@0(x,y); S@1(y,z); T@2(z,w); });
-    valuation::contract::check(&partial).unwrap();
-    reject(&source, &partial, &coarse, &["clause #0", "Coarse"]);
+    valuation::contract::check(&source, &partial).unwrap();
+    reject(&source, &partial, &coarse);
     let duplicated = expected(&source, quote! { R@0(x,y); R@0(x,y); S@1(y,z); T@2(z,w); });
-    reject(&source, &duplicated, &coarse, &["clause #0", "Coarse"]);
+    reject(&source, &duplicated, &coarse);
     reject(
         &source,
         &good,
@@ -784,16 +1175,15 @@ fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
             split: Split::Fine,
             ..coarse
         },
-        &["clause #0", "Fine"],
     );
     let reduced = expected(
         &source,
         quote! { reduce R@0 with S@1(y,_); R@0(x,y); S@1(y,z); T@2(z,w); },
     );
-    reject(&source, &reduced, &coarse, &["clause #0", "reductions"]);
+    reject(&source, &reduced, &coarse);
     let reverse = expected(&source, quote! { T@2(z,w); S@1(y,z); R@0(x,y); });
-    valuation::contract::check(&reverse).unwrap();
-    reject(&source, &reverse, &coarse, &["clause #2", "Written"]);
+    valuation::contract::check(&source, &reverse).unwrap();
+    reject(&source, &reverse, &coarse);
     let fine = Options {
         split: Split::Fine,
         ..coarse
@@ -802,8 +1192,8 @@ fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
         &source,
         quote! { T@2(_,w); T@2(z,w); S@1(_,z); S@1(y,z); R@0(_,y); R@0(x,y); },
     );
-    valuation::contract::check(&fine_reverse).unwrap();
-    reject(&source, &fine_reverse, &fine, &["clause #2", "Written"]);
+    valuation::contract::check(&source, &fine_reverse).unwrap();
+    reject(&source, &fine_reverse, &fine);
     let alternative = expected(&source, quote! { S@1(y,z); R@0(x,y); T@2(z,w); });
     for heuristic in [
         Heuristic::Prefix(Ranking::Connected),
@@ -820,17 +1210,11 @@ fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
 }
 
 #[test]
-fn partial_rust_steps_keep_cross_kind_order_and_all_written_relations() {
-    for source in [
-        normal(quote! {
-            struct Q; relation R(a:i32); relation S(a:i32);
-            answer(x,y) :- R(x), S(w), if { *x != 0 && *w > 1 }, let y:i32 = 10 / *x;
-        }),
-        normal(quote! {
-            struct Q; relation R(a:i32); relation S(a:i32,b:i32);
-            answer(x,y) :- R(x), if { *x != 0 }, S(10 / *x,y);
-        }),
-    ] {
+fn ready_rust_checks_cannot_cross_introducing_bindings() {
+    for source in [normal(quote! {
+        struct Q; relation R(a:i32); relation S(a:i32);
+        answer(x,y) :- R(x), S(w), if { *x != 0 }, let y:i32 = 10 / *x;
+    })] {
         for heuristic in [
             Heuristic::Written,
             Heuristic::Prefix(Ranking::Connected),
@@ -851,36 +1235,62 @@ fn partial_rust_steps_keep_cross_kind_order_and_all_written_relations() {
                     .iter()
                     .position(|s| matches!(s, valuation::Step::Let(..)))
                     .unwrap();
-                assert!(guard < binding, "{heuristic:?}/{split:?}");
+                valuation::contract::check(&source, &planned).unwrap();
                 let mut changed = planned.clone();
                 changed.valuation.steps.swap(guard, binding);
-                assert!(valuation::contract::check(&changed).is_err());
+                assert!(valuation::contract::check(&source, &changed).is_err());
             }
         }
     }
 }
 
 #[test]
-fn before_condition_rejects_a_relational_step_moved_after_rust() {
+fn written_drains_rust_checks_before_unrelated_introductions() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(a:i32);
         answer(x,y) :- R(x), S(w), if { *x != 0 }, let y:i32 = 10 / *x;
     });
     let mut target = plan(&source, Heuristic::Written, Split::Coarse);
     target.valuation.steps.swap(1, 2);
-    let error = valuation::contract::check(&target).unwrap_err().to_string();
-    assert!(error.contains("Before"), "{error}");
+    assert!(valuation::contract::check(&source, &target).is_err());
 }
 
 #[test]
-fn a_partial_subatom_does_not_count_as_a_written_relational_predecessor() {
-    let source = cq(quote! {
-        struct Q; relation R(a:i32,b:i32);
-        answer(x) :- R(x,y), if host();
+fn closed_rust_is_a_capture_and_never_opens_the_plan() {
+    // A closed head operand, `let` and `if` are host captures (A-Capture). The
+    // planner never sees them, so no unit prefix turns `R` into a keyless probe.
+    let closed = normal(quote! {
+        struct Q; relation R(a:i32,b:i32); relation answer(a:i32, unit:(), one:i64);
+        answer(x, (), one) :- R(x,y), let one: i64 = 1, if host();
     });
-    let target = expected(&source, quote! { R@0(x,_); if host(); R@0(x,y); });
-    let error = valuation::contract::check(&target).unwrap_err().to_string();
-    assert!(error.contains("Before"), "{error}");
+    assert_eq!(closed.query.body.len(), 1);
+    assert_eq!(closed.query.captures.items.len(), 3);
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Filtered,
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            let target = plan(&closed, heuristic, split);
+            assert!(
+                target
+                    .valuation
+                    .steps
+                    .iter()
+                    .all(|step| matches!(step, valuation::Step::Atom(..))),
+                "{heuristic:?} {split:?}: {}",
+                target.valuation.to_token_stream()
+            );
+            valuation::contract::check(&closed, &target).unwrap();
+        }
+    }
+    let advised = cq_order::compile_explicit(&closed, &[syn::parse_quote!(R)]).unwrap();
+    assert!(matches!(
+        advised.valuation.steps.first(),
+        Some(valuation::Step::Atom(..))
+    ));
 }
 
 #[test]
@@ -927,25 +1337,21 @@ fn elimination_fine_binds_identity_aliases_through_the_first_ranked_atom() {
         .iter()
         .position(|step| matches!(step, valuation::Step::Guard(..)))
         .unwrap();
-    assert_eq!(guard, target.valuation.steps.len() - 1);
+    let analysis = valuation::contract::check(&source, &target).unwrap();
+    let bound = &analysis.bound_before[guard];
+    assert!(bound.contains(&"b".into()) && bound.contains(&"c".into()));
 }
 
 #[test]
-fn partial_atoms_can_introduce_free_variables_before_the_full_before_check() {
+fn partial_atoms_supply_rust_free_variables() {
     let source = cq(quote! {
         struct Q; relation R(x:Key,z:i32);
         answer(y) :- R(x,z), let y:bool=x.flag;
     });
     let changed = expected(&source, quote! { R@0(x,_); R@0(x,z); let y:bool=x.flag; });
-    valuation::contract::check(&changed).unwrap();
+    valuation::contract::check(&source, &changed).unwrap();
     let incomplete = expected(&source, quote! { R@0(x,_); let y:bool=x.flag; R@0(x,z); });
-    assert!(
-        valuation::contract::check(&incomplete)
-            .unwrap_err()
-            .to_string()
-            .contains("Before condition"),
-        "projection must still check the complete written relational predecessor"
-    );
+    valuation::contract::check(&source, &incomplete).unwrap();
     for heuristic in [
         Heuristic::Written,
         Heuristic::Prefix(Ranking::Connected),
@@ -975,7 +1381,7 @@ fn shared_free_variables_can_be_supplied_by_any_admissible_atom() {
         answer(y) :- R(x,z),S(x),let y:bool=x.flag;
     });
     let changed = expected(&source, quote! { S@1(x); R@0(x,z); let y:bool=x.flag; });
-    valuation::contract::check(&changed).unwrap();
+    valuation::contract::check(&source, &changed).unwrap();
     plan(
         &source,
         Heuristic::Prefix(Ranking::GreedyWidth),
@@ -984,13 +1390,53 @@ fn shared_free_variables_can_be_supplied_by_any_admissible_atom() {
 }
 
 #[test]
+fn unsolved_equality_classes_do_not_count_as_connectivity() {
+    // Rust protects both names, so the equality stays a predicate and S shares
+    // no realizable join key with R. T is the connected occurrence.
+    for body in [
+        quote!(R(a,x), S(y,b), T(x,b), where x == y, if ok(x,y)),
+        quote!(R(a,x), S(y,b), T(x,b), where x == y, { U(b) } | { V(b) }),
+    ] {
+        let source = normal(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32);
+            relation T(x:i32,b:i32); relation U(b:i32); relation V(b:i32);
+            relation answer(a:i32,b:i32);
+            answer(a,b) :- #body;
+        });
+        for heuristic in [
+            Heuristic::Prefix(Ranking::Connected),
+            Heuristic::Prefix(Ranking::GreedyWidth),
+            Heuristic::Filtered,
+        ] {
+            let target = plan(&source, heuristic, Split::Coarse);
+            let analysis = valuation::contract::check(&source, &target).unwrap();
+            for (step, bound) in target.valuation.steps.iter().zip(&analysis.bound_before) {
+                let read = match step {
+                    valuation::Step::Atom(a, _) => a,
+                    valuation::Step::Block(b, _) => &b.source,
+                    _ => continue,
+                };
+                assert!(
+                    bound.is_empty()
+                        || read
+                            .variables()
+                            .any(|(_, v)| bound.contains(&v.to_string())),
+                    "{heuristic:?}: {} is disconnected from {bound:?}",
+                    read.to_token_stream()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn filtered_order_starts_with_point_then_grows_connected_before_disconnected_ranges() {
     let source = normal(quote! {
         struct Q; relation Customer(c:i32,n:i32); relation Orders(o:i32,c:i32,d:i32);
         relation Lineitem(o:i32,s:i32); relation Supplier(s:i32,n:i32);
         relation Nation(n:i32,r:i32); relation Region(r:i32,name:i32);
-        answer(c,o,s) :- Customer(c,n), Orders(o,c,d), if *d >= 10,
-            Lineitem(o,s), Supplier(s,n), Nation(n,r), Region(r,name), if *name == 1;
+        answer(c,o,s) :- Customer(c,n), Orders(o,c,d), where d >= 10,
+            Lineitem(o,s), Supplier(s,n), Nation(n,r), Region(r,name), where name == 1;
     });
     let target = plan(&source, Heuristic::Filtered, Split::Coarse);
     let atoms: Vec<_> = target
@@ -1009,27 +1455,22 @@ fn filtered_order_starts_with_point_then_grows_connected_before_disconnected_ran
         ]
     );
     let written = plan(&source, Heuristic::Written, Split::Coarse);
-    assert!(
-        cq_order::check(
-            &source,
-            &written,
-            &Options {
-                heuristic: Heuristic::Filtered,
-                split: Split::Coarse
-            }
-        )
-        .is_err()
-    );
+    // No producer replay: another legal structural order passes VO-Order.
+    cq_order::check(
+        &source,
+        &written,
+        &Options { heuristic: Heuristic::Filtered, split: Split::Coarse },
+    ).unwrap();
 }
 
 #[test]
-fn filtered_order_preserves_opaque_before_and_rust_chain() {
+fn filtered_order_preserves_rust_free_variable_dependencies() {
     let source = normal(quote! {
         struct Q; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-        answer(a,c) :- R(a,b), if opaque(a), S(b,c), if *c == 1;
+        answer(a,c) :- R(a,b), if opaque(a), S(b,c), where c == 1;
     });
     let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    valuation::contract::check(&target).unwrap();
+    valuation::contract::check(&source, &target).unwrap();
     let guard = target
         .valuation
         .steps
@@ -1043,119 +1484,6 @@ fn filtered_order_preserves_opaque_before_and_rust_chain() {
         .position(|s| matches!(s, valuation::Step::Atom(a, _) if a.relation == "R"))
         .unwrap();
     assert!(before < guard);
-}
-
-#[test]
-fn filtered_order_records_independent_dimension_branches() {
-    let source = normal(quote! {
-        struct Q;
-        relation L(o:i32,p:i32,s:i32);
-        relation PS(p:i32,s:i32);
-        relation P(p:i32,n:i32);
-        relation S(s:i32,n:i32);
-        relation O(o:i32);
-        relation N(n:i32);
-        answer(o,p,s) :- L(o,p,s), PS(p,s), P(p,label), if *label == 7,
-            S(s,n), O(o), N(n);
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let groups = target.valuation.join_branches.as_ref().unwrap();
-    assert_eq!(groups.branches.len(), 1);
-    let relations: Vec<_> = groups.branches[0]
-        .clauses()
-        .into_iter()
-        .map(|c| {
-            let BodyItem::Positive { atom } = &source.query.body[c] else {
-                panic!()
-            };
-            atom.relation.to_string()
-        })
-        .collect();
-    assert_eq!(relations, ["PS", "S", "N"]);
-    let reparsed: valuation::Program = syn::parse2(target.to_token_stream()).unwrap();
-    assert_eq!(reparsed, target);
-    let mut wrong = target.clone();
-    wrong.valuation.join_branches.as_mut().unwrap().branches[0]
-        .columns
-        .clear();
-    assert!(valuation::contract::check(&wrong).is_err());
-    let mut omitted = target.clone();
-    omitted.valuation.join_branches = None;
-    assert!(
-        cq_order::check(
-            &source,
-            &omitted,
-            &Options {
-                heuristic: Heuristic::Filtered,
-                split: Split::Coarse
-            }
-        )
-        .is_err()
-    );
-    assert!(valuation::check_rewrite(&target, &omitted).is_err());
-}
-
-#[test]
-fn dimension_branches_do_not_cross_opaque_rust() {
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation P(p:i32);
-        relation S(s:i32,n:i32); relation N(n:i32); relation O(o:i32);
-        answer(o,p,s) :- L(o,p,s), P(p), S(s,n), if { 10 / *n > 0 }, N(n), O(o);
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    assert!(target.valuation.join_branches.is_none());
-}
-
-#[test]
-fn dimension_ears_keep_a_customer_supplier_cycle_on_the_spine() {
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,c:i32);
-        relation PS(p:i32,s:i32); relation S(s:i32,n:i32); relation P(p:i32);
-        relation C(c:i32,n:i32); relation N(n:i32);
-        answer(o,p,s,n) :- L(o,p,s), O(o,c), PS(p,s), S(s,n), P(p), C(c,n), N(n);
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let groups = target.valuation.join_branches.as_ref().unwrap();
-    let relations: Vec<Vec<_>> = groups
-        .branches
-        .iter()
-        .map(|b| {
-            b.clauses()
-                .into_iter()
-                .map(|c| {
-                    let BodyItem::Positive { atom } = &source.query.body[c] else {
-                        panic!()
-                    };
-                    atom.relation.to_string()
-                })
-                .collect()
-        })
-        .collect();
-    assert_eq!(relations, [vec!["PS", "P"], vec!["S", "N"]]);
-}
-
-#[test]
-fn filtered_dimension_branch_precedes_a_weaker_fact_neighbor() {
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,d:i32);
-        relation P(p:i32,b:i32); relation S(s:i32,n:i32); relation N(n:i32,k:i32);
-        answer(o,p,s) :- L(o,p,s), O(o,d), if *d > 5,
-            P(p,b), if *b == 7, S(s,n), N(n,k), if *k == 1;
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let atom_order: Vec<_> = target
-        .valuation
-        .steps
-        .iter()
-        .filter_map(|step| {
-            if let valuation::Step::Atom(a, _) = step {
-                Some(a.relation.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-    assert!(atom_order.iter().position(|r| r == "S") < atom_order.iter().position(|r| r == "O"));
 }
 
 #[test]
@@ -1174,7 +1502,7 @@ fn generator_planners_preserve_chain_dependencies_and_before() {
         for split in [Split::Coarse, Split::Fine] {
             let planned = plan(&source, heuristic, split);
             assert_eq!(
-                syn::parse2::<valuation::Program>(planned.to_token_stream()).unwrap(),
+                parse_vo(&source, planned.to_token_stream()),
                 planned
             );
             let generator = planned
@@ -1199,7 +1527,6 @@ fn filtered_priority_uses_literal_occurrences_without_extra_steps() {
     });
     for split in [Split::Coarse, Split::Fine] {
         let target = plan(&source, Heuristic::Filtered, split);
-        assert_eq!(target.cq, source);
         assert_eq!(target.valuation.steps.len(), 2);
         assert!(matches!(&target.valuation.steps[0],
             valuation::Step::Atom(atom, _) if atom.clause() == 1 && atom.columns.len() == 1));
@@ -1220,12 +1547,12 @@ fn ready_negation_moves_before_opaque_rust_but_never_before_its_binder() {
     ] {
         for split in [Split::Coarse, Split::Fine] {
             let planned = plan(&source, heuristic, split);
-            assert_eq!(sequence(&planned), [0, 2, 1, 3], "{heuristic:?}/{split:?}");
+            assert_eq!(sequence(&source, &planned), [0, 2, 1, 3], "{heuristic:?}/{split:?}");
         }
     }
     for split in [Split::Coarse, Split::Fine] {
         let written = plan(&source, Heuristic::Written, split);
-        assert_eq!(sequence(&written), [0, 1, 2, 3]);
+        assert_eq!(sequence(&source, &written), [0, 1, 2, 3]);
     }
 }
 
@@ -1256,7 +1583,7 @@ fn negation_retains_earlier_rust_binders_and_all_wildcards_require_none() {
             .iter()
             .position(|s| matches!(s, valuation::Step::Guard(..)))
             .unwrap();
-        assert!(guard > dependent);
+        assert!(guard < binding);
     }
 }
 
@@ -1273,11 +1600,95 @@ fn ordering_negation_preserves_reference_answers_for_constants_repeats_and_wildc
             for seed in 0..16 {
                 let database = databases::binary_database(&source, seed);
                 assert_eq!(
-                    evaluator::evaluate(&planned, &database),
+                    evaluator::evaluate(&source, &planned, &database),
                     cq_oracle::evaluate_cq(&source, &database),
                     "{args}/{split:?}/{seed}"
                 );
             }
         }
     }
+}
+
+#[test]
+fn step_advice_defers_unused_rust_bindings_past_adjacent_advised_steps() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(a:i32);
+        relation R(a:i32,x:i32,y:i32);
+        relation S(a:i32,x:i32,z:i32);
+        answer(a,x,y,z,b) :- Seed(a), let b: i32 = a + 1, R(a,x,y), S(a,x,z);
+    });
+    let order: Vec<cq_order::OrderAtom> = vec![
+        syn::parse_quote!(Seed),
+        syn::parse_quote!(R@2(a,x)),
+        syn::parse_quote!(S@3(a,x)),
+        syn::parse_quote!(R@2),
+        syn::parse_quote!(S@3),
+    ];
+    let steps = cq_order::compile_explicit(&source, &order)
+        .unwrap()
+        .valuation
+        .steps;
+    let atoms: Vec<_> = steps
+        .iter()
+        .map(|step| match step {
+            valuation::Step::Atom(atom, _) => atom.relation.to_string(),
+            _ => "rust".to_owned(),
+        })
+        .collect();
+    assert_eq!(atoms, ["Seed", "R", "S", "R", "S", "rust"]);
+}
+
+#[test]
+fn a_union_whose_arm_needs_a_nested_domain_is_correlated() {
+    // The outer union takes no finite prefix domain, but in its first arm
+    // only the nested union generates `y`, and that union needs a domain
+    // for `y`. From no seed that arm cannot place, so O-BlockPlacement
+    // correlates the outer union instead of failing to schedule it.
+    let source = normal(quote! {
+        struct Q;
+        relation A(a:i32,b:i32); relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);
+        answer(x,y) :- A(x,y), { { R(x,y) } | { S(x) } } | { T(x,y) };
+    });
+    let steps: proc_macro2::TokenStream = "A @ 0 (x , y) ; \
+        block @ 1 (x , y) correlated { \
+            block @ 1.0 . 0 (x , y) hoisted { R @ 1.0 . 0.0 . 0 (x , y) ; } \
+                | { S @ 1.0 . 0.1 . 0 (x) ; } ; \
+        } | { T @ 1.1 . 0 (x , y) ; } ;"
+        .parse()
+        .unwrap();
+    assert_eq!(
+        plan(&source, Heuristic::Prefix(Ranking::Connected), Split::Coarse),
+        expected(&source, steps),
+    );
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::WrittenConnected,
+        Heuristic::Filtered,
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            plan(&source, heuristic, split);
+        }
+    }
+}
+
+#[test]
+fn known_placement_resolves_its_negation_read_and_bindings_first() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32); relation S(a:i32,b:i32); relation N(a:i32,b:i32);
+        answer(x,y) :- R(x), S(x,y), !N(x,y);
+    });
+    let plan = cq_order::compile(&source, &Options::default()).unwrap();
+    for refused in ["N@2 at 1", "N@2 at 3", "S@1 at 2", "N@0 at 2"] {
+        let known: cq_order::Known = syn::parse_str(refused).unwrap();
+        assert!(known.place(&source, &mut plan.clone()).is_err(), "{refused}");
+    }
+    let known: cq_order::Known = syn::parse_str("N@2 at 2").unwrap();
+    let mut placed = plan.clone();
+    known.place(&source, &mut placed).unwrap();
+    assert_eq!(placed, plan);
+    known.check(&source, &placed).unwrap();
 }

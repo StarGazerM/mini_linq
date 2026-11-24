@@ -21,7 +21,7 @@ fn every_surface_forwards_plain_cq_and_parameters() {
     let limit = 1;
     let rows: Rows = mini_linq::compile! {
         pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; }
-        struct Plain; relation A(x:i32); answer(x) :- A(x), if *x > limit;
+        struct Plain; relation A(x:i32); answer(x) :- A(x), where x > limit;
     }.map(|(x,)| vec![*x]).collect();
     assert_eq!(rows, [vec![2], vec![3]].into());
 }
@@ -54,17 +54,19 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
 }
 
 #[test]
-fn aggregate_nested_query_uses_the_callers_printer_and_deduplicates_its_witnesses() {
-    let Sale = [(1, 1, 10), (1, 2, 10)];
+fn aggregate_nested_query_uses_the_callers_canonical_printer() {
+    let Sale = [(1, 1, 10, 0), (1, 1, 10, 1), (1, 2, 10, 2)];
     let groups = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_aggregate::aggregate];
             sequence = mini_linq::passes::sequence;
             grade = mini_linq::passes::sequential;
-            print = cq_ext_test_passes::repeated(twice);
+            print = cq_ext_test_passes::canonical(once);
         }
+        // Count and sum consume the core's canonical index, even through an
+        // alternate terminal path with arguments; projected duplicate witnesses vanish.
         aggregate! { by(d); n=count(); s=sum(a);
-            struct G; relation Sale(d:i32,id:i32,a:i32); rows(d,id,a) :- Sale(d,id,a);
+            struct G; relation Sale(d:i32,id:i32,a:i32,witness:i32); rows(d,id,a) :- Sale(d,id,a,witness);
         }
     };
     let rows: Rows = groups
@@ -86,7 +88,7 @@ fn recursive_seed_and_step_queries_use_the_callers_printer() {
             print = cq_ext_test_passes::repeated(twice);
         }
         recursion! { struct R; relation Seed(x:i32); relation Edge(x:i32,y:i32); relation reach(x:i32);
-            reach(*x) :- Seed(x); reach(*y) :- reach(x), Edge(x,y);
+            reach(x) :- Seed(x); reach(y) :- reach(x), Edge(x,y);
         }
     }.collect();
     assert_eq!(rows.len(), 3);
@@ -99,7 +101,7 @@ fn recursive_seed_and_step_queries_use_the_callers_printer() {
 #[test]
 fn correlated_inner_and_outer_queries_use_the_callers_printer() {
     let A = [(1,), (2,)];
-    let S = [(1, 7), (1, 7)];
+    let S = [(1, 7, 0), (1, 7, 1)];
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_correlated::correlated];
@@ -107,8 +109,8 @@ fn correlated_inner_and_outer_queries_use_the_callers_printer() {
             grade = mini_linq::passes::sequential;
             print = cq_ext_test_passes::repeated(twice);
         }
-        struct C; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32,v:i32);
-        answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y)};
+        struct C; relation A(x:i32); relation S(x:i32,y:i32,witness:i32); relation answer(x:i32,v:i32);
+        answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y,witness)};
     }
     .collect();
     assert_eq!(rows.len(), 2);
@@ -125,9 +127,9 @@ fn aggregate_keeps_owned_leaf_rows_alive_and_evaluates_them_once() {
         pipeline { surface = [cq_ext_aggregate::aggregate]; }
         aggregate! {
             by(d); n=count(); s=sum(a); struct Owned;
-            relation Sale(d:String,id:i32,a:i32) = ({
+            relation Sale(d:Vec<i64>,id:i32,a:i32) = ({
                 calls.set(calls.get()+1);
-                vec![(String::from("a"),1,10), (String::from("a"),2,-5)]
+                vec![(vec![1_i64],1,10), (vec![1_i64],2,-5)]
             });
             rows(d,id,a) :- Sale(d,id,a);
         }
@@ -135,7 +137,7 @@ fn aggregate_keeps_owned_leaf_rows_alive_and_evaluates_them_once() {
     assert_eq!(calls.get(), 1);
     let rows: Vec<_> = groups
         .iter()
-        .flat_map(|((d,), values)| values.iter().map(move |&(n, s)| (d.as_str(), n, s)))
+        .flat_map(|((d,), values)| values.iter().map(move |&(n, s)| (d.clone(), n, s)))
         .collect();
-    assert_eq!(rows, [("a", 2, 5)]);
+    assert_eq!(rows, [(vec![1_i64], 2, 5)]);
 }

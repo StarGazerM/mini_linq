@@ -1,9 +1,21 @@
 //! DL-Source denotes the stratified least fixpoint of set-valued relations.
-//! Rust clauses are pure partial computations; panic is bottom and termination
-//! remains a caller premise. Surface sugar is not part of this language.
+//! Rust clauses are opaque, pure and total by premise. Relational `where`
+//! clauses use CQ predicates; parsing, printing and checking share its language.
 //! Optional `invariants { hoist N using Helper { original_rule; } }` after
 //! the rules records a bounded frozen filter and its independently checked
 //! erasure. Helpers preserve one positive input's bindings and cardinality.
+//! A rule may carry an optional label, `Label: head :- body;`. Labels are
+//! names for advice only: they are unique, have no denotation, and rewrites
+//! that add rules leave the new rules unlabelled.
+//! Optional `evidence from "provenance" { key R [c, ...]; }` after the models
+//! records asserted keys of declared relations (the CQ evidence `key`
+//! grammar); the provenance names how each was checked (for a derived
+//! relation, on the inputs of its rules). Evidence has no denotation: it only
+//! feeds DL-Fanout, which chooses where a checked plan discharges admission,
+//! so a false key changes speed, never answers.
+//! A separate `declared_evidence "<JSON>" { R = "dataset_R" full [c = "column"]; }`
+//! after key evidence records dataset-scoped statistics and explicit mappings.
+//! Importing it selects no order and never upgrades a key to a semantic premise.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
@@ -23,6 +35,9 @@ pub mod kw {
     syn::custom_keyword!(invariants);
     syn::custom_keyword!(hoist);
     syn::custom_keyword!(using);
+    syn::custom_keyword!(evidence);
+    syn::custom_keyword!(from);
+    syn::custom_keyword!(key);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -30,9 +45,14 @@ pub struct Program {
     pub declarations: Vec<RelationDecl>,
     pub outputs: Vec<Ident>,
     pub rules: Vec<Query>,
+    /// Optional advice label per rule, parallel to `rules`.
+    pub labels: Vec<Option<Ident>>,
     pub observer: Option<Expr>,
     pub models: BTreeMap<String, Ident>,
     pub invariants: Vec<Invariant>,
+    pub evidence: Option<Evidence>,
+    /// Dataset-scoped numerical facts; importing these performs no planning.
+    pub declared_evidence: Option<cq_syntax::declared_evidence::DeclaredEvidence>,
 }
 /// A checked frozen-filter factorization retaining the original rule for erasure.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +60,76 @@ pub struct Invariant {
     pub rule: usize,
     pub helper: Ident,
     pub source: Query,
+}
+/// Asserted keys and where they came from: `R` has at most one row per
+/// value of each key's declared columns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Evidence {
+    pub provenance: syn::LitStr,
+    pub keys: Vec<(Ident, Vec<Ident>)>,
+}
+impl Parse for Evidence {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::evidence>()?;
+        input.parse::<kw::from>()?;
+        let provenance = input.parse()?;
+        let body;
+        syn::braced!(body in input);
+        let mut keys = Vec::new();
+        while !body.is_empty() {
+            body.parse::<kw::key>()?;
+            let relation = body.parse()?;
+            let columns;
+            syn::bracketed!(columns in body);
+            let columns = columns.parse_terminated(Ident::parse, Token![,])?;
+            body.parse::<Token![;]>()?;
+            keys.push((relation, columns.into_iter().collect()));
+        }
+        Ok(Self { provenance, keys })
+    }
+}
+impl ToTokens for Evidence {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let provenance = &self.provenance;
+        let keys = self
+            .keys
+            .iter()
+            .map(|(relation, columns)| quote!(key #relation [#(#columns),*];));
+        tokens.extend(quote!(evidence from #provenance { #(#keys)* }));
+    }
+}
+impl Program {
+    /// The recorded keys of a relation as declared column positions.
+    pub fn keys(&self, relation: &Ident) -> Vec<Vec<usize>> {
+        let Some(evidence) = &self.evidence else {
+            return Vec::new();
+        };
+        let name = symbol_name(relation);
+        let Some(declaration) = self
+            .declarations
+            .iter()
+            .find(|d| symbol_name(&d.name) == name)
+        else {
+            return Vec::new();
+        };
+        evidence
+            .keys
+            .iter()
+            .filter(|(subject, _)| symbol_name(subject) == name)
+            .map(|(_, columns)| {
+                columns
+                    .iter()
+                    .map(|column| {
+                        declaration
+                            .columns
+                            .iter()
+                            .position(|declared| declared.name == *column)
+                            .expect("checked evidence key column")
+                    })
+                    .collect()
+            })
+            .collect()
+    }
 }
 impl Parse for Program {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -59,6 +149,8 @@ impl Parse for Program {
         while input.peek(cq_syntax::kw::relation) {
             declarations.push(input.parse()?);
         }
+        cq_syntax::intern_domains(&mut declarations)?;
+        cq_syntax::intern_logical_types(&mut declarations)?;
         let mut models: BTreeMap<String, Ident> = declarations
             .iter()
             .map(|d: &RelationDecl| (symbol_name(&d.name), syn::parse_quote!(set)))
@@ -81,6 +173,12 @@ impl Parse for Program {
             )?;
             models.insert(symbol_name(&relation), model);
         }
+        let evidence = if input.peek(kw::evidence) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        let declared_evidence = cq_syntax::declared_evidence::parse_optional(input)?;
         input.parse::<kw::output>()?;
         let mut outputs = vec![input.parse()?];
         while input.peek(Token![,]) {
@@ -89,8 +187,19 @@ impl Parse for Program {
         }
         input.parse::<Token![;]>()?;
         let mut rules = Vec::new();
-        while input.peek(Ident) && input.peek2(syn::token::Paren) {
+        let mut labels = Vec::new();
+        loop {
+            let label = if input.peek(Ident) && input.peek2(Token![:]) && !input.peek2(Token![::]) {
+                let label = input.parse()?;
+                input.parse::<Token![:]>()?;
+                Some(label)
+            } else if input.peek(Ident) && input.peek2(syn::token::Paren) {
+                None
+            } else {
+                break;
+            };
             rules.push(input.parse()?);
+            labels.push(label);
         }
         let mut invariants = Vec::new();
         if input.peek(kw::invariants) {
@@ -108,7 +217,11 @@ impl Parse for Program {
                 if !original.is_empty() {
                     return Err(original.error("unexpected invariant source text"));
                 }
-                invariants.push(Invariant { rule, helper, source });
+                invariants.push(Invariant {
+                    rule,
+                    helper,
+                    source,
+                });
             }
         }
         Ok(Self {
@@ -116,9 +229,12 @@ impl Parse for Program {
             declarations,
             outputs,
             rules,
+            labels,
             observer,
             models,
             invariants,
+            evidence,
+            declared_evidence,
         })
     }
 }
@@ -129,9 +245,12 @@ impl ToTokens for Program {
             declarations,
             outputs,
             rules,
+            labels,
             observer,
             models,
             invariants,
+            evidence,
+            declared_evidence,
         } = self;
         if let Some(e) = observer {
             tokens.extend(quote!(observe = #e;));
@@ -143,6 +262,11 @@ impl ToTokens for Program {
                 tokens.extend(quote!(model #relation #model;));
             }
         }
+        tokens.extend(quote!(#evidence #declared_evidence));
+        let rules = rules.iter().zip(labels).map(|(rule, label)| match label {
+            Some(label) => quote!(#label: #rule),
+            None => quote!(#rule),
+        });
         tokens.extend(quote!(output #(#outputs),*; #(#rules)*));
         if !invariants.is_empty() {
             let entries = invariants.iter().map(|entry| {
@@ -153,19 +277,6 @@ impl ToTokens for Program {
             });
             tokens.extend(quote!(invariants { #(#entries)* }));
         }
-    }
-}
-fn active_column(e: &Expr) -> Option<&Ident> {
-    match rust::unparen(e) {
-        Expr::Unary(e) if matches!(e.op, syn::UnOp::Deref(_)) => {
-            rust::variable(rust::unparen(&e.expr))
-        }
-        Expr::MethodCall(e)
-            if e.method == "clone" && e.args.is_empty() && e.turbofish.is_none() =>
-        {
-            active_column(&e.receiver)
-        }
-        _ => None,
     }
 }
 /// Dependency graph indexed by declaration order; an edge is (head, input, negative).
@@ -225,7 +336,7 @@ impl Graph {
                     _ => {
                         return Err(syn::Error::new_spanned(
                             item,
-                            "Datalog bodies support positive atoms, Rust clauses and !R atoms; extensions, aggregates and nested blocks are not supported",
+                            "Datalog bodies support positive atoms, Rust clauses, where predicates and !R atoms; extensions, aggregates and nested blocks are not supported",
                         ));
                     }
                 };
@@ -287,6 +398,19 @@ fn check_source(p: &Program) -> syn::Result<Graph> {
         )?;
         g.index(output)?;
     }
+    ensure(
+        p.labels.len() == p.rules.len(),
+        &p.name,
+        "rule labels must be parallel to rules",
+    )?;
+    let mut labels = BTreeSet::new();
+    for label in p.labels.iter().flatten() {
+        ensure(
+            labels.insert(symbol_name(label)),
+            label,
+            "duplicate rule label",
+        )?;
+    }
     let mut queries = QueryChecker::new(p, &p.declarations);
     for q in &p.rules {
         queries.check(q)?;
@@ -320,6 +444,38 @@ pub mod contract {
                 "base Datalog supports only the set relation model",
             )?;
         }
+        if let Some(evidence) = &program.evidence {
+            check_evidence(program, evidence)?;
+        }
+        if let Some(evidence) = &program.declared_evidence {
+            evidence.check(&program.declarations)?;
+            for binding in &evidence.bindings {
+                let position = graph.index(&binding.relation)?;
+                let declaration = &program.declarations[position];
+                let facts = &evidence.document.relations[&binding.source];
+                use cq_evidence::RelationScope;
+                // Source can rule out EDB/IDB and intrinsic-recursion mistakes,
+                // but cannot yet know which acyclic IDBs a later union of SCCs
+                // will iterate. Round checks that recorded component boundary.
+                let scope_allowed = if declaration.value.is_some() {
+                    facts.scope == RelationScope::Input
+                } else if graph.reach[position][position] {
+                    facts.scope == RelationScope::RecursiveFinal
+                } else {
+                    matches!(facts.scope, RelationScope::Frozen | RelationScope::RecursiveFinal)
+                };
+                ensure(
+                    scope_allowed,
+                    binding,
+                    "declared evidence scope disagrees with the source input/derived/recursive relation",
+                )?;
+                ensure(
+                    binding.view != cq_syntax::declared_evidence::EvidenceView::Delta,
+                    binding,
+                    "source evidence cannot name a round-local delta view",
+                )?;
+            }
+        }
         let positions = graph
             .names
             .iter()
@@ -333,12 +489,50 @@ pub mod contract {
             positions,
         })
     }
+    /// Formal rule WF-DL-Evidence: evidence names its provenance; each key
+    /// names a declared relation and distinct declared columns, and keys of
+    /// one relation are distinct.
+    fn check_evidence(program: &Program, evidence: &Evidence) -> syn::Result<()> {
+        ensure(
+            !evidence.provenance.value().trim().is_empty(),
+            &evidence.provenance,
+            "evidence must record its provenance",
+        )?;
+        let mut keys = BTreeSet::new();
+        for (relation, columns) in &evidence.keys {
+            let declaration = program
+                .declarations
+                .iter()
+                .find(|declaration| declaration.name == *relation)
+                .ok_or_else(|| {
+                    syn::Error::new_spanned(relation, "evidence names no declared relation")
+                })?;
+            let mut names = BTreeSet::new();
+            for column in columns {
+                ensure(
+                    declaration
+                        .columns
+                        .iter()
+                        .any(|declared| declared.name == *column)
+                        && names.insert(symbol_name(column)),
+                    column,
+                    "evidence key columns must be distinct declared columns",
+                )?;
+            }
+            ensure(
+                !names.is_empty() && keys.insert((symbol_name(relation), names)),
+                relation,
+                "evidence keys must be nonempty and distinct",
+            )?;
+        }
+        Ok(())
+    }
 }
 /// Check source well-formedness and preserve its externally visible interface.
 ///
 /// Rules may change. The rewrite author must separately establish denotational
-/// refinement: whenever the source terminates without panic, the target returns
-/// the same output sets without introducing panic (under the pure-Rust premise).
+/// refinement: the target returns the same output sets under the pure, total
+/// Rust premise and the column representation's equality/order laws.
 /// This structural check cannot prove equivalence of opaque Rust computations.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
@@ -361,9 +555,11 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
             && source.declarations == target.declarations
             && source.outputs == target.outputs
             && source.models == target.models
-            && source.observer == target.observer,
+            && source.observer == target.observer
+            && source.evidence == target.evidence
+            && source.declared_evidence == target.declared_evidence,
         target,
-        "Datalog rewrite changed name, declarations, EDB bindings, outputs, models or observer",
+        "Datalog rewrite changed name, declarations, EDB bindings, outputs, models, observer or evidence",
     )
 }
 /// The rewrite callback assumes `cq_stage::run` checked both contracts.
@@ -381,7 +577,7 @@ impl Language for Program {
 /// All declarations are validated, including unused ones. Each CQ projection
 /// carries only its referenced declarations, so unrelated schemas are not
 /// cloned, printed, parsed or checked again for every rule. CQ still performs
-/// its own scope/type checks and schema-sensitive guard recognition.
+/// its own scope checks and relational-predicate validation.
 pub struct QueryChecker<'a> {
     name: &'a Ident,
     checked_head: Ident,
@@ -429,14 +625,43 @@ impl<'a> QueryChecker<'a> {
             }
         }
         let bound = cq_lang_cq::blocks::bound(&query.body);
-        for arg in &q.head.args {
-            if let Some(id) = active_column(arg).or_else(|| rust::variable(arg)) {
-                ensure(
-                    bound.contains_key(&symbol_name(id)),
-                    arg,
-                    "head variable must be range restricted",
-                )?;
+        // Rule variables are every name a body clause binds or reads, including
+        // branch-local and negated ones. A bare head variable is a relational
+        // projection and must be bound; a Rust head expression is opaque and
+        // must find each rule variable it names bound. Its other free names are
+        // host captures (contract 7: placement by free variables, no recognition).
+        let mut rule_variables: BTreeSet<String> = bound.keys().cloned().collect();
+        for item in cq_lang_cq::blocks::walk(&query.body) {
+            match item {
+                BodyItem::Positive { atom } => {
+                    rule_variables.extend(atom.variables().map(symbol_name))
+                }
+                BodyItem::Negation(negative) => {
+                    rule_variables.extend(negative.atom.variables().map(symbol_name))
+                }
+                BodyItem::Let(binding) => {
+                    rule_variables.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+                }
+                BodyItem::For(binding) => {
+                    rule_variables.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+                }
+                _ => {}
             }
+        }
+        for arg in &q.head.args {
+            let needed: BTreeSet<String> = match rust::variable(arg) {
+                Some(id) => BTreeSet::from([symbol_name(id)]),
+                None => rust::free_variables(arg)
+                    .names
+                    .intersection(&rule_variables)
+                    .cloned()
+                    .collect(),
+            };
+            ensure(
+                needed.iter().all(|name| bound.contains_key(name)),
+                arg,
+                "head variable must be range restricted",
+            )?;
         }
         // Each projection is an independent CQ program, so reuse precisely the
         // name that a standalone check would allocate from the source tokens.

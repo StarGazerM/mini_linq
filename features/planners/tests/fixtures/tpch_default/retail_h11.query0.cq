@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h11.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Matches ; relation Partsupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64 , ps_supplycost : Decimal) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : StringCode in (data . dictionaries . domain ("n_name"))) ; relation answer (part_key : i64 , supplier_key : i64 , quantity : i64 , cost_units : i64) ; answer (* part_key , * supplier_key , * quantity , * cost_units) :- Partsupp (part_key , supplier_key , quantity , cost) , Supplier (supplier_key , nation_key) , Nation (nation_key , nation_name) , where nation_name == "GERMANY" , let cost_units : i64 = cost . scaled () ;

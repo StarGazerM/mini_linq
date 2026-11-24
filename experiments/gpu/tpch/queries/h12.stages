@@ -1,0 +1,92 @@
+program h12 {
+    domain Shipmode = dictionary(lineitem.l_shipmode);
+    domain Priority = dictionary(orders.o_orderpriority);
+    input Orders(o_orderkey: i64, o_orderpriority: StringCode in Priority) = table(orders);
+    input Lineitem(l_orderkey: i64, l_linenumber: i64, l_shipmode: StringCode in Shipmode,
+        l_commitdate: Date, l_receiptdate: Date, l_shipdate: Date) = table(lineitem);
+    input HighPriorities(code: StringCode in Priority) = dictionary(Priority)
+        where { |value: &str| value == "1-URGENT" || value == "2-HIGH" };
+    operand start: Date = date { Date::load("1994-01-01").expect("authored ISO date") };
+    operand end: Date = date { Date::load("1995-01-01").expect("authored ISO date") };
+    stage s0 {
+        inputs { Orders = Orders; Lineitem = Lineitem; }
+        captures [start, end];
+        evidence {}
+        cq {
+            struct Matches;
+            relation Orders(o_orderkey: i64, o_orderpriority: StringCode);
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_shipmode: StringCode,
+                l_commitdate: Date, l_receiptdate: Date, l_shipdate: Date);
+            relation answer(order_key: i64, line_number: i64, shipmode: StringCode,
+                commitdate: Date, receiptdate: Date, shipdate: Date, priority: StringCode);
+            answer(order_key, line_number, shipmode, commitdate, receiptdate, shipdate, priority) :-
+                Lineitem(order_key, line_number, shipmode, commitdate, receiptdate, shipdate),
+                where shipmode == "MAIL" || shipmode == "SHIP",
+                where shipdate < commitdate && commitdate < receiptdate,
+                where receiptdate >= start && receiptdate < end,
+                Orders(order_key, priority);
+        }
+    }
+    publish MatchingLines = s0 owned;
+    stage s1 {
+        inputs { MatchingLines = MatchingLines; }
+        captures [];
+        evidence {}
+        cq {
+            struct TotalCounts;
+            relation MatchingLines(order_key: i64, line_number: i64, shipmode: StringCode,
+                commitdate: Date, receiptdate: Date, shipdate: Date, priority: StringCode);
+            relation answer(shipmode: StringCode, total: i64);
+            answer(shipmode, sum(one)) :-
+                MatchingLines(order_key, line_number, shipmode, commitdate, receiptdate, shipdate, priority),
+                let one: i64 = 1;
+        }
+    }
+    publish Totals = s1 owned;
+    stage s2 {
+        inputs { MatchingLines = MatchingLines; HighPriorities = HighPriorities; }
+        captures [];
+        evidence {}
+        cq {
+            struct HighPriorityCounts;
+            relation MatchingLines(order_key: i64, line_number: i64, shipmode: StringCode,
+                commitdate: Date, receiptdate: Date, shipdate: Date, priority: StringCode);
+            relation HighPriorities(name: StringCode);
+            relation answer(shipmode: StringCode, high: i64);
+            answer(shipmode, sum(one)) :-
+                MatchingLines(order_key, line_number, shipmode, commitdate, receiptdate, shipdate, priority),
+                HighPriorities(priority), let one: i64 = 1;
+        }
+    }
+    publish HighCounts = s2 owned;
+    stage s3 {
+        inputs { Totals = Totals; HighCounts = HighCounts; }
+        captures [];
+        evidence {}
+        cq {
+            struct WithHigh;
+            relation Totals(shipmode: StringCode, total: i64);
+            relation HighCounts(shipmode: StringCode, high: i64);
+            relation answer(shipmode: StringCode, high_line_count: i64, low_line_count: i64);
+            answer(shipmode, high, *low) :-
+                Totals(shipmode, total), HighCounts(shipmode, high),
+                let low: i64 = *total - *high;
+        }
+    }
+    stage s4 {
+        inputs { Totals = Totals; HighCounts = HighCounts; }
+        captures [];
+        evidence {}
+        cq {
+            struct WithoutHigh;
+            relation Totals(shipmode: StringCode, total: i64);
+            relation HighCounts(shipmode: StringCode, high: i64);
+            relation answer(shipmode: StringCode, high_line_count: i64, low_line_count: i64);
+            answer(shipmode, 0, total) :- Totals(shipmode, total), !HighCounts(shipmode, _);
+        }
+    }
+    terminal {
+        from s3 project [column(0), column(1), column(2)] dictionaries [0 = Shipmode];
+        from s4 project [column(0), column(1), column(2)] dictionaries [0 = Shipmode];
+    }
+}

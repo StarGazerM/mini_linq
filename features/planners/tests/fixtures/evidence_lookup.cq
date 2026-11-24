@@ -1,0 +1,5 @@
+struct Q;
+relation A(a:i64,x:i64);
+relation B(b:i64,y:i64);
+relation F(a:i64,b:i64,v:i64);
+answer(v,x,y) :- A(a,x), where x == 1, B(b,y), where y < 5, F(a,b,v);

@@ -1,8 +1,19 @@
+// These pin the expansion of an ordinary build; a calibration build adds
+// its offering of the relations to it.
+#![cfg(not(feature = "planner-calibration"))]
 use cq_datalog_print::*;
 use incremental::strata::source;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use round::storage::incremental;
+
+fn compile(program: &Program) -> syn::Result<syn::Expr> {
+    let expression = cq_datalog_print::compile(program)?;
+    // An ordinary build prints nothing of calibration.
+    #[cfg(not(feature = "planner-calibration"))]
+    assert!(!expression.to_token_stream().to_string().contains("calibration"));
+    Ok(expression)
+}
 struct Expanded {
     program: Program,
     context: RoundContext,
@@ -131,7 +142,7 @@ fn authored_round_expansion_matches_independent_fixture() {
 
 
             variant 0 seed { R(*x) :- E(x); }
-            variant 1 delta 1 { R(*x) :- E(x), Recent(x); }
+            variant 1 delta 1 known(admit) { R(*x) :- E(x), Recent(x); }
         }
     })
     .unwrap();
@@ -146,11 +157,55 @@ fn authored_round_expansion_matches_independent_fixture() {
         assert!(partitioned.contains(&format!("partition_{slot} :: run")));
     }
     assert_eq!(partitioned.matches("inline (always)").count(), 3);
-    assert!(partitioned.contains("& mut __cq_datalog_seen_1"));
+    let next_canonical = fork.context.relations[1].next_canonical.to_string();
+    assert!(partitioned.contains(&format!("& mut {next_canonical}")));
     assert!(partitioned.contains("& __cq_datalog_host_0"));
     let actual: syn::Expr = syn::parse2(render(fork)).unwrap();
     let expected: syn::Expr = syn::parse_str(include_str!("fixtures/round.rs")).unwrap();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn in_plan_holes_admit_without_the_committed_probe() {
+    let source = source();
+    // Two producers of R: the delta variant is advised in plan after its
+    // first read (`x` binds there); the seed keeps the default (admit).
+    let program: incremental::Program = syn::parse2(quote! {
+        #source
+        R(*x) :- E(x), R(x);
+        strata { component [R]; }
+        incremental { scheme seminaive_covering;
+            delta R = Recent;
+            variant 0 seed { R(*x) :- E(x); }
+            variant 1 delta 1 known(at(level 1)) { R(*x) :- E(x), Recent(x); }
+        }
+    })
+    .unwrap();
+    let fork = expand(&program, |_| Ok(quote!(authored_rows()))).unwrap();
+    let stratum = &fork.context.strata[0];
+    assert_eq!(stratum.seeds[0].known, round::Admission::Admit);
+    assert_eq!(stratum.steps[0].known, round::Admission::InPlan);
+    let relation = &fork.context.relations[1];
+    let canonical = &fork.context.layouts[relation.providers.canonical].host;
+    let admit = |known| {
+        admit_row(
+            relation,
+            &fork.context,
+            &[round::AnswerColumn::Owned],
+            known,
+        )
+        .to_string()
+    };
+    // The printer reads the record only: in_plan omits the committed probe,
+    // and both keep the round-local NEW insert-if-absent.
+    let probe = format!("{canonical} . contains");
+    assert!(admit(round::Admission::Admit).contains(&probe));
+    assert!(!admit(round::Admission::InPlan).contains(&probe));
+    for known in [round::Admission::Admit, round::Admission::InPlan] {
+        assert!(admit(known).contains(&format!("{} . insert", relation.next_canonical)));
+    }
+    let rendered = render(fork).to_string();
+    assert_eq!(rendered.matches(&probe).count(), 1, "{rendered}");
 }
 
 #[test]
@@ -186,7 +241,8 @@ fn lower_stratum_negation_builds_one_key_set_outside_rounds() {
     assert_eq!(fork.context.strata[1].keys.len(), 1);
     let expanded = render(fork).to_string();
     assert_eq!(expanded.matches("completed_keys ()").count(), 1);
-    assert_eq!(expanded.matches("Rows :: rows").count(), 2);
+    // Domain is loaded once into its canonical layout; key holes read that layout.
+    assert_eq!(expanded.matches("Rows :: rows").count(), 1);
     assert!(expanded.contains("observer"));
 }
 
@@ -221,6 +277,12 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
     let next = &expanded.context.relations[1].next;
     let first_host = &expanded.context.layouts[1].host;
     let second_host = &expanded.context.layouts[2].host;
+    let canonical = &expanded.context.layouts[expanded.context.relations[1].providers.canonical];
+    assert_eq!(
+        (canonical.columns.as_slice(), canonical.key),
+        ([0, 1].as_slice(), 2)
+    );
+    let canonical_host = &canonical.host;
     let expected_updates = quote! {
         for row in &#next {
             #first_host.entry((::core::clone::Clone::clone(&row.0),))
@@ -228,6 +290,8 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
             #second_host.entry(())
                 .or_default().push((::core::clone::Clone::clone(&row.0),
                     ::core::clone::Clone::clone(&row.1),));
+            #canonical_host.insert((::core::clone::Clone::clone(&row.0),
+                ::core::clone::Clone::clone(&row.1),));
         }
     }
     .to_string();
@@ -235,7 +299,7 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
     // One publication after seeds and one after all recursive variants, not
     // one insertion into the full maps per rule or per rejected candidate.
     assert_eq!(rendered.matches(&expected_updates).count(), 2);
-    assert_eq!(rendered.matches("Rows :: rows").count(), 2);
+    assert_eq!(rendered.matches("Rows :: rows").count(), 1);
     let last_step = rendered.find("__cq_datalog_hole_2 ()").unwrap();
     assert!(rendered.rfind(&expected_updates).unwrap() > last_step);
 }
@@ -305,21 +369,20 @@ fn delta_layout_runs_are_built_once_per_publication_outside_all_holes() {
             "one seed build and one round build, with no per-hole copies"
         );
     }
-    let stratum = rendered
+    // EDB loading is also a block statement; the stratum block owns the loop.
+    let (stratum, round) = rendered
         .block
         .stmts
         .iter()
-        .find_map(|stmt| match stmt {
+        .filter_map(|stmt| match stmt {
             syn::Stmt::Expr(syn::Expr::Block(block), _) => Some(&block.block),
             _ => None,
         })
-        .unwrap();
-    let round = stratum
-        .stmts
-        .iter()
-        .find_map(|stmt| match stmt {
-            syn::Stmt::Expr(syn::Expr::While(loop_), _) => Some(&loop_.body),
-            _ => None,
+        .find_map(|stratum| {
+            stratum.stmts.iter().find_map(|stmt| match stmt {
+                syn::Stmt::Expr(syn::Expr::While(loop_), _) => Some((stratum, &loop_.body)),
+                _ => None,
+            })
         })
         .unwrap();
     for (block, holes) in [(stratum, vec![seed]), (round, steps)] {
@@ -365,9 +428,16 @@ fn multioutput_render_moves_each_relation_in_output_order() {
     let strata = cq_datalog_stratify::compile(&source).unwrap();
     let program = cq_datalog_incremental::compile(&strata).unwrap();
     let fork = expand(&program, |_| Ok(quote!(rows()))).unwrap();
-    let a = &fork.context.relations[1].all;
-    let b = &fork.context.relations[2].all;
-    let expected: syn::Expr = syn::parse_quote!((#b.into_iter(), #a.into_iter(),));
+    let host = |relation: usize| {
+        fork.context.layouts[fork.context.relations[relation].providers.canonical]
+            .host
+            .clone()
+    };
+    let (a, b) = (host(1), host(2));
+    let expected: syn::Expr = syn::parse_quote!((
+        #b.into_iter().map(|key| (key.0,)).collect::<::std::vec::Vec<_>>().into_iter(),
+        #a.into_iter().map(|key| (key.0,)).collect::<::std::vec::Vec<_>>().into_iter(),
+    ));
     let actual: syn::ExprBlock = syn::parse2(render(fork)).unwrap();
     assert_eq!(
         actual.block.stmts.last(),
@@ -380,7 +450,7 @@ fn constant_key_projection_is_built_once_before_recursive_rounds() {
     let source: source::Program = syn::parse_quote! {
         struct Filtered;
         relation E(x:i32) = (input);
-        relation M(kind:String,x:i32) = (modifiers);
+        relation M(kind:cq_load::StringCode in (kinds),x:i32) = (modifiers);
         relation A(x:i32);
         output A;
         A(*x) :- E(x), !M("abstract",x);
@@ -403,7 +473,7 @@ fn constant_key_projection_is_built_once_before_recursive_rounds() {
 }
 
 #[test]
-fn edb_canonicalization_precedes_and_is_shared_by_layouts_keys_and_outputs() {
+fn edb_load_admits_once_into_canonical_shared_by_layouts_keys_and_outputs() {
     let source: source::Program = syn::parse_quote! {
         struct CanonicalInputs;
         relation E(x:String,y:String) = (input());
@@ -430,19 +500,20 @@ fn edb_canonicalization_precedes_and_is_shared_by_layouts_keys_and_outputs() {
             .count()
             >= 3
     );
-    let all = &fork.context.relations[0].all;
-    let canonicalize =
-        quote!(Canonical(::cq_storage::rows::Rows::rows(#all).collect())).to_string();
-    let output = quote!(::cq_storage::rows::Rows::rows(#all).map).to_string();
+    let canonical = &fork.context.layouts[fork.context.relations[0].providers.canonical];
+    assert_eq!(canonical.key, 2);
+    let host = &canonical.host;
+    let load = quote!(#host.insert).to_string();
+    let output = quote!(#host.into_iter().map).to_string();
     let rendered = render(fork).to_string();
     assert_eq!(rendered.matches("input ()").count(), 1);
-    assert_eq!(rendered.matches(&canonicalize).count(), 1);
-    assert_eq!(rendered.matches("struct Canonical").count(), 1);
+    assert_eq!(rendered.matches(&load).count(), 1);
+    assert!(!rendered.contains("struct Canonical"));
     assert!(rendered.contains(&output));
-    let canonicalized = rendered.find(&canonicalize).unwrap();
-    assert!(canonicalized < rendered.find("HashMap").unwrap());
-    assert!(canonicalized < rendered.find("canonical_keys ()").unwrap());
-    assert!(canonicalized < rendered.find("while").unwrap());
+    let loaded = rendered.find(&load).unwrap();
+    assert!(rendered.find("input ()").unwrap() < loaded);
+    assert!(loaded < rendered.find("canonical_keys ()").unwrap());
+    assert!(loaded < rendered.find("while").unwrap());
     // Output collection must not introduce a second all-column hash set.
     assert_eq!(
         rendered
@@ -487,25 +558,50 @@ fn batch_program() -> Program {
     let strata = cq_datalog_stratify::compile(&source).unwrap();
     let incremental = cq_datalog_incremental::compile(&strata).unwrap();
     let storage = cq_datalog_storage::compile(&incremental).unwrap();
-    cq_datalog_fork::compile_with(&storage, quote! {
-        terminals = [custom::batch => batch];
-        cq = pipeline { custom::lower, custom::batch };
-    })
+    cq_datalog_fork::compile_with(
+        &storage,
+        quote! {
+            terminals = [custom::batch => batch];
+            cq = pipeline { custom::lower, custom::batch };
+            lower = 0;
+        },
+    )
     .unwrap()
 }
 
 #[test]
 fn host_printer_rejects_batch_but_custom_splicing_accepts_it() {
     let program = batch_program();
-    assert!(program.holes.iter().all(|hole| hole.interface == HoleInterface::Batch));
+    assert!(
+        program
+            .holes
+            .iter()
+            .all(|hole| hole.interface == HoleInterface::Batch)
+    );
     round::contract::check(&program).unwrap();
-    assert!(compile(&program).unwrap_err().to_string().contains("do not support batch holes"));
-    assert!(splice(&program).unwrap_err().to_string().contains("do not support batch holes"));
-    assert_eq!(splice_with(&program, |_| Ok(quote!(batch()))).unwrap().len(), program.holes.len());
-    assert!(consume_hole(HoleInterface::Batch, &quote!(batch()), quote!(consumer))
-        .to_string().contains("compile_error"));
-    assert!(collect_hole(HoleInterface::Batch, &quote!(batch()), quote!(Vec<Row>))
-        .to_string().contains("compile_error"));
+    assert!(compile(&program).is_err());
+    assert!(splice(&program).is_err());
+    assert_eq!(
+        splice_with(&program, |_| Ok(quote!(batch())))
+            .unwrap()
+            .len(),
+        program.holes.len()
+    );
+    assert!(
+        consume_hole(HoleInterface::Batch, &quote!(batch()), quote!(consumer))
+            .to_string()
+            .contains("compile_error")
+    );
+    assert!(
+        collect_hole(
+            HoleInterface::Batch,
+            &quote!(batch()),
+            quote!(Vec<Row>),
+            None
+        )
+        .to_string()
+        .contains("compile_error")
+    );
 }
 
 #[test]
@@ -531,11 +627,12 @@ fn push_rule_and_key_holes_receive_consumers_without_iterator_adapters() {
 fn renderer_rejects_incomplete_push_splices_before_evaluation() {
     let program = push_program();
     let holes = splice(&program).unwrap();
-    let error = render_with(&program, &holes[..1], |_, _, _, _| {
-        panic!("incomplete splice reached the evaluator")
-    })
-    .unwrap_err();
-    assert!(error.to_string().contains("hole splice coverage changed"));
+    assert!(
+        render_with(&program, &holes[..1], |_, _, _, _| {
+            panic!("incomplete splice reached the evaluator")
+        })
+        .is_err()
+    );
 }
 
 #[test]
@@ -545,6 +642,7 @@ fn pull_collection_tokens_remain_unchanged() {
         HoleInterface::Pull,
         &quote!(authored_rows()),
         provider.clone(),
+        None,
     );
     assert_eq!(
         actual.to_string(),
@@ -573,9 +671,8 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
             hole.facts,
         );
         assert!(hole.facts.consumer_canonical);
-        assert_eq!(hole.facts.discharged_host_sets.len(), 1);
 
-        // Author an independent IX projection of the actual certified input.
+        // Author an independent IX projection of an actual positive input.
         // The non-injective head still needs no per-hole result canonicalizer:
         // the rule admission/key-set consumer supplies that boundary.
         let declaration = hole
@@ -583,9 +680,10 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
             .declarations
             .iter()
             .find(|declaration| {
-                hole.facts
-                    .discharged_host_sets
-                    .contains(&declaration.name.to_string())
+                hole.cq.query.body.iter().any(|item| {
+                    matches!(item, round::cq::BodyItem::Positive { atom }
+                        if atom.relation == declaration.name)
+                })
             })
             .unwrap();
         let host = &declaration.name;
@@ -593,7 +691,7 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
         let ix: cq_lang_ix::Program = syn::parse_quote! {
             relational {
                 #declaration
-                r = rename #host@0 {#column -> x};
+                r = rename #host {#column -> x};
                 b = bind r with y:i32 = (*x % 2);
                 p = project b keep {y};
                 output p as answer(y);

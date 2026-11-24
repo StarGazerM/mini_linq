@@ -19,14 +19,15 @@ fn elaborate_expression(
     written: bool,
 ) -> TokenStream {
     let source = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
-    let vo = cq_order::compile(&source, &options).unwrap();
-    cq_order::check(&source, &vo, &options).unwrap();
-    let ra = if written {
-        cq_elaborate::compile_written(&vo).unwrap()
+    let vo = if written {
+        cq_order::compile_written(&source)
     } else {
-        cq_elaborate::compile(&vo).unwrap()
-    };
-    cq_elaborate::check(&vo, &ra).unwrap();
+        cq_order::compile(&source, &options)
+    }
+    .unwrap();
+    cq_order::check(&source, &vo, &options).unwrap();
+    let (ra, steps) = cq_relational_lowering::compile(&source, &vo).unwrap();
+    cq_relational_lowering::check(&source, &vo, &ra, &steps).unwrap();
     realize(&ra, decisions)
 }
 
@@ -42,17 +43,12 @@ fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
     }
     cq_physical_lowering::check(&ix, &physical).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let structures = if decisions.contains("ordered_dedup") {
-        authored::ordered_dedup(&structures).unwrap()
-    } else {
-        structures
-    };
     cq_structure_selection::check(&physical, &structures).unwrap();
-    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-    cq_sequence_lowering::check(&structures, &sequence).unwrap();
+    let sequence = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    cq_sequence_lowering::check(&physical, &structures, &sequence).unwrap();
     let machine = cq_sequence_pull::machine();
-    let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
-    let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&physical, &structures, &sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&physical, &structures, &sequence, &analysis).unwrap();
     quote!((#expression).into_iter())
 }
 
@@ -107,20 +103,20 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
                 }));
                 let source = "struct Q; relation R(k:Key,r:i32); answer(y) :- R(x,z), let y:i32=if x.flag {10 / *z} else {0};";
                 let written = written_expression(source, decisions);
-                let partial = expression(source, cq_order::Options { heuristic, split }, decisions);
+                let query = expression(source, cq_order::Options { heuristic, split }, decisions);
                 cases.push(quote!({
                     let rows_r = [(Key {id:1,flag:true},1),(Key {id:1,flag:false},0)];
                     #r_host
                     let mut written: Vec<_> = (#written).collect();
-                    let mut actual: Vec<_> = (#partial).collect();
+                    let mut actual: Vec<_> = (#query).collect();
                     written.sort(); actual.sort();
-                    assert_eq!(actual,written,"correlation cannot introduce a panic: {}",#label);
+                    assert_eq!(actual,written,"total expression preserves correlation: {}",#label);
                 }));
             }
         }
     }
     let source = "struct Q; relation R(k:i32,p:i32); \
-                  answer(y) :- R(x,z), if * x == 5, let y:i32 = *x + 1;";
+                  answer(y) :- R(x,z), where x == 5, let y:i32 = *x + 1;";
     let written = written_expression(source, "decisions {}");
     let point = expression(source, cq_order::Options::default(), "decisions {}");
     cases.push(quote!({
@@ -142,36 +138,38 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
 #[test]
 fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
     let source = "struct Q; relation R(k:i32,z:i32); relation S(k:i32,w:i32); \
-                  answer(y) :- R(x,z), S(x,w), if observe(x,visits), let y:i32=10 / *x;";
+                  answer(y) :- R(x,z), S(x,w), if observe(x,visits), let y:i32=10 / (*x).max(1);";
     let normalized = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
     let vo = cq_order::compile(&normalized, &cq_order::Options::default()).unwrap();
     let ra = syn::parse_quote!(relational {
         relation R(k:i32,z:i32); relation S(k:i32,w:i32);
-        r = rename R@0 {k -> x, z -> z}; rp = project r keep {x};
-        s = rename S@1 {k -> x, w -> w}; sp = project s keep {x};
+        r = rename R {k -> x, z -> z}; rp = project r keep {x};
+        s = rename S {k -> x, w -> w}; sp = project s keep {x};
         j = natural_join rp with sp;
-        g = guard j if (observe(x,visits)); b = bind g with y:i32 = (10 / *x);
+        g = guard j if (observe(x,visits)); b = bind g with y:i32 = (10 / (*x).max(1));
         p = project b keep {y}; output p as answer(y);
     });
-    cq_elaborate::check(&vo, &ra).unwrap();
+    let analysis = cq_lang_vo::contract::check(&normalized, &vo).unwrap();
+    cq_relational_lowering::check_reference(&normalized, &vo.valuation.steps, &analysis, &ra).unwrap();
     let optimized = realize(&ra, "decisions {project=canon;}");
     let written = written_expression(source, "decisions {}");
     run_cases(&[quote!({
         fn observe(x: &i32, visits: &::std::cell::Cell<usize>) -> bool {
-            assert_ne!(*x, 0, "both full written atoms must constrain the guard");
             visits.set(visits.get()+1);
             *x > 1
         }
         let mut previous_rows = None;
         for scale in [24_i32,48,96] {
             let mut rows_r: Vec<_> = (0..scale).map(|z| (2,z)).collect();
-            rows_r.push((0,0)); // S has no 0: the written reference never panics.
+            rows_r.push((0,0)); // S has no matching zero key.
             let rows_s: Vec<_> = (0..scale).map(|w| (2,w)).collect();
             let R = rows_r.as_slice(); let S = rows_s.as_slice();
             let written_visits = ::std::cell::Cell::new(0);
             let visits = &written_visits;
             let expected: ::std::collections::BTreeSet<_> = (#written).collect();
-            assert_eq!(written_visits.get(), (scale*scale) as usize);
+            // I2 places the written guard immediately after R: once for each
+            // R row, including the dangling zero key, before S's fan-out.
+            assert_eq!(written_visits.get(), rows_r.len());
             let optimized_visits = ::std::cell::Cell::new(0);
             let visits = &optimized_visits;
             ::cq_storage::counters::reset();
@@ -189,10 +187,14 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
         }
         let R: &[(i32,i32)] = &[(0,0)];
         let S: &[(i32,i32)] = &[];
-        let visits = &::std::cell::Cell::new(0);
+        let written_visits = ::std::cell::Cell::new(0);
+        let visits = &written_visits;
         assert_eq!((#written).count(), 0);
+        assert_eq!(written_visits.get(), R.len());
+        let optimized_visits = ::std::cell::Cell::new(0);
+        let visits = &optimized_visits;
         assert_eq!((#optimized).count(), 0);
-        assert_eq!(visits.get(), 0);
+        assert_eq!(optimized_visits.get(), 0);
     })]);
 }
 
@@ -209,15 +211,16 @@ fn hypergraph_programs(
     };
     let written_vo = cq_order::compile(normal, &ordering).unwrap();
     cq_order::check(normal, &written_vo, &ordering).unwrap();
-    let reference = cq_elaborate::compile_written(&written_vo).unwrap();
-    cq_elaborate::check(&written_vo, &reference).unwrap();
+    let reference_vo = cq_order::compile_written(normal).unwrap();
+    let (reference, steps) = cq_relational_lowering::compile(normal, &reference_vo).unwrap();
+    cq_relational_lowering::check(normal, &reference_vo, &reference, &steps).unwrap();
     let reductions = cq_reduce::Options {
         semijoins: cq_reduce::Reductions::Tree,
     };
-    let reduced = cq_reduce::compile(&written_vo, &reductions).unwrap();
-    cq_reduce::check(&written_vo, &reduced, &reductions).unwrap();
-    let target = cq_elaborate::compile(&reduced).unwrap();
-    cq_elaborate::check(&reduced, &target).unwrap();
+    let reduced = cq_reduce::compile(normal, &written_vo, &reductions).unwrap();
+    cq_reduce::check(normal, &written_vo, &reduced, &reductions).unwrap();
+    let (target, steps) = cq_relational_lowering::compile(normal, &reduced).unwrap();
+    cq_relational_lowering::check(normal, &reduced, &target, &steps).unwrap();
     cq_lang_ra::check_rewrite(&reference, &target).unwrap();
     (written_vo, reference, target)
 }
@@ -225,7 +228,7 @@ fn hypergraph_programs(
 fn seed_997_normal() -> cq_lang_cq::Program {
     cq_lang_cq::normal::normalize(
         &syn::parse_str(include_str!(
-            "../../../passes/cq-elaborate/tests/fixtures/fuzz_997.cq"
+            "../../../passes/cq-relational-lowering/tests/fixtures/fuzz_997.cq"
         ))
         .unwrap(),
     )
@@ -235,13 +238,16 @@ fn seed_997_normal() -> cq_lang_cq::Program {
 #[test]
 fn seed_997_hypergraph_executes_against_the_written_reference() {
     let (_, reference, target) = hypergraph_programs(&seed_997_normal());
-    let written = realize(&reference, "ordered_dedup");
-    let hypergraph = realize(&target, "ordered_dedup");
+    let written = realize(&reference, "");
+    let hypergraph = realize(&target, "");
     // Saved data.txt is `0 2 3 0 2 0`: both declared inputs are empty.
-    let generated = cq_testkit::fuzz::generate(997);
     let inputs = [
         [Vec::new(), Vec::new()],
-        [generated.data[0].clone(), generated.data[1].clone()],
+        // The original seed-997 dataset (the generator has since changed).
+        [
+            vec![vec![1, -2, 0], vec![3, 1, -3], vec![1, -2, 0]],
+            vec![vec![3, 1], vec![-3, 1], vec![1, 3], vec![-2, -2]],
+        ],
         [
             vec![
                 vec![-3, 1, -3],
@@ -264,7 +270,10 @@ fn seed_997_hypergraph_executes_against_the_written_reference() {
         ],
     ];
     let mut cases = Vec::new();
-    for (i, inputs) in inputs.iter().enumerate() {
+    for (i, mut inputs) in inputs.into_iter().enumerate() {
+        for rows in &mut inputs {
+            cq_load::canonicalize(rows);
+        }
         let r0_rows = inputs[0].iter().map(|row| {
             let (a, b, c) = (row[0], row[1], row[2]);
             quote!((#a, #b, #c))
@@ -320,10 +329,13 @@ fn seed_997_literal_occurrences_are_preserved_before_rust() {
         .unwrap();
     constants.equalities[0].right = cq_lang_ra::EqualityValue::Literal(syn::parse_quote!(99));
     cq_lang_ra::contract::check(&changed).unwrap();
-    assert!(cq_elaborate::check(&written_vo, &changed).is_err());
+    let analysis = cq_lang_vo::contract::check(&normal, &written_vo).unwrap();
+    assert!(cq_relational_lowering::check_reference(
+        &normal, &written_vo.valuation.steps, &analysis, &changed,
+    ).is_err());
     assert!(cq_lang_ra::check_rewrite(&reference, &changed).is_err());
-    let written = realize(&reference, "ordered_dedup");
-    let hypergraph = realize(&target, "ordered_dedup");
+    let written = realize(&reference, "");
+    let hypergraph = realize(&target, "");
     run_cases(&[quote!({
         let r0: &[(i32,i32,i32)] = &[(-3,1,-3)];
         let r1: &[(i32,i32)] = &[(1,0),(7,-3)];
@@ -334,64 +346,16 @@ fn seed_997_literal_occurrences_are_preserved_before_rust() {
 }
 
 #[test]
-fn seed_997_equality_class_reductions_can_suppress_a_written_panic() {
-    let mut normal = seed_997_normal();
-    let first_guard = normal
-        .query
-        .body
-        .iter_mut()
-        .find_map(|item| match item {
-            cq_lang_cq::BodyItem::Filter(g) => Some(g),
-            _ => None,
-        })
-        .unwrap();
-    let condition = &first_guard.condition;
-    first_guard.condition = syn::parse_quote!({ assert_ne!(*v3, 0); #condition });
-    let (_, reference, target) = hypergraph_programs(&normal);
-    let mut unmatched = target.clone();
-    for definition in &mut unmatched.plan.definitions {
-        if matches!(definition.operator, cq_lang_ra::Operator::Guard(_)) {
-            break;
-        }
-        if let cq_lang_ra::Operator::Select(select) = &mut definition.operator {
-            for equality in &mut select.condition.equalities {
-                if matches!(equality.right, cq_lang_ra::EqualityValue::Variable(_)) {
-                    equality.right = cq_lang_ra::EqualityValue::Variable(equality.left.clone());
-                }
-            }
-        }
-    }
-    cq_lang_ra::contract::check(&unmatched).unwrap();
-    assert!(
-        cq_lang_ra::check_rewrite(&target, &unmatched)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
-    let written = realize(&reference, "ordered_dedup");
-    let hypergraph = realize(&target, "ordered_dedup");
-    let unmatched = realize(&unmatched, "ordered_dedup");
-    run_cases(&[quote!({
-        let r0: &[(i32, i32, i32)] = &[(-3, 1, -3)];
-        let r1: &[(i32, i32)] = &[(1, 3), (7, 0)];
-        assert!(::std::panic::catch_unwind(|| (#written).collect::<Vec<_>>()).is_err());
-        // Earlier relational restriction may lawfully turn bottom into a Set.
-        assert!((#hypergraph).collect::<Vec<_>>().is_empty());
-        assert!(::std::panic::catch_unwind(|| (#unmatched).collect::<Vec<_>>()).is_err());
-    })]);
-}
-
-#[test]
-fn partial_generators_refine_written_expression_and_iteration_panics() {
+fn total_generators_preserve_answers_across_plans() {
     let mut cases = Vec::new();
     for source in [
         "struct Q; relation R(x:i32); relation S(x:i32); relation answer(value:i32); \
-         answer(value) :- R(x), S(x), for value in 0..(12 / *x);",
+         answer(value) :- R(x), S(x), for value in 0..(12 / (*x).max(1));",
         "struct Q; relation R(x:i32); relation S(x:i32); relation answer(value:i32); \
-         answer(value) :- R(x), S(x), for value in partial_items(x);",
+         answer(value) :- R(x), S(x), for value in total_items(x);",
         "struct Q; relation R(x:i32); relation S(x:i32); relation answer(value:i32); \
          answer(value) :- R(x), if std::convert::identity(*x) != 0, \
-         for value in partial_items(x), S(x);",
+         for value in total_items(x), S(x);",
     ] {
         let written = written_expression(source, "decisions {}");
         for heuristic in [
@@ -407,31 +371,25 @@ fn partial_generators_refine_written_expression_and_iteration_panics() {
                     "decisions {}",
                 );
                 cases.push(quote!({
-                    fn partial_items(x: &i32) -> impl Iterator<Item = i32> {
-                        let denominator = *x;
+                    fn total_items(x: &i32) -> impl Iterator<Item = i32> {
+                        let denominator = (*x).max(1);
                         (0..2).map(move |value| {
                             if value == 0 { 0 } else { 12 / denominator }
                         })
                     }
-                    for (rows_r, rows_s) in [
+                    for (mut rows_r, mut rows_s) in [
                         (vec![(0,), (2,)], vec![(2,)]),
                         (vec![(0,)], vec![]),
                         (vec![(0,)], vec![(0,)]),
                         (vec![(2,), (2,)], vec![(2,), (2,)]),
                     ] {
+                        rows_r.sort_unstable(); rows_r.dedup();
+                        rows_s.sort_unstable(); rows_s.dedup();
                         let R = rows_r.as_slice();
                         let S = rows_s.as_slice();
-                        let expected = ::std::panic::catch_unwind(|| {
-                            (#written).collect::<::std::collections::BTreeSet<_>>()
-                        });
-                        let actual = ::std::panic::catch_unwind(|| {
-                            (#optimized).collect::<::std::collections::BTreeSet<_>>()
-                        });
-                        // Defined written answers must remain defined and identical;
-                        // written bottom may refine to either bottom or a set.
-                        if let Ok(expected) = expected {
-                            assert_eq!(actual.unwrap(), expected);
-                        }
+                        let expected = (#written).collect::<::std::collections::BTreeSet<_>>();
+                        let actual = (#optimized).collect::<::std::collections::BTreeSet<_>>();
+                        assert_eq!(actual, expected);
                     }
                 }));
             }
@@ -440,11 +398,247 @@ fn partial_generators_refine_written_expression_and_iteration_panics() {
     run_cases(&cases);
 }
 
+#[test]
+fn seed_105_positional_join_filters_accept_custom_single_level_providers() {
+    // Permanent seed 105 corpus input, including every opaque Rust expression.
+    // External hypergraph = WrittenCoarse + Tree + simplify_reductions.
+    let source = r#"
+struct Fuzz;
+relation r0(c0: i32);
+relation r1(c0: i32, c1: i32);
+relation r2(c0: i32, c1: i32);
+relation r3(c0: i32, c1: i32);
+relation answer(c0: i32, c1: i32);
+answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0), r3(v0, v0), r0(v1), let v2: i32 = (v1.to_owned() + 3), if !(((v1.to_owned() >= 1) && (std::convert::identity(v2.to_owned()) < 2))), if ((v0.to_owned() + v1.to_owned()) < v0.to_owned()), where v0 != 2, where (v2 != parameter_positive_3) || (v0 < v0 && v1 == v0) || (v1 < 3 && v0 < v2), where v1 > parameter_positive_3;
+"#;
+    let normal = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
+    let (_, reference, target) = hypergraph_programs(&normal);
+    let target = cq_ra_rewrites::simplify_reductions(&target).unwrap();
+    cq_lang_ra::check_rewrite(&reference, &target).unwrap();
+    let ix = cq_index_policy::compile(&target).unwrap();
+    cq_index_policy::check(&target, &ix).unwrap();
+    let physical = cq_physical_lowering::compile(&ix).unwrap();
+    let smallest = authored::smallest(&physical).unwrap();
+    cq_lang_physical::check_rewrite(&physical, &smallest).unwrap();
+    cq_physical_lowering::check(&ix, &smallest).unwrap();
+    let (selected_physical, selected) =
+        cq_structure_selection::compile_with(&smallest, quote!(positional(r0, r1, r2, r3)))
+            .unwrap();
+    let before = cq_lang_structures::contract::check(&selected_physical, &selected).unwrap();
+    assert!(
+        !before.join_filters.is_empty(),
+        "the seed must exercise a real positional join filter"
+    );
+
+    // As in sorted_payload, change only provider tokens, not recorded layouts.
+    // The replacement deliberately has neither inherent keys() nor len().
+    let custom_index: cq_lang_structures::Declaration = syn::parse_quote!(
+        custom_index = CustomIndex<'_, _, _> {
+            reads [exact, membership], supports [keys], build typed, join_filter
+        };
+    );
+    fn retype(
+        provider: &mut cq_lang_structures::Provider,
+        custom: &cq_lang_structures::Declaration,
+    ) -> bool {
+        if provider.token == "hash_index" {
+            *provider = custom.instance();
+            return true;
+        }
+        let Some(inner) = &mut provider.inner else {
+            return false;
+        };
+        if retype(inner, custom) {
+            *provider =
+                cq_lang_structures::provider::base::declaration(&provider.token.to_string())
+                    .compose((**inner).clone())
+                    .unwrap();
+            return true;
+        }
+        false
+    }
+    let mut custom = selected.clone();
+    let mut single_level_builds = std::collections::BTreeSet::new();
+    for entry in &mut custom.structures.entries {
+        match &mut entry.structure {
+            cq_lang_structures::Structure::Built { keyed, .. }
+            | cq_lang_structures::Structure::Host { keyed, .. } => {
+                let old = keyed.provider.clone();
+                retype(&mut keyed.provider, &custom_index);
+                if old != keyed.provider && keyed.levels.len() == 1 {
+                    single_level_builds.insert(entry.name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        before
+            .join_filters
+            .values()
+            .flatten()
+            .any(|filter| { single_level_builds.contains(&filter.build.to_string()) }),
+        "a join filter must enumerate a retyped single-level provider"
+    );
+    custom.structures.declare(&[custom_index]).unwrap();
+    cq_lang_structures::record_join_filter_policies(&selected_physical, &mut custom).unwrap();
+    cq_lang_structures::check_rewrite(
+        &selected_physical, &selected, &selected_physical, &custom,
+    ).unwrap();
+    cq_structure_selection::check(&selected_physical, &custom).unwrap();
+    let sequence = cq_sequence_lowering::compile(&selected_physical, &custom).unwrap();
+    cq_sequence_lowering::check(&selected_physical, &custom, &sequence).unwrap();
+    let machine = cq_sequence_pull::machine();
+    let analysis = cq_lang_sequence::check_grading(&selected_physical, &custom, &sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&selected_physical, &custom, &sequence, &analysis).unwrap();
+    let emitted = quote!(#expression).to_string();
+    assert!(!emitted.contains("BuildWithSidecar"));
+    assert!(emitted.contains("Keys :: distinct_keys"));
+    assert!(emitted.contains("Keys :: key_count"));
+    let written = realize(&reference, "");
+
+    // Saved data.txt is `0 4 1 0 2 0 2 0 2 0`: all four inputs empty.
+    let inputs = [
+        vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        vec![
+            vec![vec![-4], vec![0], vec![3], vec![4], vec![4], vec![7]],
+            vec![vec![1, 2]],
+            vec![vec![2, 1]],
+            vec![
+                vec![-3, -3],
+                vec![0, 0],
+                vec![2, 2],
+                vec![5, 5],
+                vec![5, 5],
+                vec![5, 6],
+            ],
+        ],
+    ];
+    let cases = inputs.into_iter().enumerate().map(|(case, mut inputs)| {
+        for rows in &mut inputs {
+            cq_load::canonicalize(rows);
+        }
+        let rows0 = inputs[0].iter().map(|row| {
+            let a = row[0];
+            quote!((#a,))
+        });
+        let pairs = |relation: usize| {
+            inputs[relation]
+                .iter()
+                .map(|row| {
+                    let (a, b) = (row[0], row[1]);
+                    quote!((#a, #b))
+                })
+                .collect::<Vec<_>>()
+        };
+        let (rows1, rows2, rows3) = (pairs(1), pairs(2), pairs(3));
+        quote!({
+            let r0: &[(i32,)] = &[#(#rows0),*];
+            let r1: &[(i32, i32)] = &[#(#rows1),*];
+            let r2: &[(i32, i32)] = &[#(#rows2),*];
+            let r3: &[(i32, i32)] = &[#(#rows3),*];
+            let parameter_positive_3: i32 = 3;
+            let expected: ::std::collections::BTreeSet<_> =
+                (#written).map(|(a, b)| (integer(a), integer(b))).collect();
+            let actual: ::std::collections::BTreeSet<_> =
+                (#expression).into_iter().map(|(a, b)| (integer(a), integer(b))).collect();
+            assert_eq!(actual, expected, "seed 105 input {}", #case);
+        })
+    });
+    let program = quote! {
+        #![allow(non_snake_case, unused_variables, unused_macros, unused_parens)]
+        // A newtype keeps construction/lookup semantics while exposing only
+        // public provider traits to generated code, never HashIndex methods.
+        struct CustomIndex<'a, K, V>(::cq_storage::HashIndex<'a, K, V>);
+        impl<K, V> Clone for CustomIndex<'_, K, V> {
+            fn clone(&self) -> Self { Self(self.0.clone()) }
+        }
+        impl<'a, K: Eq + ::std::hash::Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a>
+            ::cq_storage::Build<I> for CustomIndex<'a, K, V>
+        {
+            fn build(source: I) -> Self { Self(::cq_storage::Build::build(source)) }
+        }
+        impl<'a, K: Eq + ::std::hash::Hash + 'a, V: Copy + 'a,
+            I: Iterator<Item = (K, V)> + 'a, S: ::cq_storage::SidecarBuilder<K>>
+            ::cq_storage::BuildWithSidecar<I, S> for CustomIndex<'a, K, V>
+        {
+            fn build_with_sidecar<const ROWS: bool, const MAX_GROUP: bool>(source: I, sidecar: S) -> (Self, S::Output) {
+                let (index, filter) = ::cq_storage::BuildWithSidecar::build_with_sidecar::<ROWS, MAX_GROUP>(source, sidecar);
+                (Self(index), filter)
+            }
+        }
+        impl<'a, K: Eq + ::std::hash::Hash, V: Copy> ::cq_storage::IndexRead
+            for CustomIndex<'a, K, V>
+        {
+            type Key = K;
+            type Item = V;
+            type Cursor = <::cq_storage::HashIndex<'a, K, V> as ::cq_storage::IndexRead>::Cursor;
+            fn lookup(&self, key: &K) -> Self::Cursor {
+                ::cq_storage::IndexRead::lookup(&self.0, key)
+            }
+        }
+        impl<'a, K: Eq + ::std::hash::Hash, V> ::cq_storage::Keys
+            for CustomIndex<'a, K, V>
+        {
+            type Key = K;
+            type Iter<'b> = <::cq_storage::HashIndex<'a, K, V> as ::cq_storage::Keys>::Iter<'b>
+                where Self: 'b;
+            fn key_count(&self) -> usize { ::cq_storage::Keys::key_count(&self.0) }
+            fn distinct_keys(&self) -> Self::Iter<'_> {
+                ::cq_storage::Keys::distinct_keys(&self.0)
+            }
+        }
+        impl<K: Eq + ::std::hash::Hash, V: Copy> ::cq_storage::ExactMembership<K>
+            for CustomIndex<'_, K, V>
+        {
+            fn contains(&self, key: &K) -> bool {
+                ::cq_storage::ExactMembership::contains(&self.0, key)
+            }
+        }
+        impl<'a, K: Eq + ::std::hash::Hash, V: Copy + Eq + ::std::hash::Hash>
+            ::cq_storage::Candidates for CustomIndex<'a, K, V>
+        {
+            type Key = K;
+            type Item = V;
+            type Iter = <::cq_storage::HashIndex<'a, K, V> as ::cq_storage::Candidates>::Iter;
+            fn count(&self, key: &K) -> usize {
+                ::cq_storage::Candidates::count(&self.0, key)
+            }
+            fn keys(&self, key: &K) -> Self::Iter {
+                ::cq_storage::Candidates::keys(&self.0, key)
+            }
+        }
+        fn integer(value: impl ::std::borrow::Borrow<i32>) -> i32 { *value.borrow() }
+        fn main() { #(#cases)* }
+    };
+    // Positional ColumnAt markers and storage must use the same Cargo graph.
+    let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
+        cq_testkit::rustc::linked_dependency::<cq_storage::NoDense>(
+            "cq_storage",
+            "cq_storage::NoDense",
+        ),
+        cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
+            "cq_load",
+            "cq_load::ColumnAt<0>",
+        ),
+    ]);
+    let run = runtime.run(&program.to_string());
+    print!("{}", String::from_utf8_lossy(&run.stdout));
+}
+
 fn run_cases(cases: &[TokenStream]) {
     let program = quote! {
         #![allow(non_snake_case, unused_variables, unused_macros)]
         #[derive(Clone,Debug,PartialEq,Eq,Hash,PartialOrd,Ord)]
         struct Key { id:i32, flag:bool }
+        // A one-column key set is recorded as dense membership, whose key
+        // must state its order-preserving ordinal (STR-AdaptiveMembership).
+        impl ::cq_storage::OrderKey for Key {
+            type Ordinal = u64;
+            fn ordinal(&self) -> u64 {
+                (u64::from(self.id as u32 ^ (1 << 31)) << 1) | u64::from(self.flag)
+            }
+        }
         fn main() { #(#cases)* }
     };
     let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

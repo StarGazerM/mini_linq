@@ -1,7 +1,9 @@
 //! Deterministic GPU-versus-CPU oracles exercising cross-crate device helpers.
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D};
-use cuda_device::{kernel, launch_bounds, launch_contract, thread, DisjointSlice, DynamicSharedArray};
+use cuda_device::{
+    kernel, launch_bounds, launch_contract, thread, DisjointSlice, DynamicSharedArray,
+};
 use std::error::Error;
 
 const THREADS: usize = gpu_tiles::BLOCK_THREADS as usize;
@@ -41,19 +43,30 @@ mod kernels {
         let scratch = unsafe { packed.add(ITEMS) };
         let mut i = tid;
         while i < ITEMS {
-            unsafe { *packed.add(i) = POISON; }
+            unsafe {
+                *packed.add(i) = POISON;
+            }
             i += THREADS;
         }
         thread::sync_threads();
         let base = tile * ITEMS + tid * 4;
-        let mask = [input[base] != 0, input[base + 1] != 0, input[base + 2] != 0, input[base + 3] != 0];
+        let mask = [
+            input[base] != 0,
+            input[base + 1] != 0,
+            input[base + 2] != 0,
+            input[base + 3] != 0,
+        ];
         let count = gpu_tiles::compact(mask, packed, scratch);
         let mut i = tid;
         while i < ITEMS {
-            unsafe { *output.get_unchecked_mut(tile * (ITEMS + THREADS) + i) = *packed.add(i); }
+            unsafe {
+                *output.get_unchecked_mut(tile * (ITEMS + THREADS) + i) = *packed.add(i);
+            }
             i += THREADS;
         }
-        unsafe { *output.get_unchecked_mut(tile * (ITEMS + THREADS) + ITEMS + tid) = count; }
+        unsafe {
+            *output.get_unchecked_mut(tile * (ITEMS + THREADS) + ITEMS + tid) = count;
+        }
     }
 
     #[kernel]
@@ -66,7 +79,13 @@ mod kernels {
         let n = sizes[tile];
         let mut i = tid;
         while i < ITEMS {
-            unsafe { *shared.add(i) = if i < n as usize { input[tile * ITEMS + i] } else { POISON }; }
+            unsafe {
+                *shared.add(i) = if i < n as usize {
+                    input[tile * ITEMS + i]
+                } else {
+                    POISON
+                };
+            }
             i += THREADS;
         }
         // Padding may be written by a different thread than the initial load.
@@ -74,7 +93,9 @@ mod kernels {
         gpu_tiles::sort(shared, n);
         let mut i = tid;
         while i < ITEMS {
-            unsafe { *output.get_unchecked_mut(tile * ITEMS + i) = *shared.add(i); }
+            unsafe {
+                *output.get_unchecked_mut(tile * ITEMS + i) = *shared.add(i);
+            }
             i += THREADS;
         }
     }
@@ -87,17 +108,26 @@ mod kernels {
         let i = index.get();
         if i < positions.len() {
             let parent = gpu_tiles::owner(offsets.as_ptr(), n, positions[i]);
-            unsafe { *output.get_unchecked_mut(i) = parent; }
+            unsafe {
+                *output.get_unchecked_mut(i) = parent;
+            }
         }
     }
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn merge_case(a: &[u32], b: &[u32], a_len: u32, b_len: u32, mut output: DisjointSlice<u32>) {
+    pub fn merge_case(
+        a: &[u32],
+        b: &[u32],
+        a_len: u32,
+        b_len: u32,
+        mut output: DisjointSlice<u32>,
+    ) {
         let diagonal = thread::index_1d().get();
         if diagonal <= (a_len + b_len) as usize {
-            let (i, j) = gpu_tiles::merge_path(a.as_ptr(), a_len, b.as_ptr(), b_len, diagonal as u32);
+            let (i, j) =
+                gpu_tiles::merge_path(a.as_ptr(), a_len, b.as_ptr(), b_len, diagonal as u32);
             unsafe {
                 *output.get_unchecked_mut(diagonal * 2) = i;
                 *output.get_unchecked_mut(diagonal * 2 + 1) = j;
@@ -117,7 +147,11 @@ impl Random {
     }
 }
 
-fn check_scan(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut Random) -> Result<usize> {
+fn check_scan(
+    module: &kernels::LoadedModule,
+    stream: &CudaStream,
+    random: &mut Random,
+) -> Result<usize> {
     let mut cases = vec![vec![0; THREADS], vec![1; THREADS], vec![u32::MAX; THREADS]];
     cases.push((0..THREADS as u32).collect());
     for index in [0, 1, 31, 32, 63, 127, 128, 254, 255] {
@@ -126,7 +160,11 @@ fn check_scan(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut 
         cases.push(values);
     }
     for valid in [1, 31, 32, 33, 255] {
-        cases.push((0..THREADS).map(|i| if i < valid { random.next() % 100 } else { 0 }).collect());
+        cases.push(
+            (0..THREADS)
+                .map(|i| if i < valid { random.next() % 100 } else { 0 })
+                .collect(),
+        );
     }
     for _ in 0..64 {
         cases.push((0..THREADS).map(|_| random.next()).collect());
@@ -134,11 +172,14 @@ fn check_scan(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut 
     let input: Vec<u32> = cases.iter().flatten().copied().collect();
     let device = DeviceBuffer::from_host(stream, &input)?;
     let mut output = DeviceBuffer::<u32>::zeroed(stream, input.len() * 4)?;
-    let launch = module.prepare_scan_case(LaunchConfig1D::new(cases.len() as u32, THREADS as u32, 32))?;
+    let launch =
+        module.prepare_scan_case(LaunchConfig1D::new(cases.len() as u32, THREADS as u32, 32))?;
     module.scan_case(stream, &launch, &device, &mut output)?;
     let actual = output.to_host_vec(stream)?;
     for (case, values) in cases.iter().enumerate() {
-        let total = values.iter().fold(0u32, |sum, value| sum.wrapping_add(*value));
+        let total = values
+            .iter()
+            .fold(0u32, |sum, value| sum.wrapping_add(*value));
         let mut prefix = 0u32;
         let mut second_total = 0u32;
         for value in values {
@@ -149,7 +190,11 @@ fn check_scan(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut 
         let mut second_prefix = 0u32;
         for (i, value) in values.iter().enumerate() {
             let start = (case * THREADS + i) * 4;
-            assert_eq!(&actual[start..start + 4], &[prefix, total, second_prefix, second_total], "scan case={case} lane={i}");
+            assert_eq!(
+                &actual[start..start + 4],
+                &[prefix, total, second_prefix, second_total],
+                "scan case={case} lane={i}"
+            );
             second_prefix = second_prefix.wrapping_add(prefix);
             prefix = prefix.wrapping_add(*value);
         }
@@ -157,7 +202,11 @@ fn check_scan(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut 
     Ok(cases.len())
 }
 
-fn check_compact(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut Random) -> Result<usize> {
+fn check_compact(
+    module: &kernels::LoadedModule,
+    stream: &CudaStream,
+    random: &mut Random,
+) -> Result<usize> {
     let mut cases = vec![vec![0; ITEMS], vec![1; ITEMS]];
     cases.push((0..ITEMS).map(|i| (i % 2) as u32).collect());
     cases.push((0..ITEMS).map(|i| ((i + 1) % 2) as u32).collect());
@@ -171,34 +220,68 @@ fn check_compact(module: &kernels::LoadedModule, stream: &CudaStream, random: &m
     }
     for density in [1, 8, 32, 63] {
         for _ in 0..16 {
-            cases.push((0..ITEMS).map(|_| ((random.next() % 64) < density) as u32).collect());
+            cases.push(
+                (0..ITEMS)
+                    .map(|_| ((random.next() % 64) < density) as u32)
+                    .collect(),
+            );
         }
     }
     let input: Vec<u32> = cases.iter().flatten().copied().collect();
     let device = DeviceBuffer::from_host(stream, &input)?;
     let stride = ITEMS + THREADS;
     let mut output = DeviceBuffer::<u32>::zeroed(stream, cases.len() * stride)?;
-    let launch = module.prepare_compact_case(LaunchConfig1D::new(cases.len() as u32, THREADS as u32, 4128))?;
+    let launch = module.prepare_compact_case(LaunchConfig1D::new(
+        cases.len() as u32,
+        THREADS as u32,
+        4128,
+    ))?;
     module.compact_case(stream, &launch, &device, &mut output)?;
     let actual = output.to_host_vec(stream)?;
     for (case, values) in cases.iter().enumerate() {
-        let expected: Vec<u32> = values.iter().enumerate().filter(|(_, v)| **v != 0).map(|(i, _)| i as u32).collect();
+        let expected: Vec<u32> = values
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| **v != 0)
+            .map(|(i, _)| i as u32)
+            .collect();
         let result = &actual[case * stride..(case + 1) * stride];
-        assert_eq!(&result[..expected.len()], expected.as_slice(), "compact case={case}");
-        assert!(result[expected.len()..ITEMS].iter().all(|v| *v == POISON), "compact wrote beyond count, case={case}");
-        assert!(result[ITEMS..].iter().all(|v| *v == expected.len() as u32), "compact count case={case}");
+        assert_eq!(
+            &result[..expected.len()],
+            expected.as_slice(),
+            "compact case={case}"
+        );
+        assert!(
+            result[expected.len()..ITEMS].iter().all(|v| *v == POISON),
+            "compact wrote beyond count, case={case}"
+        );
+        assert!(
+            result[ITEMS..].iter().all(|v| *v == expected.len() as u32),
+            "compact count case={case}"
+        );
     }
     Ok(cases.len())
 }
 
-fn check_sort(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut Random) -> Result<usize> {
+fn check_sort(
+    module: &kernels::LoadedModule,
+    stream: &CudaStream,
+    random: &mut Random,
+) -> Result<usize> {
     let mut cases = Vec::<Vec<u32>>::new();
-    for n in [0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513, 1023, 1024] {
+    for n in [
+        0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511,
+        512, 513, 1023, 1024,
+    ] {
         cases.push((0..n as u32).collect());
         cases.push((0..n as u32).rev().collect());
         cases.push(vec![u32::MAX; n]);
         cases.push(vec![0; n]);
-        cases.push((0..n).map(|i| if i % 2 == 0 { u32::MAX } else { 0 }).collect());
+        cases.push(
+            (0..n)
+                .map(|i| if i % 2 == 0 { u32::MAX } else { 0 })
+                .collect(),
+        );
         cases.push((0..n).map(|_| random.next()).collect());
         cases.push((0..n).map(|_| random.next() % 7).collect());
     }
@@ -214,7 +297,11 @@ fn check_sort(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut 
     let device = DeviceBuffer::from_host(stream, &input)?;
     let device_sizes = DeviceBuffer::from_host(stream, &sizes)?;
     let mut output = DeviceBuffer::<u32>::zeroed(stream, input.len())?;
-    let launch = module.prepare_sort_case(LaunchConfig1D::new(cases.len() as u32, THREADS as u32, 4096))?;
+    let launch = module.prepare_sort_case(LaunchConfig1D::new(
+        cases.len() as u32,
+        THREADS as u32,
+        4096,
+    ))?;
     module.sort_case(stream, &launch, &device, &device_sizes, &mut output)?;
     let actual = output.to_host_vec(stream)?;
     for (case, values) in cases.iter().enumerate() {
@@ -222,16 +309,31 @@ fn check_sort(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut 
         expected.sort_unstable();
         expected.resize(values.len().max(1).next_power_of_two(), u32::MAX);
         expected.resize(ITEMS, POISON);
-        assert_eq!(&actual[case * ITEMS..(case + 1) * ITEMS], expected.as_slice(), "sort case={case} n={}", values.len());
+        assert_eq!(
+            &actual[case * ITEMS..(case + 1) * ITEMS],
+            expected.as_slice(),
+            "sort case={case} n={}",
+            values.len()
+        );
     }
     Ok(cases.len())
 }
 
-fn check_owner(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut Random) -> Result<usize> {
+fn check_owner(
+    module: &kernels::LoadedModule,
+    stream: &CudaStream,
+    random: &mut Random,
+) -> Result<usize> {
     let mut cases = vec![
-        vec![0], vec![5], vec![0, 0], vec![0, 1], vec![0, 0, 0, 0],
-        vec![0, 0, 3, 3, 3, 7, 7], vec![4, 4, 5, 5, 10, 10],
-        vec![0, u32::MAX], vec![0, 1, 1, u32::MAX, u32::MAX],
+        vec![0],
+        vec![5],
+        vec![0, 0],
+        vec![0, 1],
+        vec![0, 0, 0, 0],
+        vec![0, 0, 3, 3, 3, 7, 7],
+        vec![4, 4, 5, 5, 10, 10],
+        vec![0, u32::MAX],
+        vec![0, 1, 1, u32::MAX, u32::MAX],
     ];
     for n in [1, 2, 31, 32, 255, 256, 1024] {
         for _ in 0..8 {
@@ -247,33 +349,64 @@ fn check_owner(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut
         let mut positions = vec![0, 1, u32::MAX - 1, u32::MAX];
         for offset in offsets {
             positions.push(*offset);
-            if *offset > 0 { positions.push(offset - 1); }
-            if *offset < u32::MAX { positions.push(offset + 1); }
+            if *offset > 0 {
+                positions.push(offset - 1);
+            }
+            if *offset < u32::MAX {
+                positions.push(offset + 1);
+            }
         }
         // Exhaust every position for bounded random ranges; sample the u32 domain too.
         let end = *offsets.last().unwrap();
-        if end < 8192 { positions.extend(0..=end); }
+        if end < 8192 {
+            positions.extend(0..=end);
+        }
         positions.extend((0..64).map(|_| random.next()));
         let device_offsets = DeviceBuffer::from_host(stream, offsets)?;
         let device_positions = DeviceBuffer::from_host(stream, &positions)?;
         let mut output = DeviceBuffer::<u32>::zeroed(stream, positions.len())?;
-        let launch = module.prepare_owner_case(LaunchConfig1D::new(positions.len().div_ceil(THREADS) as u32, THREADS as u32, 0))?;
-        module.owner_case(stream, &launch, &device_offsets, &device_positions, n as u32, &mut output)?;
+        let launch = module.prepare_owner_case(LaunchConfig1D::new(
+            positions.len().div_ceil(THREADS) as u32,
+            THREADS as u32,
+            0,
+        ))?;
+        module.owner_case(
+            stream,
+            &launch,
+            &device_offsets,
+            &device_positions,
+            n as u32,
+            &mut output,
+        )?;
         let actual = output.to_host_vec(stream)?;
         for (i, position) in positions.iter().enumerate() {
             // Independent linear interval membership, not another upper_bound.
-            let expected = offsets.windows(2).position(|pair| pair[0] <= *position && *position < pair[1]).unwrap_or(n);
-            assert_eq!(actual[i], expected as u32, "owner case={case} position={position}");
+            let expected = offsets
+                .windows(2)
+                .position(|pair| pair[0] <= *position && *position < pair[1])
+                .unwrap_or(n);
+            assert_eq!(
+                actual[i], expected as u32,
+                "owner case={case} position={position}"
+            );
         }
     }
     Ok(cases.len())
 }
 
-fn check_merge(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut Random) -> Result<usize> {
+fn check_merge(
+    module: &kernels::LoadedModule,
+    stream: &CudaStream,
+    random: &mut Random,
+) -> Result<usize> {
     let mut cases = vec![
-        (vec![], vec![]), (vec![], vec![0, 0, u32::MAX]), (vec![0, 0, u32::MAX], vec![]),
-        (vec![0], vec![0]), (vec![u32::MAX], vec![u32::MAX]),
-        (vec![1, 2, 3], vec![4, 5, 6]), (vec![4, 5, 6], vec![1, 2, 3]),
+        (vec![], vec![]),
+        (vec![], vec![0, 0, u32::MAX]),
+        (vec![0, 0, u32::MAX], vec![]),
+        (vec![0], vec![0]),
+        (vec![u32::MAX], vec![u32::MAX]),
+        (vec![1, 2, 3], vec![4, 5, 6]),
+        (vec![4, 5, 6], vec![1, 2, 3]),
         (vec![0, 2, 4, 6], vec![1, 3, 5, 7]),
         (vec![0, 0, 2, 2, u32::MAX], vec![0, 1, 2, 2, u32::MAX]),
         (vec![7; 1024], vec![7; 1024]),
@@ -298,18 +431,52 @@ fn check_merge(module: &kernels::LoadedModule, stream: &CudaStream, random: &mut
     }
     for (case, (a, b)) in cases.iter().enumerate() {
         // Keep a nonempty allocation for empty logical inputs; the helper must not read it.
-        let device_a = DeviceBuffer::from_host(stream, if a.is_empty() { &[POISON][..] } else { a.as_slice() })?;
-        let device_b = DeviceBuffer::from_host(stream, if b.is_empty() { &[POISON][..] } else { b.as_slice() })?;
+        let device_a = DeviceBuffer::from_host(
+            stream,
+            if a.is_empty() {
+                &[POISON][..]
+            } else {
+                a.as_slice()
+            },
+        )?;
+        let device_b = DeviceBuffer::from_host(
+            stream,
+            if b.is_empty() {
+                &[POISON][..]
+            } else {
+                b.as_slice()
+            },
+        )?;
         let diagonals = a.len() + b.len() + 1;
         let mut output = DeviceBuffer::<u32>::zeroed(stream, diagonals * 2)?;
-        let launch = module.prepare_merge_case(LaunchConfig1D::new(diagonals.div_ceil(THREADS) as u32, THREADS as u32, 0))?;
-        module.merge_case(stream, &launch, &device_a, &device_b, a.len() as u32, b.len() as u32, &mut output)?;
+        let launch = module.prepare_merge_case(LaunchConfig1D::new(
+            diagonals.div_ceil(THREADS) as u32,
+            THREADS as u32,
+            0,
+        ))?;
+        module.merge_case(
+            stream,
+            &launch,
+            &device_a,
+            &device_b,
+            a.len() as u32,
+            b.len() as u32,
+            &mut output,
+        )?;
         let actual = output.to_host_vec(stream)?;
         let (mut i, mut j) = (0, 0);
         for diagonal in 0..diagonals {
-            assert_eq!(&actual[diagonal * 2..diagonal * 2 + 2], &[i as u32, j as u32], "merge case={case} diagonal={diagonal}");
+            assert_eq!(
+                &actual[diagonal * 2..diagonal * 2 + 2],
+                &[i as u32, j as u32],
+                "merge case={case} diagonal={diagonal}"
+            );
             if diagonal + 1 < diagonals {
-                if i < a.len() && (j == b.len() || a[i] <= b[j]) { i += 1; } else { j += 1; }
+                if i < a.len() && (j == b.len() || a[i] <= b[j]) {
+                    i += 1;
+                } else {
+                    j += 1;
+                }
             }
         }
     }

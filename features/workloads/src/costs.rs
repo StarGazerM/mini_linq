@@ -19,8 +19,7 @@ macro_rules! configuration {
 
 configuration!(keep, {
     pub(super) fn triangle(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
-        ::mini_linq::compile! {
-            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+        ::mini_linq::mini_linq! {
             struct Triangle;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(a:i32,c:i32);
             answer(a,b,c) :- r(a,b),s(b,c),t(a,c);
@@ -29,8 +28,7 @@ configuration!(keep, {
         .collect()
     }
     pub(super) fn chain(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
-        ::mini_linq::compile! {
-            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+        ::mini_linq::mini_linq! {
             struct Chain;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(c:i32,d:i32);
             answer(a,b,c,d) :- r(a,b),s(b,c),t(c,d);
@@ -40,12 +38,12 @@ configuration!(keep, {
     }
     pub(super) fn projection(r: &[Edge], s: &[Edge]) -> Answers {
         ::mini_linq::passes::index_demands! {
-            pipeline { mini_linq::passes::lower, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
+            pipeline { mini_linq::passes::lower, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
-                r0 = rename r@0 { a -> a, dropped -> dropped };
+                r0 = rename r { a -> a, dropped -> dropped };
                 prefix = project r0 keep { a };
-                s0 = rename s@1 { a -> a, b -> b };
+                s0 = rename s { a -> a, b -> b };
                 joined = natural_join prefix with s0;
                 result = project joined keep { b };
                 output result as answer(b);
@@ -53,28 +51,25 @@ configuration!(keep, {
         }.map(|(b,)| vec![*b]).collect()
     }
     pub(super) fn range_slice(r: &[Edge]) -> Answers {
-        ::mini_linq::compile! {
-            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+        ::mini_linq::mini_linq! {
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
+            answer(a,b) :- r(a,b), where a >= 2, where a < 6;
         }
         .map(|(a, b)| vec![*a, *b])
         .collect()
     }
     pub(super) fn range_map(r: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>) -> Answers {
-        ::mini_linq::compile! {
-            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+        ::mini_linq::mini_linq! {
             struct Range;
-            relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
+            relation r(a:i32,b:i32) = (*r) host [a] reads [exact, membership, range, ordered];
+            answer(a,b) :- r(a,b), where a >= 2, where a < 6;
         }
         .map(|(a, b)| vec![*a, *b])
         .collect()
     }
     pub(super) fn probe_slice(l: &[(i32,)], r: &[Edge]) -> Answers {
-        ::mini_linq::compile! {
-            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+        ::mini_linq::mini_linq! {
             struct Probe;
             relation l(a:i32); relation r(a:i32,b:i32);
             answer(a,b) :- l(a),r(a,b);
@@ -86,10 +81,9 @@ configuration!(keep, {
         l: &[(i32,)],
         r: &crate::measurement::HashMap<(i32,), Vec<(i32,)>>,
     ) -> Answers {
-        ::mini_linq::compile! {
-            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+        ::mini_linq::mini_linq! {
             struct Probe;
-            relation l(a:i32); relation r(a:i32,b:i32);
+            relation l(a:i32); relation r(a:i32,b:i32) = (*r) host [a] reads [exact, membership];
             answer(a,b) :- l(a),r(a,b);
         }
         .map(|(a, b)| vec![*a, *b])
@@ -106,11 +100,13 @@ configuration!(keep, {
             true
         };
         let answers = ::mini_linq::compile! {
-            pipeline { plan = cq_planners::order(prefix connected, fine); structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+            pipeline { plan = cq_planners::order(prefix connected, fine); }
             struct Disconnected;
             relation r(b:i32,a:i32); relation s(c:i32); relation t(b:i32,c:i32,k:i32);
             answer(k) :- r(b,a),s(c),t(b,c,k),if observe(b,c);
-        }.map(|(k,)| vec![*k]).collect();
+        }
+        .map(|(k,)| vec![*k])
+        .collect();
         (answers, visits.get())
     }
     pub(super) fn elimination(r: &[Edge], s: &[(i32,)], t: &[(i32, i32, i32)]) -> (Answers, usize) {
@@ -120,11 +116,13 @@ configuration!(keep, {
             true
         };
         let answers = ::mini_linq::compile! {
-            pipeline { plan = cq_planners::order(elimination, fine); structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+            pipeline { plan = cq_planners::order(elimination, fine); }
             struct Disconnected;
             relation r(b:i32,a:i32); relation s(c:i32); relation t(b:i32,c:i32,k:i32);
             answer(k) :- r(b,a),s(c),t(b,c,k),if observe(b,c);
-        }.map(|(k,)| vec![*k]).collect();
+        }
+        .map(|(k,)| vec![*k])
+        .collect();
         (answers, visits.get())
     }
 });
@@ -132,7 +130,7 @@ configuration!(keep, {
 configuration!(canon, {
     pub(super) fn triangle(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
         ::mini_linq::compile! {
-            pipeline { plan = cq_planners::order(written, fine); physical = [cq_rewrites::canon_prefixes]; structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+            pipeline { plan = cq_planners::order(written, fine); physical = [cq_rewrites::canon_prefixes]; }
             struct Triangle;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(a:i32,c:i32);
             answer(a,b,c) :- r(a,b),s(b,c),t(a,c);
@@ -140,12 +138,12 @@ configuration!(canon, {
     }
     pub(super) fn projection(r: &[Edge], s: &[Edge]) -> Answers {
         ::mini_linq::passes::index_demands! {
-            pipeline { mini_linq::passes::lower, cq_rewrites::canon_prefixes, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
+            pipeline { mini_linq::passes::lower, cq_rewrites::canon_prefixes, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
-                r0 = rename r@0 { a -> a, dropped -> dropped };
+                r0 = rename r { a -> a, dropped -> dropped };
                 prefix = project r0 keep { a };
-                s0 = rename s@1 { a -> a, b -> b };
+                s0 = rename s { a -> a, b -> b };
                 joined = natural_join prefix with s0;
                 result = project joined keep { b };
                 output result as answer(b);
@@ -157,7 +155,7 @@ configuration!(canon, {
 configuration!(smallest, {
     pub(super) fn triangle(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
         ::mini_linq::compile! {
-            pipeline { plan = cq_planners::order(written, fine); physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections]; structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+            pipeline { plan = cq_planners::order(written, fine); physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections]; }
             struct Triangle;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(a:i32,c:i32);
             answer(a,b,c) :- r(a,b),s(b,c),t(a,c);
@@ -168,11 +166,13 @@ configuration!(smallest, {
 configuration!(reduced, {
     pub(super) fn chain(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
         ::mini_linq::compile! {
-            pipeline { plan = cq_planners::order(hypergraph); structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
+            pipeline { plan = cq_planners::order(hypergraph); }
             struct Chain;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(c:i32,d:i32);
             answer(a,b,c,d) :- r(a,b),s(b,c),t(c,d);
-        }.map(|(a,b,c,d)| vec![*a,*b,*c,*d]).collect()
+        }
+        .map(|(a, b, c, d)| vec![*a, *b, *c, *d])
+        .collect()
     }
 });
 

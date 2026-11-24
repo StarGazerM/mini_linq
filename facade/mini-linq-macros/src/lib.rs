@@ -1,22 +1,46 @@
 //! Proc-macro ABI adapters for the public checked pipeline.
+use cq_planning::PlanOptions;
 use proc_macro::TokenStream;
 use syn::parse::{Parse, ParseStream};
 
-mod load;
+mod observation;
 mod workload;
+
+type Structures = cq_stage::Structures<cq_lang_physical::Program, cq_lang_structures::Program>;
+type Sequence = cq_stage::Sequence<
+    cq_lang_physical::Program,
+    cq_lang_structures::Program,
+    cq_lang_sequence::Program,
+>;
+
+fn structures_stack((physical, structures): (cq_lang_physical::Program, cq_lang_structures::Program)) -> Structures {
+    Structures::new(physical, structures)
+}
+
+
+fn sequence_stack((physical, structures, sequence): (
+    cq_lang_physical::Program,
+    cq_lang_structures::Program,
+    cq_lang_sequence::Program,
+)) -> Sequence {
+    Sequence::new(physical, structures, sequence)
+}
 
 struct Source {
     config: cq_stage::Configuration,
+    observation: Option<observation::Observation>,
     tokens: proc_macro2::TokenStream,
 }
 impl Parse for Source {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let observation = observation::parse(input)?;
         let config = input.parse()?;
         if input.peek(syn::Token![;]) {
             input.parse::<syn::Token![;]>()?;
         }
         Ok(Self {
             config,
+            observation,
             tokens: input.parse()?,
         })
     }
@@ -58,17 +82,26 @@ fn check_entry(tokens: &proc_macro2::TokenStream) -> syn::Result<()> {
             "CTX-Entry: CQ entry does not accept a checked continuation envelope",
         ));
     }
-    // Structures and Sequence both begin with their complete Physical program.
-    // Do not parse normal CQ or opaque surface input as three other languages.
-    if name != "physical" {
+    // Authored stacks begin with Physical; checked carriers wrap it in realization.
+    // Do not parse normal CQ or opaque surface input as other languages.
+    if name != "physical" && name != "realization" {
         return Ok(());
     }
-    let recorded = |input: ParseStream<'_>| -> syn::Result<bool> {
-        let program: cq_lang_physical::Program = input.parse()?;
-        let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(!program.context().is_empty())
+    let has_context = if name == "realization" {
+        syn::parse2::<Sequence>(tokens.clone())
+            .map(|stack| !stack.context().is_empty())
+            .or_else(|_| syn::parse2::<Structures>(tokens.clone())
+                .map(|stack| !stack.context().is_empty()))
+            .unwrap_or(false)
+    } else {
+        let recorded = |input: ParseStream<'_>| -> syn::Result<bool> {
+            let program: cq_lang_physical::Program = input.parse()?;
+            let _: proc_macro2::TokenStream = input.parse()?;
+            Ok(!program.context().is_empty())
+        };
+        recorded.parse2(tokens.clone()).unwrap_or(false)
     };
-    if recorded.parse2(tokens.clone()).unwrap_or(false) {
+    if has_context {
         Err(syn::Error::new_spanned(
             tokens,
             "CTX-Entry: recorded context facts require an explicit exact context envelope; CQ entry is not a checked continuation",
@@ -81,36 +114,16 @@ fn check_entry(tokens: &proc_macro2::TokenStream) -> syn::Result<()> {
 fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let source: Source = syn::parse2(input)?;
     check_entry(&source.tokens)?;
-    if syn::parse2::<cq_lang_sequence::Program>(source.tokens.clone()).is_ok() {
+    if let Some(observation) = source.observation {
+        return observation.expand(source.config, source.tokens);
+    }
+    if syn::parse2::<Sequence>(source.tokens.clone()).is_ok() {
         return sequence_pipeline(source.config)?.start(source.tokens);
     }
-    let implicit_sequence = source.config.sequence.is_none()
-        && source.config.grade.is_none()
-        && source.config.decompose.is_empty();
-    let authored_advice = source.config.plan.is_some()
-        || !source.config.physical.is_empty()
-        || source.config.select.is_some()
-        || !source.config.structures.is_empty()
-        || source.config.represent.is_some()
-        || source.config.stage.is_some();
-    let mut pipeline = source.config.resolve(defaults())?;
-    let sequential: syn::Path = syn::parse_quote!(::mini_linq::passes::sequential);
-    if implicit_sequence
-        && !authored_advice
-        && let Some(index) = pipeline
-            .passes
-            .iter()
-            .position(|pass| pass.path == sequential)
-    {
-        pipeline.passes.insert(
-            index,
-            syn::parse_quote!(::mini_linq::passes::plan_sequential),
-        );
-    }
-    pipeline.start(source.tokens)
+    source.config.resolve(defaults())?.start(source.tokens)
 }
 
-/// Complete Sequence input starts at planning, not at the CQ ordering phase.
+/// Complete Sequence input starts at decomposition, not at the CQ ordering phase.
 fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::Pipeline> {
     if config.ix.is_some()
         || config.lower.is_some()
@@ -128,9 +141,11 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
         ));
     }
     let mut passes = config.decompose;
-    passes.push(config.plan.unwrap_or_else(|| {
-        syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))
-    }));
+    passes.push(
+        config
+            .plan
+            .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::plan_sequential)),
+    );
     passes.push(
         config
             .grade
@@ -141,7 +156,12 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
             .print
             .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::translate_pull)),
     );
-    Ok(cq_stage::Pipeline { passes })
+    Ok(cq_stage::Pipeline {
+        passes,
+        observer: None,
+        output_consumer: None,
+        planning: None,
+    })
 }
 
 fn expand_mini_linq(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
@@ -160,12 +180,32 @@ pub fn compile(input: TokenStream) -> TokenStream {
 }
 
 /// Compile CQ with the deterministic default pipeline.
-/// Formal rule ST-Entry: Start CQ surface expansion and the selected checked pipeline.
+/// Formal rule ST-Entry: Start the resolved checked queue unchanged; defaults are selected during configuration resolution.
 #[proc_macro]
 pub fn mini_linq(input: TokenStream) -> TokenStream {
     expand_mini_linq(input.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// Observe the checked CQ after any configured surface passes.
+#[proc_macro]
+pub fn observe_cq(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_cq::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        Ok(source.clone())
+    })
+    .into()
+}
+
+/// Expose the same checked VO prefix used by the default CQ planner.
+#[proc_macro]
+pub fn prefix_valuation(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_cq::Program, cq_stage::Valuation<cq_lang_cq::Program, cq_lang_vo::Program>>(input.into(), |source, args| {
+        let (cq, valuation) = cq_planning::prefix_valuation(source, &syn::parse2(args)?)?;
+        Ok(cq_stage::Valuation::new(cq, valuation))
+    })
+    .into()
 }
 
 fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
@@ -179,73 +219,11 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
     }
 }
 
-#[derive(Default)]
-struct PlanOptions {
-    /// An explicit relation order, checked by the ordinary ordering pass.
-    order: Option<Vec<cq_order::OrderAtom>>,
-    no_reduce: bool,
-    /// `(target, support)` atom selectors to add, in advice order.
-    reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-    /// `(target, support)` atom selectors whose Masks reduction is dropped.
-    skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-}
-impl Parse for PlanOptions {
-    /// Optional `order(Relation, Relation@clause, ...)`, `no_reduce`, and any number of
-    /// `reduce(Target with Support)` and `skip(Target with Support)`, comma separated.
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut options = Self::default();
-        while !input.is_empty() {
-            let option: syn::Ident = input.parse()?;
-            if option == "order" && options.order.is_none() {
-                let content;
-                syn::parenthesized!(content in input);
-                options.order = Some(
-                    content
-                        .parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])?
-                        .into_iter()
-                        .collect(),
-                );
-            } else if option == "no_reduce" && !options.no_reduce {
-                options.no_reduce = true;
-            } else if option == "reduce" || option == "skip" {
-                let content;
-                syn::parenthesized!(content in input);
-                let target: cq_order::OrderAtom = content.parse()?;
-                let with: syn::Ident = content.parse()?;
-                if with != "with" {
-                    return Err(syn::Error::new_spanned(with, "expected `with`"));
-                }
-                let support: cq_order::OrderAtom = content.parse()?;
-                if !content.is_empty() {
-                    return Err(content.error("expected (Target with Support)"));
-                }
-                if option == "reduce" {
-                    options.reduce.push((target, support));
-                } else {
-                    options.skip.push((target, support));
-                }
-            } else {
-                return Err(syn::Error::new_spanned(
-                    option,
-                    "expected order(Relation, ...), no_reduce, or reduce/skip(Target with Support)",
-                ));
-            }
-            if !input.is_empty() {
-                input.parse::<syn::Token![,]>()?;
-                if input.is_empty() {
-                    return Err(input.error("trailing comma after plan options"));
-                }
-            }
-        }
-        Ok(options)
-    }
-}
-
 /// In a Sequence decomposition list, `plan(target::plan)` delegates to the
-/// target-owned planner macro after all preceding authored advice. The target
-/// supplies its machine/catalog to the shared planner without a target dependency
-/// in this facade. CQ planning options retain their existing meaning.
-/// CQ → RA′: a left-deep plan in written order with checked reductions.
+/// target-owned decomposition macro after all preceding authored advice. The target
+/// supplies its machine/catalog without a target dependency in this facade.
+/// CQ planning options retain their existing meaning.
+/// CQ → RA′: a connected-prefix plan with checked reductions.
 /// The first clause of each scope is the outer stream; every other clause is
 /// reduced by its filtered subtrees of the outer-rooted reduction tree before
 /// the stream starts. `plan(no_reduce)` disables implicit reductions, not the order.
@@ -253,7 +231,6 @@ impl Parse for PlanOptions {
 /// by the one reading `S` after any Masks reductions, before the stream;
 /// `plan(skip(T with S))` drops an existing Masks reduction and is rejected
 /// under `no_reduce`, where no Masks reduction exists. Advice remains checked.
-/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, then optionally reduce by outer-rooted masks and advised reductions before IX.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
     let input: proc_macro2::TokenStream = input.into();
@@ -263,88 +240,47 @@ pub fn plan(input: TokenStream) -> TokenStream {
     if sequence_plan_source(&input) {
         return plan_sequential(input.into());
     }
-    cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args| {
+    cq_stage::pass_with_planning::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args, planning| {
         let args: PlanOptions = syn::parse2(args)?;
-        let normal = cq_lang_cq::normal::normalize(source)?;
-        let ordering = cq_order::Options {
-            heuristic: cq_order::Heuristic::Written,
-            split: cq_order::Split::Coarse,
-        };
-        let plan = if let Some(relations) = &args.order {
-            cq_order::compile_explicit(&normal, relations)?
-        } else {
-            let plan = cq_order::compile(&normal, &ordering)?;
-            cq_order::check(&normal, &plan, &ordering)?;
-            plan
-        };
-        let options = cq_reduce::Options {
-            semijoins: if args.no_reduce {
-                cq_reduce::Reductions::None
-            } else {
-                cq_reduce::Reductions::Masks
-            },
-        };
-        let mut reduced = cq_reduce::compile(&plan, &options)?;
-        cq_reduce::check(&plan, &reduced, &options)?;
-        if !args.reduce.is_empty() || !args.skip.is_empty() {
-            // Formal rule R-Advice: Advised semijoins of two top-level atoms sharing a variable run after any Masks reductions, before the stream; skip must name an existing Masks reduction.
-            let analysis = cq_lang_vo::contract::check(&reduced)?;
-            let graph = cq_lang_cq::hypergraph::Analysis::of(&reduced.cq);
-            let pair = |target: &cq_order::OrderAtom,
-                        support: &cq_order::OrderAtom|
-             -> syn::Result<(usize, usize)> {
-                let (t, s) = (
-                    target.positive_clause(&reduced.cq)?,
-                    support.positive_clause(&reduced.cq)?,
-                );
-                if t == s || graph.shared(t, s).is_empty() {
-                    return Err(syn::Error::new_spanned(
-                        &support.relation,
-                        "reduce advice needs two atoms sharing a variable",
-                    ));
-                }
-                Ok((t, s))
-            };
-            let mut skipped = Vec::new();
-            for (target, support) in &args.skip {
-                let (t, s) = pair(target, support)?;
-                let step = cq_reduce::semijoin(&analysis, &graph, t, s);
-                if !reduced.valuation.steps.contains(&step) {
-                    return Err(syn::Error::new_spanned(
-                        &target.relation,
-                        "skip advice names no Masks reduction",
-                    ));
-                }
-                skipped.push(step);
-            }
-            reduced
-                .valuation
-                .steps
-                .retain(|step| !skipped.contains(step));
-            let mut steps = Vec::new();
-            for (target, support) in &args.reduce {
-                let (t, s) = pair(target, support)?;
-                steps.push(cq_reduce::semijoin(&analysis, &graph, t, s));
-            }
-            let first = reduced
-                .valuation
-                .steps
-                .iter()
-                .position(|step| {
-                    matches!(
-                        step,
-                        cq_lang_vo::Step::Atom(..) | cq_lang_vo::Step::Block(..)
-                    )
-                })
-                .unwrap_or(reduced.valuation.steps.len());
-            reduced.valuation.steps.splice(first..first, steps);
-            cq_lang_vo::contract::check(&reduced)?;
-        }
-        let target = cq_elaborate::compile(&reduced)?;
-        cq_elaborate::check(&reduced, &target)?;
+        let (target, cq, valuation, steps) = cq_planning::compile_prefix_with_steps(source, &args)?;
+        let reads = cq_planning::first_reads(&cq, &valuation);
+        *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
         Ok(target)
     })
     .into()
+}
+
+
+#[cfg(test)]
+mod smallest_resolution_tests {
+    #[test]
+    fn carries_actual_tables_without_rewriting_future_invocations() {
+        use quote::ToTokens;
+        let source = syn::parse_quote! {
+            struct Q;
+            relation R(x:i32);
+            relation S(x:i32);
+            answer(x) :- R(x), S(x);
+        };
+        let (_, cq, valuation, steps) = cq_planning::compile_prefix_with_steps(
+            &source, &syn::parse_quote!(no_reduce, order(R, S)),
+        ).unwrap();
+        let mut pipeline: cq_stage::Pipeline = syn::parse_quote!(
+            pipeline { rewrites::smallest_intersections(smallest(R@0, S@1)), custom }
+        );
+        let pending = pipeline.passes.iter().map(ToTokens::to_token_stream).map(|tokens| tokens.to_string()).collect::<Vec<_>>();
+        pipeline.planning = Some(cq_stage::planning::Planning {
+            reads: cq_planning::first_reads(&cq, &valuation), steps: steps.0,
+        });
+        let pipeline: cq_stage::Pipeline = syn::parse2(pipeline.to_token_stream()).unwrap();
+        assert_eq!(pipeline.passes.iter().map(ToTokens::to_token_stream).map(|tokens| tokens.to_string()).collect::<Vec<_>>(), pending);
+        let planning = pipeline.planning.as_ref().unwrap();
+        let resolved = cq_stage::planning::resolve_smallest(pipeline.passes[0].arguments.clone(), Some(planning)).unwrap();
+        assert!(!resolved.to_string().contains('@'));
+        for arguments in [quote::quote!(smallest(Missing)), quote::quote!(smallest(R@1))] {
+            assert!(cq_stage::planning::resolve_smallest(arguments, Some(planning)).is_err());
+        }
+    }
 }
 
 /// RA′ → IX exact demand analysis.
@@ -358,8 +294,7 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
 }
 
 /// IX → Physical with probe/keep/first/eager defaults.
-/// Comma-separated `consumer = canonical` and `host_set R discharged`
-/// arguments explicitly supply restricted context facts.
+/// `consumer = canonical` explicitly supplies the restricted consumer context.
 #[proc_macro]
 pub fn lower(input: TokenStream) -> TokenStream {
     cq_stage::pass_with_context::<cq_lang_ix::Program, cq_lang_physical::Program>(
@@ -376,10 +311,11 @@ pub fn lower(input: TokenStream) -> TokenStream {
 /// Lower/select context facts may be interleaved with positional arguments.
 #[proc_macro]
 pub fn select(input: TokenStream) -> TokenStream {
-    cq_stage::pass_with_context::<cq_lang_physical::Program, cq_lang_structures::Program>(
+    cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, Structures>(
         input.into(),
         cq_structure_selection::context,
-        cq_structure_selection::compile_with,
+        |source, args, consumer| cq_structure_selection::compile_with_consumer(source, args, consumer)
+            .map(structures_stack),
     )
     .into()
 }
@@ -387,30 +323,35 @@ pub fn select(input: TokenStream) -> TokenStream {
 /// Structures → Structures representation decisions; `positions` opts in.
 #[proc_macro]
 pub fn represent(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_represent::compile_with)
-        .into()
+    Structures::rewrite(input.into(), |physical, source, args| {
+        let target = cq_represent::compile_with(physical, source, args)?;
+        Ok((physical.clone(), target))
+    }).into()
 }
 
 /// Structures → Structures total lookahead; `batch(N)` opts into scan staging.
 #[proc_macro]
 pub fn stage(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_staging::compile_with).into()
+    Structures::rewrite(input.into(), |physical, source, args| {
+        let target = cq_staging::compile_with(physical, source, args)?;
+        Ok((physical.clone(), target))
+    }).into()
 }
 
 /// Structures → Sequence with checked default lowering.
 // Formal rule ST-Sequence: lower Structures, check host grading, then translate Sequence.
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
+    Structures::pass::<Sequence>(
         input.into(),
-        |source, args| {
-            let target = cq_sequence_lowering::compile(source)?;
-            cq_sequence_lowering::check(source, &target)?;
+        |physical, source, args| {
+            let target = cq_sequence_lowering::compile(physical, source)?;
+            cq_sequence_lowering::check(physical, source, &target)?;
             if args.is_empty() {
-                Ok(target)
+                Ok(Sequence::new(physical.clone(), source.clone(), target))
             } else {
                 let evidence: cq_lang_sequence::Evidence = syn::parse2(args)?;
-                cq_sequence_plan::Advice::Evidence(evidence).apply(&target)
+                cq_sequence_plan::Advice::Evidence(evidence).apply(physical, source, &target).map(sequence_stack)
             }
         },
     )
@@ -428,11 +369,9 @@ fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
         syn::braced!(arguments in input);
         let args: proc_macro2::TokenStream = arguments.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(
-            !matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
-                && syn::parse2::<PlanOptions>(args.clone()).is_err()
-                && syn::parse2::<syn::Path>(args).is_ok(),
-        )
+        Ok(args.to_string() != "preserve_order"
+            && syn::parse2::<PlanOptions>(args.clone()).is_err()
+            && syn::parse2::<syn::Path>(args).is_ok())
     };
     parser.parse2(input.clone()).unwrap_or(false)
 }
@@ -455,47 +394,28 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
         }
         input.parse::<cq_stage::Pipeline>()?;
         input.parse::<syn::Token![;]>()?;
-        input.parse::<cq_lang_sequence::Program>()?;
+        input.parse::<Sequence>()?;
         Ok(true)
     };
     parser.parse2(input.clone()).unwrap_or(false)
 }
 
-/// Fill unauthored Sequence decisions using the Sequential machine and catalog.
+/// Decompose authored Sequence decisions using the Sequential machine and catalog.
 /// Use in `decompose` directly or through `plan(mini_linq::passes::plan_sequential)`.
-/// The unadvised default keeps the written order; `lookup_first` opts into Lookup/Expand ordering.
+/// `preserve_order` requests the explicit authored policy; it is also the default.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+    Sequence::rewrite(input.into(), |physical, structures, source, args| {
+        if !args.is_empty() {
+            let option: syn::Ident = syn::parse2(args)?;
+            if option != "preserve_order" {
+                return Err(syn::Error::new_spanned(option, "expected preserve_order"));
+            }
+        }
         let machine = cq_sequence_pull::machine();
         let catalog = cq_sequence_pull::catalog();
-        // The unadvised default keeps the author's written order (checked
-        // decomposition only); Lookup-first ordering is opt-in because its
-        // estimate-free plans run far slower than advised ones on the suite.
-        let lookup_first = if args.is_empty() {
-            false
-        } else {
-            let option: syn::Ident = syn::parse2(args)?;
-            if option != "lookup_first" && option != "preserve_order" {
-                return Err(syn::Error::new_spanned(
-                    option,
-                    "expected lookup_first or preserve_order",
-                ));
-            }
-            option == "lookup_first"
-        };
-        let planned = if lookup_first {
-            cq_sequence_plan::Planner::plan(
-                &cq_sequence_plan::RuleBased,
-                source,
-                &machine,
-                &catalog,
-                &source.evidence,
-            )?
-        } else {
-            cq_sequence_plan::decompose(source, &machine, &catalog)?
-        };
-        Ok(planned.program)
+        let planned = cq_sequence_plan::decompose(physical, structures, source, &machine, &catalog)?;
+        Ok((planned.physical, planned.structures, planned.program))
     })
     .into()
 }
@@ -503,10 +423,10 @@ pub fn plan_sequential(input: TokenStream) -> TokenStream {
 /// Validate Sequence placement against the host-only machine without rewriting it.
 #[proc_macro]
 pub fn sequential(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+    Sequence::rewrite(input.into(), |physical, structures, source, args| {
         no_arguments(args)?;
-        cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        Ok(source.clone())
+        cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
+        Ok((physical.clone(), structures.clone(), source.clone()))
     })
     .into()
 }
@@ -514,23 +434,17 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 /// Sequence → final Rust pull iterator, with optional runtime profile counters.
 #[proc_macro]
 pub fn translate_pull(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, args| {
+    Sequence::pass::<syn::Expr>(input.into(), |physical, structures, source, args| {
         no_arguments(args)?;
-        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        let plain = cq_sequence_pull::translate(source, &analysis)?;
-        let profile = cq_sequence_pull::translate_profile(source, &analysis)?;
+        let analysis = cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
+        let plain = cq_sequence_pull::translate(physical, structures, source, &analysis)?;
+        let profile = cq_sequence_pull::translate_profile(physical, structures, source, &analysis)?;
         Ok(syn::parse_quote!(::cq_storage::profile_select! {
             plain { (#plain).into_iter() }
             counters { (#profile).into_iter() }
         }))
     })
     .into()
-}
-
-/// Generate typed source readers from relation declarations or a CQ callback.
-#[proc_macro]
-pub fn relation_loaders(input: TokenStream) -> TokenStream {
-    load::expand(input)
 }
 
 /// Capture authored CQ and export a callback invoking a public consumer macro.
@@ -632,17 +546,16 @@ mod tests {
     }
 
     #[test]
-    fn robust_sequence_default_keeps_authored_cq_advisory_precedence() {
+    fn sequence_decomposition_keeps_authored_cq_advisory_precedence() {
         let source = quote! {
             struct Query;
             relation R(x:i32);
             answer(x) :- R(x);
         };
-        let automatic = expand_compile(quote!(pipeline {} #source))
+        let default = expand_compile(quote!(pipeline {} #source))
             .unwrap()
             .to_string();
-        assert!(automatic.contains("plan_sequential"));
-        assert!(!automatic.contains("preserve_order"));
+        assert!(default.contains("plan_sequential"));
         for advice in [
             quote!(plan = custom_order;),
             quote!(select = custom_selection;),
@@ -709,7 +622,7 @@ mod tests {
         syn::parse2(quote!(physical {
             relation R(a: i32);
             #facts
-            r = pipe rename R@0 { a -> x };
+            r = pipe rename R { a -> x };
             return r as answer(x);
         }))
         .unwrap()
@@ -733,14 +646,13 @@ mod tests {
     fn cq_entries_and_direct_pass_reject_printed_lower_ir_facts() {
         for facts in [
             quote!(consumer canonical;),
-            quote!(host_set R discharged;),
-            quote!(host_set R discharged; consumer canonical;),
         ] {
             let physical = physical(facts);
             rejects_printed_entry(&physical);
             let structures = cq_structure_selection::compile(&physical).unwrap();
-            rejects_printed_entry(&structures);
-            let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+            rejects_printed_entry(&super::Structures::new(physical.clone(), structures.clone()));
+            let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+            let sequence = super::Sequence::new(physical.clone(), structures, program);
             assert_eq!(sequence.context(), physical.context());
             rejects_printed_entry(&sequence);
         }
@@ -764,10 +676,15 @@ mod tests {
     }
 
     #[test]
-    fn plain_host_certificates_are_not_restricted_entry_facts() {
-        let physical = physical(quote!(host_set R;));
-        assert!(physical.context().is_empty());
-        super::check_entry(&physical.to_token_stream()).unwrap();
+    fn removed_host_facts_are_rejected() {
+        for facts in [quote!(host_set R;), quote!(host_set R discharged;)] {
+            assert!(syn::parse2::<cq_lang_physical::Program>(quote!(physical {
+                relation R(a: i32);
+                #facts
+                r = pipe rename R { a -> x };
+                return r as answer(x);
+            })).is_err());
+        }
     }
 
     #[test]
@@ -775,7 +692,7 @@ mod tests {
         let cq = quote!(struct Q; relation R(a: i32); answer(x) :- R(x););
         let output = expand_compile(quote!(
             pipeline {
-                lower = lower(consumer = canonical, host_set R discharged);
+                lower = lower(consumer = canonical);
                 select = select(positional(R));
             }
             #cq
@@ -786,7 +703,7 @@ mod tests {
             quote!(::mini_linq::passes::plan! {
                 pipeline {
                     ::mini_linq::passes::index_demands,
-                    lower(consumer = canonical, host_set R discharged),
+                    lower(consumer = canonical),
                     select(positional(R)),
                     ::mini_linq::passes::represent,
                     ::mini_linq::passes::stage,
@@ -804,26 +721,110 @@ mod tests {
     fn select_packet_authorization_survives_structures_continuation() {
         let physical = physical(quote!());
         let output =
-            cq_stage::pass_with_context::<cq_lang_physical::Program, cq_lang_structures::Program>(
+            cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, super::Structures>(
                 quote!(
-                    arguments { consumer = canonical, positional(R), host_set R discharged };
+                    arguments { consumer = canonical, positional(R) };
                     pipeline { printer };
                     #physical
                 ),
                 cq_structure_selection::context,
-                cq_structure_selection::compile_with,
+                |source, args, consumer| cq_structure_selection::compile_with_consumer(source, args, consumer)
+                    .map(super::structures_stack),
             );
         let invocation: syn::Macro = syn::parse2(output).unwrap();
-        let output = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+        let output = super::Structures::pass::<syn::Expr>(
             invocation.tokens,
-            |source, args| {
+            |physical, _source, args| {
                 assert!(args.is_empty());
-                let context = source.context();
+                let context = physical.context();
                 assert!(context.consumer_canonical);
-                assert_eq!(context.discharged_host_sets, ["R".to_owned()].into());
                 Ok(syn::parse_quote!(42))
             },
         );
         assert_eq!(output.to_string(), "42");
+    }
+
+    #[test]
+    fn aggregate_demand_binds_original_head_including_host_captures() {
+        let physical: cq_lang_physical::Program = syn::parse_quote!(physical {
+            relation R(a: i32);
+            capture { let group: i32 = 0; }
+            r = pipe rename R { a -> x };
+            return canon r as answer(group, x);
+        });
+        let demand: cq_stage::OutputConsumer = syn::parse_quote!(output_consumer {
+            "outer_fold"; head ["group", "x"]; value_reads ["group"];
+        });
+        let output = cq_stage::pass_with_output_consumer::<
+            cq_lang_physical::Program, super::Structures
+        >(
+            quote!(pipeline {} observe { inspect } #demand; #physical),
+            cq_structure_selection::context,
+            |source, args, consumer| cq_structure_selection::compile_with_consumer(source, args, consumer)
+                .map(super::structures_stack),
+        );
+        let invocation: syn::Macro = syn::parse2(output).unwrap();
+        let selected = syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream<'_>| cq_lang_structures::Program::parse(input, &physical),
+            invocation.tokens,
+        ).unwrap();
+        assert_eq!(selected.consumer.as_ref(), Some(&demand));
+        assert!(physical.context().is_empty());
+        assert!(physical.program.return_canon.is_some());
+        let ordinary = cq_structure_selection::compile(&physical).unwrap();
+        assert_eq!(selected.structures, ordinary.structures);
+        let roundtrip = syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream<'_>| cq_lang_structures::Program::parse(input, &physical),
+            selected.to_token_stream(),
+        ).unwrap();
+        cq_lang_structures::contract::check(&physical, &roundtrip).unwrap();
+        assert_eq!(roundtrip, selected);
+        let mut forged = selected.clone();
+        forged.consumer.as_mut().unwrap().head.swap(0, 1);
+        assert!(cq_lang_structures::contract::check(&physical, &forged).is_err());
+        let mut forged = selected.clone();
+        forged.consumer.as_mut().unwrap().value_reads.clear();
+        // Locally valid demand is not authority to change the original consumer.
+        cq_lang_structures::contract::check(&physical, &forged).unwrap();
+        assert!(cq_lang_structures::check_rewrite(&physical, &selected, &physical, &forged).is_err());
+        assert!(cq_lang_structures::check_retention_rewrite(&physical, &selected, &physical, &forged).is_err());
+        let output = cq_stage::pass_with_output_consumer::<
+            cq_lang_physical::Program, super::Structures
+        >(
+            quote!(pipeline {} observe { inspect } #demand; #physical),
+            cq_structure_selection::context,
+            |_, _, _| Ok(super::structures_stack((physical.clone(), forged))),
+        );
+        assert!(output.to_string().contains("ST-Consumer"));
+    }
+
+    #[test]
+    fn ordinary_row_host_rust_is_unchanged_by_consumer_demand() {
+        let physical = syn::parse_quote!(physical {
+            relation R(a: i32);
+            r = let canon rename R { a -> x };
+            return r as answer(x);
+        });
+        let ordinary = cq_structure_selection::compile(&physical).unwrap();
+        let render = |program: &cq_lang_structures::Program| {
+            let sequence = cq_sequence_lowering::compile(&physical, program).unwrap();
+            let analysis =
+                cq_lang_sequence::check_grading(&physical, program, &sequence, &cq_sequence_pull::machine()).unwrap();
+            let plain = cq_sequence_pull::translate(&physical, program, &sequence, &analysis).unwrap();
+            let profile = cq_sequence_pull::translate_profile(&physical, program, &sequence, &analysis).unwrap();
+            (quote!(#plain).to_string(), quote!(#profile).to_string())
+        };
+        let expected = render(&ordinary);
+        for reads in [vec![], vec!["x".to_owned()]] {
+            let demand = cq_stage::OutputConsumer {
+                original_consumer: "fold".into(),
+                head: vec!["x".into()],
+                value_reads: reads,
+            };
+            let selected = cq_structure_selection::compile_with_consumer(
+                &physical, Default::default(), Some(&demand),
+            ).unwrap();
+            assert_eq!(render(&selected.1), expected);
+        }
     }
 }

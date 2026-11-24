@@ -37,6 +37,15 @@ impl Printer<'_> {
         }
     }
     pub(super) fn staged_rows(&self, name: &str) -> Option<TokenStream> {
+        self.staged_source(name, false)
+    }
+
+    /// Keep staged positional selections as IDs for subsequent recorded reads.
+    pub(super) fn staged_ids(&self, name: &str) -> Option<TokenStream> {
+        self.staged_source(name, true)
+    }
+
+    fn staged_source(&self, name: &str, positions: bool) -> Option<TokenStream> {
         let size = *self.analysis.stages.get(name)?;
         // Built probes own their existing batching adapter, including hosts
         // that offer Scan but no positional capability.
@@ -101,10 +110,14 @@ impl Printer<'_> {
                 __cq_chunk
             }
         ));
-        let rows = self.positional_rows(name, ids);
+        let output = if positions {
+            ids
+        } else {
+            self.positional_rows(name, ids)
+        };
         Some(quote!({
             let #host = { use ::cq_storage::PositionalRows as _; #source.positional_handle() };
-            #rows
+            #output
         }))
     }
 }

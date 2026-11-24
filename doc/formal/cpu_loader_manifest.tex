@@ -1,0 +1,38 @@
+\section{CPU TPC-H prepared-input certificates}
+
+These are IO certificates, not compiler evidence or query annotations.  Let
+$F$ be an immutable Parquet file, $R(F)$ its decoded rows, $H$ its heading,
+$K\subseteq H$ a nonempty column set, and $P\subseteq H$ a loaded projection.
+Preparation verifies keys against the exported file, not a declared TPC-H
+schema constraint.  A full-heading certificate is the special case $K=H$.
+
+\Rule{IO-CpuPrepareKey}
+{K\ne\varnothing \quad K\subseteq H \quad
+ |\pi_K R(F)|_{\mathrm{distinct}}=|R(F)| \quad
+ \forall r\in R(F),k\in K.\ r[k]\ne\mathrm{NULL}}
+{\operatorname{prepare}(F,K)=
+ \operatorname{certificate}(\operatorname{sha256}(F),K)}
+
+The preparer chooses the table's conventional primary-key columns when all
+are present, otherwise the complete exported heading. One grouped traversal
+checks duplicate keys and null key values together. Failure emits no key,
+without trying another candidate or removing raw rows. Successful certificates
+carry the explicit marker \code{set:"verified"}; unsuccessful records carry
+\code{set:"uncertified"} and no verified keys. A manifest-only command may
+write these records outside the immutable dataset.
+
+\Rule{IO-CpuLoadKey}
+{c=\operatorname{certificate}(h,K)\in M \quad c.\mathrm{set}=\mathrm{verified} \quad
+ h=\operatorname{sha256}(F) \quad K\subseteq P \quad
+ \operatorname{decode}|_K\ \text{is injective}}
+{\operatorname{load}_P(F,M)=\pi_P R(F)\quad
+ \text{without runtime duplicate elimination}}
+
+Without these premises the existing duplicate-eliminating loader is used.
+In particular, a key omitted by a projection and a full-heading certificate
+for a wider heading do not authorize the shortcut. Missing, malformed,
+stale or mismatched manifests do not establish a premise.  Certificates
+are trusted preparation artifacts bound to bytes; a digest is not a
+signature and an arbitrary user-authored assertion is not a verified key.
+Host-built data has no certificate.  The decoder must preserve equality on
+the verified key; lossy decoding cannot use this shortcut.

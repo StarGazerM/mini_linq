@@ -5,9 +5,10 @@ mod compile;
 pub(crate) mod profile;
 use comparison::normalize_set;
 mod data;
+pub(crate) use data::certify_existing;
 
 use crate::Result;
-use duckdb::{Connection, types::ValueRef};
+use cq_testkit::duckdb::Connection;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -51,9 +52,14 @@ impl Options {
                     }
                     config = Some(names);
                 }
-                "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1, 1 or 10")?),
+                "--sf" if sf.is_none() => {
+                    sf = Some(args.next().ok_or("--sf requires 0.1, 1 or 10")?)
+                }
                 "--cap-seconds" if cap_seconds.is_none() => {
-                    let seconds = args.next().ok_or("--cap-seconds requires a positive integer")?.parse::<u64>()?;
+                    let seconds = args
+                        .next()
+                        .ok_or("--cap-seconds requires a positive integer")?
+                        .parse::<u64>()?;
                     if seconds == 0 {
                         return Err("--cap-seconds must be positive".into());
                     }
@@ -114,7 +120,9 @@ fn describe(root: &Path, source: &Path, counting: bool) -> Result<Query> {
     describe_with(source, |name| compile::build(root, source, name, counting))
 }
 fn describe_in(root: &Path, source: &Path, cache: &Path) -> Result<Query> {
-    describe_with(source, |name| compile::build_in(root, source, name, cache, true, true))
+    describe_with(source, |name| {
+        compile::build_in(root, source, name, cache, true, true)
+    })
 }
 fn describe_with(
     source: &Path,
@@ -176,6 +184,42 @@ fn describe_with(
     })
 }
 
+/// Compile the complete CPU catalog before any data preparation or query execution.
+/// Each ordinary timing worker contains every authored configuration, so this
+/// covers default and Tasks/par without a second, compile-only query shell.
+pub(super) fn compile_all(arguments: Vec<String>) -> Result<()> {
+    if !arguments.is_empty() {
+        return Err("compile-tpch accepts no options; it builds every catalog kernel".into());
+    }
+    let root = crate::repository_root();
+    for case in cq_workloads::tpch::CASES {
+        let source = root.join(
+            case.rust_path
+                .strip_prefix("workloads/")
+                .unwrap_or(case.rust_path),
+        );
+        // `describe` only reads the compiled worker's metadata; it never loads
+        // projections, calls dbgen, or executes any query configuration.
+        let query = describe(&root, &source, false)?;
+        require_compile_routes(&query.name, &query.configs)?;
+        println!("compiled {}: default,par (all authored routes)", query.name);
+    }
+    println!(
+        "compiled all {} CPU TPC-H-derived kernels; no data loaded or queries executed",
+        cq_workloads::tpch::CASES.len()
+    );
+    Ok(())
+}
+
+fn require_compile_routes(name: &str, configs: &[String]) -> Result<()> {
+    for required in ["default", "par"] {
+        if !configs.iter().any(|config| config == required) {
+            return Err(format!("{name} requires a {required} configuration for compile-tpch").into());
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let options = Options::parse(arguments)?;
     let root = crate::repository_root();
@@ -216,7 +260,10 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     if let Some(configs) = &options.config {
         for query in &mut queries {
-            if let Some(missing) = configs.iter().find(|config| !query.configs.contains(config)) {
+            if let Some(missing) = configs
+                .iter()
+                .find(|config| !query.configs.contains(config))
+            {
                 return Err(format!("{} has no configuration {missing}", query.name).into());
             }
             query.configs.retain(|name| configs.contains(name));
@@ -256,18 +303,33 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         }
     }
     if verify_only {
-        let timeouts = verify_all(&bench, &database, &options.sf, &queries, options.cap_seconds)?;
+        let timeouts = verify_all(
+            &bench,
+            &database,
+            &options.sf,
+            &queries,
+            options.cap_seconds,
+        )?;
         if !timeouts.is_empty() {
             return Err(format!("unverified within --cap-seconds: {timeouts:?}").into());
         }
-        println!("all selected configurations matched DuckDB exactly at SF {}", options.sf);
+        println!(
+            "all selected configurations matched DuckDB exactly at SF {}",
+            options.sf
+        );
         return Ok(());
     }
     // Gate every query/configuration on SF 0.1 before timing a larger scale.
     // At SF 0.1 the timed workers check exact answers before any sample.
     let gate_timeouts = match options.sf.as_str() {
         "0.1" => BTreeSet::new(),
-        _ => verify_all(&bench, &data::dbgen(&root, "0.1")?, "0.1", &queries, options.cap_seconds)?,
+        _ => verify_all(
+            &bench,
+            &data::dbgen(&root, "0.1")?,
+            "0.1",
+            &queries,
+            options.cap_seconds,
+        )?,
     };
     let mut suffix = options
         .query
@@ -285,7 +347,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
     let mut table = String::from(
-        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\tjoin_filter_tested\tjoin_filter_passed\tduckdb_1_execute_median_ms\n",
+        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\tjoin_filter_tested\tjoin_filter_passed\tduckdb_1_execute_median_ms\tquery_minor_faults\tquery_major_faults\tquery_peak_rss_kib\n",
     );
     println!(
         "TPC-H-derived; SF {}; release; one warm run + median of {}; DuckDB {} default threads={}",
@@ -317,8 +379,15 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         }
         let duck_default = duck_time(&oracle, &query.sql, options.runs)?;
         let mut configs = Vec::new();
-        let unit_ms = query.built.unit_ms.map_or_else(|| "NA".to_owned(), |ms| format!("{ms:.6}"));
-        let count_binary = query.built.count_binary.as_ref().ok_or("missing counting worker")?;
+        let unit_ms = query
+            .built
+            .unit_ms
+            .map_or_else(|| "NA".to_owned(), |ms| format!("{ms:.6}"));
+        let count_binary = query
+            .built
+            .count_binary
+            .as_ref()
+            .ok_or("missing counting worker")?;
         for config in &query.configs {
             let artifact = bench
                 .join("runs")
@@ -329,27 +398,56 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 "measuring TPC-H-derived {}/{} SF {}...",
                 query.name, config, options.sf
             );
-            let deadline = options.cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
+            let deadline = options
+                .cap_seconds
+                .map(|s| Instant::now() + std::time::Duration::from_secs(s));
             let results = (|| -> Result<Option<(Value, Value, Value)>> {
                 if gate_timeouts.contains(&(query.name.clone(), config.clone())) {
                     return Ok(None);
                 }
-                let Some(measured) = execute_worker_limited(query, &query.built.binary,
-                    &directory, config, options.runs, &artifact, &expected, deadline)? else {
+                let Some(measured) = execute_worker_limited(
+                    query,
+                    &query.built.binary,
+                    &directory,
+                    config,
+                    options.runs,
+                    &artifact,
+                    &expected,
+                    deadline,
+                )?
+                else {
                     return Ok(None);
                 };
-                let Some(counted) = execute_worker_limited(query, count_binary,
-                    &directory, config, 0, &artifact.with_extension("counts"), &expected, deadline)? else {
+                let Some(counted) = execute_worker_limited(
+                    query,
+                    count_binary,
+                    &directory,
+                    config,
+                    0,
+                    &artifact.with_extension("counts"),
+                    &expected,
+                    deadline,
+                )?
+                else {
                     return Ok(None);
                 };
-                let Some(repeated) = execute_worker_limited(query, count_binary,
-                    &directory, config, 0, &artifact.with_extension("counts-repeat"), &expected, deadline)? else {
+                let Some(repeated) = execute_worker_limited(
+                    query,
+                    count_binary,
+                    &directory,
+                    config,
+                    0,
+                    &artifact.with_extension("counts-repeat"),
+                    &expected,
+                    deadline,
+                )?
+                else {
                     return Ok(None);
                 };
                 Ok(Some((measured, counted, repeated)))
             })()?;
             let Some((mut measured, counted, repeated)) = results else {
-                let mut row = vec!["NA".to_owned(); 34];
+                let mut row = vec!["NA".to_owned(); 37];
                 row[0] = "TPC-H-derived".into();
                 row[1] = options.sf.clone();
                 row[2] = query.name.clone();
@@ -372,9 +470,15 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             // Parallel task lifetimes overlap according to the scheduler, so
             // retained-memory high water is an observation, not a work count.
             // All primitive work and final retained bytes must still agree.
-            if counted.as_object().zip(repeated.as_object()).is_none_or(|(left, right)|
-                left.len() != right.len() || left.iter().any(|(name, value)|
-                    name != "bytes_retained_peak" && right.get(name) != Some(value)))
+            if counted
+                .as_object()
+                .zip(repeated.as_object())
+                .is_none_or(|(left, right)| {
+                    left.len() != right.len()
+                        || left.iter().any(|(name, value)| {
+                            name != "bytes_retained_peak" && right.get(name) != Some(value)
+                        })
+                })
             {
                 return Err("separate deterministic counting runs disagree".into());
             }
@@ -451,7 +555,12 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             let passed = measured["join_filter_passed"]
                 .as_u64()
                 .ok_or("missing join_filter_passed counter")?;
-            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{unit_ms}\t{counters}\tpass\t{tested}\t{passed}\t{:.6}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, duck_one_execute.0));
+            let resources = ["query_minor_faults", "query_major_faults", "query_peak_rss_kib"]
+                .iter()
+                .map(|name| measured[name].as_u64().map_or_else(|| "NA".to_owned(), |n| n.to_string()))
+                .collect::<Vec<_>>()
+                .join("\t");
+            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{unit_ms}\t{counters}\tpass\t{tested}\t{passed}\t{:.6}\t{resources}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, duck_one_execute.0));
             std::fs::write(&pending, &table)?;
             configs.push(serde_json::json!({"configuration":config,"metrics":measured}));
         }
@@ -480,9 +589,10 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
         "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations; proc macros at opt-level 3); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time; null/NA when Cargo reused an up-to-date worker",
-        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; duckdb_1_median_ms includes prepare/optimization and Arrow result materialization; duckdb_1_execute_median_ms prepares once untimed and times execution plus Arrow result materialization (MiniLinq plans at compile time)",
-        "sf_0_1_gate":"SF 1/10: every query/configuration worker checked at SF 0.1 before timing; SF 0.1: timed workers check exact answers before sampling",
-        "memory_method":"Linux /proc/self/status VmHWM per configuration worker process, includes load, warmup, answers and correctness; not incremental query-only memory; NA elsewhere",
+        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, typed deduplication, answer validation and result drop for MiniLinq; DuckDB CLI timings include query execution, CSV serialization, file transfer and parsing; duckdb_1_median_ms also includes prepare/optimization; duckdb_1_execute_median_ms prepares once untimed; CLI process startup and table loading are excluded",
+        "sf_0_1_gate":"SF 1/10: every query/configuration worker checked fully at SF 0.1 before timing; all warmups and each binary/configuration's first measured sample checked fully, then exact logical counts plus up to 1000 seeded actual-row membership checks",
+        "memory_method":"getrusage(RUSAGE_SELF) ru_maxrss in KiB (Darwin bytes converted); process lifetime high water includes load, warmup, answers and correctness; not incremental query-only memory; NA on non-Unix",
+        "fault_method":"getrusage(RUSAGE_SELF) ru_minflt/ru_majflt deltas immediately around each query, outside its wall timer; excludes load, result canonicalization/comparison and drop; query_* TSV fields are paired with the median-time sample, samples_* JSON arrays share timing order; warm_* records first-touch warm execution separately; RSS is process lifetime high water at the end of that query",
         "counter_scope":"cq-storage instrumentation disabled in timed binary; counters collected in a separately compiled binary and untimed execution; extension aggregate folds and uninstrumented host work are not counted; DuckDB lacks equivalent instrumentation",
         "cpu_model":std::fs::read_to_string("/proc/cpuinfo").ok().and_then(|text| text.lines().find_map(|line| line.strip_prefix("model name").and_then(|v|v.split_once(':').map(|(_,v)|v.trim().to_owned())))),
         "coverage":coverage,"queries":details,
@@ -492,7 +602,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         serde_json::to_vec_pretty(&metadata)?,
     )?;
     println!(
-        "completed configurations matched DuckDB exactly; see status rows for timeouts; wrote {}",
+        "completed configurations passed full-first/count-and-sample DuckDB validation; see status rows for timeouts; wrote {}",
         path.display()
     );
     Ok(())
@@ -519,7 +629,18 @@ fn verify_all(
                 .join(&query.name)
                 .join(config);
             let deadline = cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
-            if execute_worker_limited(query, &query.built.binary, &directory, config, 0, &artifact, &expected, deadline)?.is_none() {
+            if execute_worker_limited(
+                query,
+                &query.built.binary,
+                &directory,
+                config,
+                0,
+                &artifact,
+                &expected,
+                deadline,
+            )?
+            .is_none()
+            {
                 eprintln!("{} / {config}: SF {sf} verification timeout", query.name);
                 timeouts.insert((query.name.clone(), config.clone()));
                 continue;
@@ -573,8 +694,10 @@ fn execute_worker_binary(
     artifact: &Path,
     expected: &Answers,
 ) -> Result<Value> {
-    execute_worker_limited(query, binary, directory, config, runs, artifact, expected, None)?
-        .ok_or_else(|| "uncapped worker unexpectedly timed out".into())
+    execute_worker_limited(
+        query, binary, directory, config, runs, artifact, expected, None,
+    )?
+    .ok_or_else(|| "uncapped worker unexpectedly timed out".into())
 }
 
 fn execute_worker_limited(
@@ -619,16 +742,63 @@ fn execute_worker_limited(
     if !status.success() {
         return Err(format!("{} / {config} failed: {status}", query.name).into());
     }
-    let actual: Vec<Vec<String>> = serde_json::from_slice(&std::fs::read(&answers)?)?;
-    let actual = normalize_set(actual, &expected.decimal_columns);
-    if actual != expected.rows {
-        return Err(format!(
-            "{} / {config} worker answer differs from DuckDB",
-            query.name
-        )
-        .into());
+    let measured: Value = serde_json::from_slice(&std::fs::read(&metrics)?)?;
+    if runs == 0 {
+        let actual: Vec<Vec<String>> = serde_json::from_slice(&std::fs::read(&answers)?)?;
+        let actual = normalize_set(actual, &expected.decimal_columns);
+        if actual != expected.rows {
+            return Err(format!(
+                "{} / {config} worker answer differs from DuckDB",
+                query.name
+            )
+            .into());
+        }
+    } else {
+        validate_checks(&measured, expected.rows.len(), runs, bench_check::Policy::from_env(0)?)?;
     }
-    Ok(Some(serde_json::from_slice(&std::fs::read(&metrics)?)?))
+    Ok(Some(measured))
+}
+
+fn validate_checks(
+    metrics: &Value,
+    expected_count: usize,
+    runs: usize,
+    policy: bench_check::Policy,
+) -> Result<()> {
+    let recorded: bench_check::Policy = serde_json::from_value(metrics["check_policy"].clone())?;
+    if recorded.mode != policy.mode || recorded.sample_size != policy.sample_size || recorded.seed != policy.seed {
+        return Err("worker check policy differs from requested policy".into());
+    }
+    let check = |value: &Value, mode: bench_check::Mode| -> Result<()> {
+        let relations: std::collections::BTreeMap<String, bench_check::RelationEvidence> =
+            serde_json::from_value(value.clone())?;
+        let evidence = relations.get("answer").ok_or("missing answer check evidence")?;
+        let selected = if evidence.mode == bench_check::Mode::Full {
+            expected_count
+        } else {
+            expected_count.min(policy.sample_size)
+        };
+        if relations.len() != 1
+            || evidence.expected_count != expected_count
+            || evidence.actual_count != expected_count
+            || evidence.sampled_count != selected
+            || evidence.mode != mode
+            || !evidence.validation_seconds.is_finite()
+            || evidence.validation_seconds < 0.
+        {
+            return Err("invalid native answer check evidence".into());
+        }
+        Ok(())
+    };
+    check(&metrics["warm_check"], bench_check::Mode::Full)?;
+    let samples = metrics["samples_checks"].as_array().ok_or("missing measured checks")?;
+    if samples.len() != runs {
+        return Err("measured check count differs from timing count".into());
+    }
+    for (ordinal, evidence) in samples.iter().enumerate() {
+        check(evidence, if ordinal == 0 { policy.mode } else { bench_check::Mode::Sampled })?;
+    }
+    Ok(())
 }
 
 fn number(value: &Value, key: &str) -> Result<f64> {
@@ -641,8 +811,7 @@ fn duck_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Ve
     let mut samples = Vec::new();
     for index in 0..=runs {
         let started = Instant::now();
-        let mut statement = connection.prepare(sql)?;
-        let result: Vec<_> = statement.query_arrow([])?.collect();
+        let result = connection.query(sql)?;
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         std::hint::black_box(&result);
         if index > 0 {
@@ -653,22 +822,20 @@ fn duck_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Ve
     Ok((samples[runs / 2], samples))
 }
 
-/// The same query boundary without parse, bind and optimization: the statement
-/// is prepared once outside the timer, then each sample executes it and
-/// materializes its Arrow result. This matches MiniLinq's boundary, whose
-/// planning happens at Rust compile time.
+/// Prepare once outside sampling; CLI CSV serialization and transfer are included.
 fn duck_execute_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Vec<f64>)> {
-    let mut statement = connection.prepare(sql)?;
+    connection.execute_batch(&format!("PREPARE cq_benchmark AS {}", sql.trim().trim_end_matches(';')))?;
     let mut samples = Vec::new();
     for index in 0..=runs {
         let started = Instant::now();
-        let result: Vec<_> = statement.query_arrow([])?.collect();
+        let result = connection.query("EXECUTE cq_benchmark")?;
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         std::hint::black_box(&result);
         if index > 0 {
             samples.push(elapsed);
         }
     }
+    connection.execute_batch("DEALLOCATE cq_benchmark")?;
     samples.sort_by(f64::total_cmp);
     Ok((samples[runs / 2], samples))
 }
@@ -680,36 +847,19 @@ struct Answers {
 }
 
 fn answer_set(connection: &Connection, sql: &str) -> Result<Answers> {
-    let mut statement = connection.prepare(sql)?;
-    let mut query = statement.query([])?;
-    let columns = query
-        .as_ref()
-        .ok_or("missing oracle statement")?
-        .column_count();
-    let mut rows = Vec::new();
+    let schema = connection.query(&format!("DESCRIBE {}", sql.trim().trim_end_matches(';')))?;
+    let rows = connection.query(sql)?;
     let mut decimal_columns = BTreeSet::new();
-    while let Some(row) = query.next()? {
-        let mut values = Vec::new();
-        for column in 0..columns {
-            let text =
-                match row.get_ref(column)? {
-                    ValueRef::Null => "\\N".to_owned(),
-                    ValueRef::Int(v) => v.to_string(),
-                    ValueRef::BigInt(v) => v.to_string(),
-                    ValueRef::HugeInt(v) => v.to_string(),
-                    ValueRef::Decimal(v) => {
-                        decimal_columns.insert(column);
-                        v.to_string()
-                    }
-                    ValueRef::Text(v) => std::str::from_utf8(v)?.to_owned(),
-                    other => return Err(format!(
-                        "oracle output type requires explicit exact comparison support: {other:?}"
-                    )
-                    .into()),
-                };
-            values.push(text);
+    for (column, description) in schema.iter().enumerate() {
+        let ty = &description[1];
+        if ty.starts_with("DECIMAL(") {
+            // Preserve the previous witness convention for empty result sets.
+            if !rows.is_empty() {
+                decimal_columns.insert(column);
+            }
+        } else if !matches!(ty.as_str(), "INTEGER" | "BIGINT" | "HUGEINT" | "VARCHAR") {
+            return Err(format!("oracle output type requires explicit exact comparison support: {ty}").into());
         }
-        rows.push(values);
     }
     Ok(Answers {
         rows: normalize_set(rows, &decimal_columns),
@@ -720,6 +870,55 @@ fn answer_set(connection: &Connection, sql: &str) -> Result<Answers> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_evidence_requires_measured_full_independently_of_warmup() {
+        let policy = bench_check::Policy::full();
+        let evidence = |mode, sampled_count| serde_json::json!({"answer": {
+            "mode": mode, "expected_count": 1200, "actual_count": 1200,
+            "sampled_count": sampled_count, "seed": policy.seed, "validation_seconds": 0.01,
+        }});
+        let full = evidence("full", 1200);
+        let sampled = evidence("sampled", 1000);
+        let mut metrics = serde_json::json!({
+            "check_policy": policy, "warm_check": full,
+            "samples_checks": [full, sampled],
+        });
+        assert!(validate_checks(&metrics, 1200, 2, policy).is_ok());
+        metrics["samples_checks"][0] = sampled.clone();
+        assert!(validate_checks(&metrics, 1200, 2, policy).is_err());
+        let outer_policy = bench_check::Policy { mode: bench_check::Mode::Sampled, ..policy };
+        metrics["check_policy"] = serde_json::to_value(outer_policy).unwrap();
+        assert!(validate_checks(&metrics, 1200, 2, outer_policy).is_ok());
+        metrics["samples_checks"][1]["answer"]["actual_count"] = serde_json::json!(1199);
+        assert!(validate_checks(&metrics, 1200, 2, outer_policy).is_err());
+        metrics["samples_checks"][1] = sampled;
+        assert!(validate_checks(&metrics, 1200, 3, outer_policy).is_err());
+        metrics["warm_check"]["answer"]["mode"] = serde_json::json!("sampled");
+        assert!(validate_checks(&metrics, 1200, 2, outer_policy).is_err());
+    }
+    #[test]
+    fn compile_gate_requires_both_cpu_routes() {
+        for configs in [vec![], vec!["default"], vec!["par"], vec!["transfer"]] {
+            let configs = configs.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(require_compile_routes("kernel", &configs).is_err());
+        }
+        let configs = ["default", "par", "transfer"].map(str::to_owned);
+        assert!(require_compile_routes("kernel", &configs).is_ok());
+    }
+
+    #[test]
+    fn compile_gate_rejects_data_and_subset_options_before_building() {
+        for args in [
+            vec!["--sf", "1"],
+            vec!["--query", "retail_h07_block"],
+            vec!["--config", "default"],
+            vec!["--runs", "0"],
+        ] {
+            assert!(compile_all(args.into_iter().map(str::to_owned).collect()).is_err());
+        }
+    }
+
     #[test]
     fn strict_scale_and_sampling_options() {
         let parse = |args: &[&str]| Options::parse(args.iter().map(|s| (*s).to_owned()).collect());
@@ -736,13 +935,29 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(&["--tpch", "--sf", "1", "--runs", "5", "--config", "default,le"])
-                .unwrap()
-                .config,
+            parse(&[
+                "--tpch",
+                "--sf",
+                "1",
+                "--runs",
+                "5",
+                "--config",
+                "default,le"
+            ])
+            .unwrap()
+            .config,
             Some(vec!["default".to_owned(), "le".to_owned()]),
         );
-        assert_eq!(parse(&["--tpch", "--sf", "1", "--runs", "0"]).unwrap().runs, 0);
-        assert_eq!(parse(&["--tpch", "--sf", "10", "--runs", "1", "--cap-seconds", "2"]).unwrap().cap_seconds, Some(2));
+        assert_eq!(
+            parse(&["--tpch", "--sf", "1", "--runs", "0"]).unwrap().runs,
+            0
+        );
+        assert_eq!(
+            parse(&["--tpch", "--sf", "10", "--runs", "1", "--cap-seconds", "2"])
+                .unwrap()
+                .cap_seconds,
+            Some(2)
+        );
         for args in [
             vec!["--tpch"],
             vec!["--tpch", "--sf", "2"],
@@ -780,7 +995,13 @@ mod tests {
         let parse = |args: &[&str]| Options::parse(args.iter().map(|s| (*s).to_owned()).collect());
         assert_eq!(
             parse(&[
-                "--tpch", "--sf", "1", "--runs", "5", "--query", "tpch_q06",
+                "--tpch",
+                "--sf",
+                "1",
+                "--runs",
+                "5",
+                "--query",
+                "tpch_q06",
                 "--index-comparison",
             ])
             .unwrap(),
@@ -795,9 +1016,16 @@ mod tests {
             }
         );
         let capped = parse(&[
-            "--tpch", "--sf", "10", "--runs", "0",
-            "--index-comparison", "--cap-seconds", "2",
-        ]).unwrap();
+            "--tpch",
+            "--sf",
+            "10",
+            "--runs",
+            "0",
+            "--index-comparison",
+            "--cap-seconds",
+            "2",
+        ])
+        .unwrap();
         assert!(capped.index_comparison);
         assert_eq!(capped.cap_seconds, Some(2));
         for conflicting in [

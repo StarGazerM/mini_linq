@@ -114,8 +114,9 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
             .zip(input.columns.iter())
             .filter_map(|(arg, col)| {
                 rust::variable(arg).map(|v| {
-                    let ty = &col.ty;
-                    quote!(#v: #ty)
+                    let mut column = col.clone();
+                    column.name = v.clone();
+                    column
                 })
             })
             .collect();
@@ -124,19 +125,11 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
             .declarations
             .push(syn::parse2(quote!(relation #helper(#(#columns),*);))?);
         let body: Vec<_> = positions.iter().map(|&i| &query.body[i]).collect();
-        let heads: Vec<_> = atom
-            .args
-            .iter()
-            .zip(input.columns.iter())
-            .filter_map(|(arg, column)| {
-                rust::variable(arg)
-                    .map(|v| cq_lang_datalog_source::invariants::owned_column(v, &column.ty))
-            })
-            .collect();
         target
             .source
             .rules
-            .push(syn::parse2(quote!(#helper(#(#heads),*) :- #(#body),*;))?);
+            .push(syn::parse2(quote!(#helper(#(#vars),*) :- #(#body),*;))?);
+        target.source.labels.push(None);
         let replacement: BodyItem = syn::parse2(quote!(#helper(#(#vars),*)))?;
         target.source.rules[rule].body = query
             .body

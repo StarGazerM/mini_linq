@@ -12,6 +12,9 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["visit-mut"] }
 
+[dev-dependencies]
+cq-structure-selection.workspace = true
+
 [package.metadata.cq]
 source = "cq-lang-structures"
 target = "rust"

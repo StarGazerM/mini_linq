@@ -41,6 +41,15 @@ impl Text for u32 {
         quote!(#n)
     }
 }
+impl Text for bool {
+    fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
+        Ok(input.parse::<syn::LitBool>()?.value)
+    }
+    fn text(&self) -> TokenStream {
+        let value = syn::LitBool::new(*self, proc_macro2::Span::call_site());
+        quote!(#value)
+    }
+}
 impl<T: Text> Text for Vec<T> {
     fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
         let list;
@@ -104,9 +113,14 @@ syntax_text!(
     syn::Type,
     cq_syntax::RelationDecl,
     cq_lang_cq::Program,
+    cq_lang_structures::Declaration,
+    cq_lang_structures::CodecId,
+    cq_syntax::LogicalTypeId,
+    cq_lang_structures::provider::InputSchema,
     cq_stage::Pipeline,
     cq_stage::Context,
-    crate::incremental::Program
+    crate::incremental::Program,
+    crate::incremental::DriverPolicy
 );
 
 #[macro_export]

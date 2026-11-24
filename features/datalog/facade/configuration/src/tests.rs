@@ -72,7 +72,7 @@ fn named_phases_preserve_order_and_opaque_arguments() {
     } };
     let expected: Pipeline = syn::parse_quote! { pipeline {
         sugar(opaque(tokens)), sugar_two, components(one), variants(two), stores(three),
-        rewrite_a(four), rewrite_b, holes(five; cq = #cq; lower = 3; terminals = [
+        rewrite_a(four), rewrite_b, holes(five; cq = #cq; lower = 3; plan = 1; terminals = [
             ::mini_linq::passes::translate_pull => pull, mini_linq::passes::translate_pull => pull,
             ::cq_datalog::passes::print_push => push
         ];),

@@ -60,9 +60,3 @@ impl Results {
         Ok(())
     }
 }
-
-/// Single-column keys the sorted providers order losslessly through their
-/// i64 key codecs (`I64Codec`, `BorrowedI64TupleCodec`): `i32`, `i64`, `u32`.
-pub fn sorted_key(ty: &syn::Type) -> bool {
-    matches!(cq_lang_structures::ungroup_type(ty), syn::Type::Path(p) if ["i32", "i64", "u32"].iter().any(|name| p.path.is_ident(name)))
-}

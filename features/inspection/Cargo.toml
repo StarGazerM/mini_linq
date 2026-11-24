@@ -4,9 +4,6 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-[workspace]
-resolver = "3"
-
 [dependencies]
 cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
 quote = "1"

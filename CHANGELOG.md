@@ -5,6 +5,12 @@ clippy, workspace tests, regressions, dependency isolation, the out-of-tree
 gate, the public-API check, the formal check, goldens, fuzz, and TPC-derived
 kernels exact against DuckDB at SF 0.1 and SF 1.
 
+Entries record successive changes, not a cumulative current API specification.
+Later removals supersede earlier additions (including autoref/build-macro
+dispatch and capture handles); retain those earlier entries as history. For
+current contracts use the living design docs, and for the latest recorded
+measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
+
 ## Unreleased
 
 - Add TPC-H-derived parallel RadixRun configurations using the existing Tasks
@@ -15,6 +21,2115 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   exact DuckDB answers for both providers, generated-plan provider checks, and
   uninstrumented samples separate from counters. Retain the H19 parallel slowdown
   and hash-provider wins rather than inferring a universal RadixRun advantage.
+
+- GPU Sequence: a recorded expansion share on a chain with one expansion over
+  unselected roots (no GPU-RootSelect, not an authored frontier) is printed
+  without the steal pool; its roots are distributed directly. The share path
+  raised such kernels from 40-48 to 72-80 registers per thread and cost the
+  heavy-split SRD program 0.3-0.4 s (bisect: `/data/design-notes/join-lab/round2-regression.md`).
+  Split SRD fixpoint scala 5.70 -> 5.30 s, soot 4.24 -> 3.95 s (below the
+  per-head branch alone, 5.77 / 4.13 s); doop-gpu unchanged; counts
+  unchanged, xalan exact.
+
+- GPU Datalog: `print_rounds(frontier("rule@delta", ...))` selects weighted
+  frontier resume for named rule versions (GPU-FrontierResume, formal rule and
+  README): a shared expansion publishes its remaining work weighted by range
+  length and a resume pass rebalances it over the grid instead of leaving a
+  few blocks with the heavy tails. Unknown or ineligible labels and conflicts
+  with `manual(...)` are compile errors; capacity misses keep count-and-replay.
+  `doop-gpu` selects six versions (VPT_Cast@0/@4, AIPT_Store@2/@3,
+  VPT_LoadArray@2, VPT_LoadField@2): scala 3.60 -> 3.40 s, soot 4.11 -> 4.09 s,
+  kotlin 3.47 -> 3.44 s, jython 3.00 -> 2.96 s; counts unchanged, xalan exact.
+
+- GPU Datalog / DOOP joins, round 2 (reports `/data/design-notes/join-lab/round2-*.md`).
+  GPU-RadixExactMember: a membership read on the complete physical key
+  searches each run once for the exact word instead of two interval bounds.
+  A shared dispatch keeps only its root count plus 32 helper blocks (tiny
+  selected domains had 95% of sampled warp time polling the steal queue).
+  `doop-gpu --features manual-joins`: the three virtual-dispatch versions
+  share one materialized prefix per round (`doop/src/manual_dispatch.rs`;
+  family 505 -> 73 ms scala, 1,032 -> 70 ms jython), and the `VPT_Assign`
+  union interns identical source lists (718 -> 272 ms jython). Fixpoint, two
+  runs each, counts unchanged, xalan exact, GPU gate passing: scala 4.08 ->
+  3.60 s, soot 4.67 -> 4.11 s, kotlin 4.11 -> 3.47 s, jython 4.51 -> 3.00 s
+  (SRDatalog 9.44 / 9.93 / 10.52 s live, 15.10 s published). `srd-doop-gpu`:
+  scala 8.52 -> 7.94 s, soot 5.42 -> 5.02 s, kotlin 8.47 -> 7.99 s.
+
+- GPU Datalog / DOOP joins (measurements: `experiments/gpu/join-lab/DESIGN.md`).
+  GPU-RootSelect: a spread single-chain dispatch whose first step expands a
+  radix/run lookup keyed by root columns first runs a generated select
+  kernel (key columns only, warp-aggregated append); the dispatch reads its
+  roots through that list with domain and tile from the device count, so
+  rows that expand to nothing pay no cooperative expansion scans (66 select
+  kernels in `doop-gpu`). GPU-ReservePrevious: the capacity hint is at least
+  the last count, raised toward twice the hole's high-water mark within
+  8 MiB, plus half the last count up to 256 MiB (scala failed attempts
+  1,806 -> 423; jython 18.2 -> 17.5 s). Admission: subtraction tests a
+  capped (2 GiB) exact membership cache of committed two-field keys before
+  searching runs; single-range candidate batches sort from a shared buffer
+  view instead of a copy (132.7 GB less on jython); the final stratum no
+  longer trims the pool. `doop-gpu` authors 12 rule-version orders
+  (`plan(...)`, new rule labels in the shared DOOP program), and
+  `--features manual-joins` adds a grouped-union hole for both `VPT_Assign`
+  versions (jython candidates 41.98 G -> 1.81 G; publishes the generated
+  support, not its bag). `print_rounds(observe(...))` and doop
+  `--features capture-joins` record a rule version's inputs per round for
+  the new `experiments/gpu/join-lab` crate (caps, prefilter, probe, replay,
+  dedup, maintenance labs). `doop-gpu --features manual-joins` fixpoint,
+  8.66 -> 4.29 s scala, 8.17 -> 4.87 s soot, 9.04 -> 4.23 s kotlin,
+  20.77 -> 4.64 s jython (SRDatalog live 9.44 / 9.93 / 10.52 s, published
+  jython 15.10 s); jython peak pool 41.5 -> 20.2 GB; counts unchanged,
+  xalan exact. `srd-doop-gpu` (field-flow, emitter changes only): scala
+  10.86 -> 9.31 s, soot 7.30 -> 6.63 s, kotlin 10.75 -> 9.38 s.
+
+- GPU Datalog: hand-written rule holes. `print_rounds` takes
+  `manual("rule@delta" => path, ...)` (`cq_gpu_datalog_core::print::Manual`,
+  `compile_with`); a named rule version calls `path` with the candidate
+  arena, the description of each input (`delta R`, `R[columns]`, `keys R`)
+  and the generated hole's arguments, and compiles no generated kernel. An
+  unknown label is an error. `doop-gpu --features manual-joins` replaces
+  `VPT_LoadArray@3` (delta `arrayindexpointsto`) with four kernels
+  (`doop/src/manual.rs`): one group per distinct delta `baseheap`, each
+  group's `varpointsto` range per run, one thread per spanned row balanced
+  over the grid (host prefix sums) probing `loadarrayindex`, `reachable`,
+  `var_type` and `supertypeof`, and one warp per (group, `to`) pair writing
+  the group's heaps. On scala 0.36 G rows are scanned instead of 23.2 G and
+  the candidates are the same 175,290,361; the rule takes 0.113 s instead of
+  4.743 s (kotlin 0.074 s instead of 2.784 s). `doop-gpu` fixpoint, medians
+  of three: soot 10.70 → 8.17 s, scala 13.29 → 8.66 s, kotlin 11.71 →
+  9.04 s, jython 21.23 → 20.77 s; counts unchanged, xalan exact. Rejected
+  on the way: a block per group (4.10 s: hot groups serialize), probing
+  `varpointsto` per `loadarrayindex` row for large groups (deep uncached
+  searches). The default build is unchanged.
+
+- GPU Sequence: every expansion of a spread single-chain dispatch is
+  shared, not only the first (GPU-RootShare becomes GPU-ExpansionShare;
+  `Share::FirstExpansion { tiles }` becomes `Share::Expansions { slots,
+  min_chunks }`, runtime `cq_gpu_sequence_runtime::share`). A small first
+  expansion followed by a large one used to run on the one block that
+  claimed it: in `doop-gpu` scala, Nsight Compute showed one SM active
+  (avg/max 1.2–3.9%) for `varpointsto@0`, `arrayindexpointsto@2` and
+  `VPT_LoadArray@2` launches of 69–111 ms. Now, once a block waits with
+  nothing to steal, a block with more than 32 batches (of 256 children)
+  left in an expansion publishes its block state to one of 256 pool slots;
+  idle blocks probe the slots in parallel, copy the state and claim half of
+  what is left. The kernel keeps one copy of the chain: a block resuming a
+  stolen range passes once through the enclosing levels with dead lanes
+  until it reaches that site. The share paths about double ptxas' register
+  choice (srd-doop hole 79: 64 → 125), so share kernels declare
+  `#[launch_bounds(256, 3)]` (at most 80 registers); without it srd
+  field-flow soot ran 7.82 s against 7.03 s before, with four blocks it
+  spilled more and was slower. Those three launches take 3.22, 10.15 and
+  5.07 ms with all SMs active (were 86.1, 110.9, 69.4 ms). `doop-gpu`
+  fixpoint, medians of three against one stream before: soot 11.10 →
+  10.70 s, scala 15.34 → 13.29 s, kotlin 15.68 → 11.71 s, jython 22.67 →
+  21.23 s; counts unchanged, xalan exact. `srd-doop-gpu` (one run each,
+  interleaved with the previous binary, counts identical): field-flow soot
+  7.08 → 7.30 s, scala 11.55 → 10.86 s, kotlin 11.54 → 10.75 s;
+  default-query soot 9.09 → 9.05 s, scala 11.61 → 10.85 s, kotlin 12.77 →
+  11.43 s, jython 19.64 → 19.15 s. Cost: dispatch kernels grow from 8.7 to
+  11.4 MB of expanded Rust (whole crate 20.7 → 23.4 MB); build time is
+  unchanged (75 s); ptxas spill stores grow from 1.6 KB in 52 kernels to
+  8.0 KB in 46. Earlier drafts that duplicated the chain per stealing site
+  (exponential in depth) or called per-site device functions (more
+  registers) were not committed. New test: a seed reaching four hubs of
+  50,000 successors each yields the complete two-hop set.
+
+- GPU Datalog: wave lanes removed. `lanes(streams = K)` ran each wave's
+  holes on K streams from K-1 CPU worker threads, each into its own
+  per-lane buffer, which departs from the recorded round design (one
+  append arena per head, a per-head admission stream, one readback per
+  round, then CUDA graph capture) and made the memory peak depend on thread
+  interleaving: the same jython binary peaked at 43.4 or 48.65 GB and failed
+  once in six. Removed: `Schedule.streams`, `StratumSchedule.lanes`,
+  `WaveLanes`, `check_lanes`, WF-DL-Lanes, DL-WaveLanes, the
+  `cq_gpu_datalog::lanes` rewrite and macro, the printer's lane path and
+  the runtime `Lanes`/`Lane`/`Job`; `doop-gpu` and `srd-doop-gpu` drop
+  `lanes(streams = 4)`. `Pool::lane` remains as the multi-stream pool
+  primitive. Waves run in order on one stream; every run's pool peak is now
+  identical. Fixpoint on one stream is 4–26% slower than on four
+  (`doop-gpu` scala 12.26 → 15.34 s, kotlin 12.40 → 15.68 s, soot 9.35 →
+  11.10 s, jython 20.94 → 22.67 s); counts are unchanged and xalan is exact.
+
+- GPU Datalog: an unread delta adopts the canonical batch again
+  (`direct_read` in `experiments/gpu/datalog/src/storage.rs`): a relation
+  whose delta no occurrence scans directly records no relation-order
+  admitted order, so publication does not sort one more copy of the fresh
+  rows. This is the last piece of the 2026-11-11 memory work that only
+  existed in `stash@{0}`: `894e1dd5` landed the stash without its three
+  files that conflicted with `c92caa90` and `d2c61034` (`print.rs`,
+  `print_tests.rs`, `storage.rs`), while the notes said all of it had
+  landed. kotlin (680 M-row `CastTo` seed) ran out of memory in
+  `srd-doop-gpu` without it and completes with it: field-flow 10.0 s
+  (pool peak 46.1 GB; recorded 9.94 s on 2026-11-11), default program
+  10.5 s (47.0 GB). Field-flow scala 9.94 s and soot 6.60 s, 43 relation
+  counts equal the CPU engine's; `doop-gpu` times, peaks and counts are
+  unchanged on all four xlarge datasets, and xalan stays exact.
+
+- `doop-gpu` runs all four xlarge DOOP datasets; soot and jython failed
+  with CUDA error 700 before. Three changes in the GPU Datalog runtime and
+  printer:
+  - A lane's candidate batch is freed on the lane's stream, which nothing
+    ordered after the main stream's copy out of it. A slot above 1 GiB
+    belongs to its batch and returns to the driver at once; the driver
+    could unmap it for the main stream's next large allocation while the
+    copy was pending (soot: a 1.75 GB batch beside a 2.3 GB request).
+    `concatenate_ranges` now records an event after its copies and every
+    lane stream it read from waits for it.
+  - The printer admits a publication's candidate bag one sort portion at a
+    time (`fresh_batches`) and builds the other admitted orders the same
+    way (`reorder_unique`), instead of copying the whole bag first. The
+    runtime half landed in `894e1dd5`; the printer half and the callers
+    of `GPU_DATALOG_PROFILE` had stayed in a stash, so the profile printed
+    nothing. Both are restored; holes are named `Label@delta#hole`.
+  - A candidate slot above 1 GiB that its result fills to at most half,
+    with more than 1 GiB to spare, gives the spare back when the batch is
+    published (`CandidateLease::finish` moves the rows to a slot of their
+    size). The slot is sized by the hole's previous count: on jython one
+    hole held 20 GB for 4.3 GB of rows beside a 12.7 GB batch.
+  `GPU_DATALOG_TRACE_MEMORY` now also reports the results of worker-lane
+  holes. Fixpoint and output, medians of three, RTX 6000 Ada: soot 9.35
+  and 0.51 s, jython 20.94 and 0.69 s (pool peak 41.0 of 48 GB), scala
+  12.26 and 0.91 s, kotlin 12.40 and 0.84 s; batik, cassandra and xalan
+  unchanged (1.46, 0.48, 0.55 s). All 26 relation counts equal the CPU
+  engine's on the four xlarge datasets; xalan equals it tuple for tuple.
+  The DOOP load-array rule is labelled `VPT_LoadArray`. An authored order
+  for its version with changing `arrayindexpointsto` (the load's base
+  first) was measured and not kept: soot 9.4 → 8.1 s and kotlin 12.4 →
+  11.3 s, but scala 12.2 → 14.4 s.
+
+- GPU Datalog final output no longer builds one heap vector per row. The
+  printer's outputs call `RadixLayout::publish_rows` (new
+  `datalog-runtime/src/publish.rs`): the longest run of a relation streams
+  through two reusable 32 MiB pinned chunks, and every host thread merges
+  its part of a chunk with the matching keys of the shorter runs straight
+  into the one result allocation, in key order as before; fields are read
+  through `PackedRow::field`. Before, `to_rows` downloaded the keys
+  pageable, sorted them on one host thread and allocated a `Vec<i128>` per
+  row. `OutputStaging` owns the pinned chunks for one program and frees
+  them after the last output; relations whose longest run is under 128 MiB
+  use a pageable download. `IStr::from_code` validates against an atomic
+  count instead of taking the interner lock per field. `doop-gpu` output
+  phase, RTX 6000 Ada, 24 host threads, medians of three after and one
+  observation before: scala (848 M rows, 8.26 GB of keys) 121.0 → 0.94 s,
+  kotlin 92.0 → 0.85 s, batik 5.07 → 0.155 s, xalan 0.48 → 0.034 s,
+  cassandra 0.30 → 0.018 s; host peak RSS on scala 49.2 → 8.9 GB. xalan
+  equals the CPU engine on all 26 outputs. The staged path is bound by
+  host memory, not the bus: an empty sink sustains 26 GB/s, decoding into
+  fresh memory 10 to 12 GB/s. `to_rows` remains for diagnostics and the
+  Sequence host fallback, which still has the per-row cost.
+
+- The planner plans from one small calibration without falling back to
+  the text (PLANNING-REDESIGN, VP-Structural, VP-Place, PS-Heavy). A
+  hole no fact decides takes SRDatalog's default clause order. A steady
+  hole may read any set of its other occurrences before the changing one,
+  costed `rounds x before + after + held`; a row read once a round costs
+  the target's `TargetEvidence::scan_per_row_s` (1/16 for the CPU DOOP
+  evidence) and a check run there a binding; an index group costs
+  `index_per_group_g` (24, was 16). The two rules that kept the written
+  order (`Kept`, VP-Written) are withdrawn. Statistics: every relation is
+  surveyed before any is admitted (`collection::survey`); the tables a
+  request joins by a key share their sure keys, all keys of a relation
+  with at most 65,536 and else its heaviest 1,024; bloat's 240 direct
+  degrees are off by over 2x 0 times (17 before), worst 14% (30x).
+  Bloat planned from bloat alone, CPU engine, medians of three
+  alternating runs: advised 11.42 s, written 11.61 s, counts equal;
+  `VPT_LoadArray` and `VPT_Cast` get the text's orders from facts. Soot's
+  `VPT_LoadField` stays planned delta-first (one parser field of 1,109
+  loads that bloat lacks; 123 s on soot).
+
+- The planner prices a written order that reads its changing occurrence
+  later and keeps it where it is cheaper (PLANNING-REDESIGN, VP-Written):
+  `rounds x before + after + held`, from a new `rounds` degree request
+  (`DegreeRequest::Rounds`, collected by both collectors) and the degree
+  facts along the written order. `Planner::decide` and `advise` take the
+  target; `Decided::kept` says why a hole keeps its text (`Kept::Index`,
+  `Kept::Bindings`). The charge for a group of an index is no longer a
+  constant of the planner: it is the target's declared
+  `TargetEvidence::index_per_group_g` (16 for the CPU DOOP evidence),
+  and a target that declares none is not charged. `cq-cost orders
+  --advice` needs `--target`. Nineteen DOOP datasets, CPU engine, each
+  calibrated on itself, medians of three alternating runs: advised takes
+  0.87 to 1.00 of the written time on seventeen, 0.95 on scala (503.5
+  against 531.4 s) and 1.26 on soot (479.3 against 380.8 s). Before this
+  rule scala took 1.15 and soot 5.2 times the written time, from
+  `VPT_LoadArray` read first. Soot's remaining loss is one directive
+  (`VPT_LoadField` with changing `InstanceFieldPointsTo`, 123 s alone);
+  the same directive is neutral on seven other datasets, scala among
+  them, and the planner has no rule for it.
+
+- A steady hole keeps its written order only where that matters
+  (PLANNING-REDESIGN, VP-Index step 3): the chosen order's new index
+  charge exceeds its bindings, is at least 1% of the program's bindings,
+  and the written order's own charge is smaller. Seven DOOP datasets, CPU
+  engine, each calibrated on itself, medians of three alternating runs,
+  advised against written: bloat 10.56 against 11.67 s, eclipse 32.24
+  against 33.18, zxing 17.39 against 18.55, sunflow 19.60 against 20.61,
+  chart 24.60 against 25.63, pmd 24.34 against 25.54, xalan 31.31 against
+  32.91; equal counts. On each, one hole keeps its written order
+  (`VPT_Cast` with changing `VarPointsTo`). Bloat's advice on the other
+  six is above the written median on eclipse and zxing.
+
+- The planner charges an order for the indexes it adds (PLANNING-REDESIGN,
+  VP-Index). `Planner::plans` keeps a hole's 16 cheapest orders of
+  distinct lowerings; `Planner::decide` takes, heaviest hole first, the
+  order of least bindings plus 16 bindings for each group of a grouped
+  full index no earlier hole built, and gives a steady hole no advice
+  when that charge exceeds its bindings. `Planner::advise` and
+  `cq-cost advise` both use it. The planner asks for the rows of every
+  relation and the groups of every index an order can read by (bloat: 765
+  facts for 699, the calibrated run still 26 s and 4.8 GB). Bloat, CPU
+  engine, medians of five alternating runs: advised 11.19 s, written
+  12.18 s; the advice before this rule 13.67 s, of which one directive
+  (`VPT_Cast` by an index of 10.1M groups) cost 2.55 s. 32 steady holes
+  now keep their text, 31 of them under 0.25M bindings.
+
+- Calibration assumes no schedule (PLANNING-REDESIGN, PS-After). A
+  calibration build has a publication clock: a printer emits
+  `cq_datalog_print::publication_tick` before each publication (a round's
+  publish phase, a member published early in a wave, a relational commit)
+  and `consumption_mark` where a delta is about to be read (a round, each
+  step hole of the parallel printer). A kept delta carries the tick that
+  published it and the clock when it was last consumed;
+  `collection::RelationRows` visits a row with its `Age { published,
+  horizon }` and `Degrees::admit` takes both: a row is met by a delta row
+  when it was published by that row's horizon. With one publication a
+  round both are the round. The refusal of a relational schedule is
+  withdrawn; the parallel engine's relational schedule is tested at 1, 2
+  and 4 threads.
+
+- A program that is not calibrated pays nothing, and a calibrated one
+  keeps only the deltas whose rounds are needed (PLANNING-REDESIGN,
+  PS-After). The Datalog printer emits the calibration code only under
+  its own `planner-calibration` feature (forwarded from `cq-datalog`'s
+  through the macros and the print pass; `cq-datalog-parallel`'s through
+  its printer): an ordinary program has no token of it.
+  `cq_storage::calibration_select!` and
+  `cq_datalog_print::calibration_branch` are removed.
+  `collection::Observer::needs_rounds` is asked once per derived relation
+  as a program begins; only those relations keep their deltas, the others
+  are passed from their stored rows. The calibration observer needs the
+  relations a staged degree or a visible share compares (it refused a
+  relational schedule; see above). Bloat: 18 of 77
+  relations; peak 1,774 MB in an ordinary build, in a calibration build
+  without an observer and under an observer needing none, 2,094 MB
+  keeping the 18, 2,199 MB keeping all; no change in evaluation time; the
+  same directives.
+
+- A calibration run keeps the round of every derived row for free
+  (PLANNING-REDESIGN, PS-After): under a statistics observer the
+  generated program moves each delta aside where it dropped it
+  (`cq_datalog_print::delta_swap`) and passes a derived relation delta by
+  delta, so `collection::RelationRows` visits a row with its round. The
+  planner asks for staged degrees and visible shares again. Bloat:
+  keeping the deltas costs no time (11.71 s against 11.70 s) and 425 MB
+  (2,199 MB against 1,774 MB at the peak); the pass over all rows 0.39 s;
+  the directives equal those of the admission-time statistics and the
+  engine with them takes 12.8 s (18.2 s without rounds, 11.7 s written).
+
+- Calibration is collected once, after the result (PLANNING-REDESIGN,
+  PS-After). A calibration run evaluates as a plain run. Removed: the
+  operator frames and row counters of a calibration session
+  (`CalibrationFrame`, `OperatorPush`, `register_plan`, host alias
+  scopes), the compiler's stage trace that named them
+  (`cq_stage::calibration`, `Pipeline::calibration`, `calibration_trace`
+  text, observed hole compilation in the own-dialect printer), the
+  stratum, round, input and row hooks of both Datalog printers, the
+  in-run input profile (`cq_load::stats::CanonicalAccumulator`), the
+  calibration report, the bound review (`cq-cost review`), plan
+  rebinding, the lineage module, and the evidence schema's physical step
+  observations. New: `cq_storage::statistics::collection` (a program that
+  has its result offers each relation once; its rows are passed only if
+  the observer asks). `cq-storage`'s `planner-calibration` no longer
+  enables `counters`. `cq_cost::calibration::{measure, try_measure}` take
+  the plans, the evidence and a run identity, check that the run is the
+  planned program and that each requested input holds the rows its
+  evidence states, and return the evidence with the run's degree facts
+  and the advice (`calibration.{facts.json,costs.json,orders.dl}`);
+  `srd-doop-mini --calibrate PLANS EVIDENCE OUTPUT RUN-ID`.
+  `DatasetEvidence::planning_facts` is `attached_facts` and leaves the
+  degree facts out, so evidence may add degree facts to what a plans
+  record attaches. A generated stratum is no longer emitted twice (once
+  per arm of the calibration selector). The planner asks for no staged
+  degree and no visible share, and searches inside production's
+  VO-Order I3 (VP-Connected). Bloat: a calibrated run takes 25 s and
+  4.6 GB (101 s and 28 GB). **The advice is worse without rounds**: the
+  engine takes 18.2 s with it, 12.7 s with the round-aware advice it
+  replaces, 11.75 s as written.
+
+- A counted operator stream of a calibration session no longer reads
+  the clock (`cq_storage::counters::operators::OperatorStream`): a lookup
+  makes one stream per binding, each read the clock twice, and
+  calibration reads row counts only. 30% of an observed bloat run's
+  samples were in the clock; the run takes 21 s (28 s before, 12 s
+  plain) and a calibrated run 101 s (108 s). Outside a session the
+  `counters` feature times its streams as before. `Planned::read` is new:
+  the statistics a planned or lowered order read. The DOOP oracle's
+  `what_the_plans_need_of_degree_facts_on_doop` reports, of the facts
+  requested, those read and those valuing the chosen orders, and what
+  each kind is worth (PLANNING-REDESIGN, "What the plans need", "Why a
+  calibrated run is slow").
+
+- A run keeps its degree statistics in the runtime as it admits rows
+  (PLANNING-REDESIGN, PS-Admit, PS-Budget, PS-Device), no longer in a
+  copy of every row sorted afterwards. `cq_storage::statistics` is new:
+  `Sketch<M>` (HyperLogLog, Ertl's estimator) and `Degrees`, which takes
+  requests by relation position and every admitted row with its round
+  and keeps a sketch per distinct count and, for matched degrees, a sample
+  of keys chosen by hash, each with the round its values were admitted
+  (tables shared between requests, halved past a capacity, binder rows
+  counted in strides). `cq_load::stats::admitted_degrees` hands it the
+  evidence requests; the calibration capture forwards the hook's rows to
+  it. `DegreeCollector` stays as the exact reference of tests and of the
+  DOOP oracle, whose cost measurement now reports both, the error of each
+  admitted fact and what it costs the plans. Bloat, 699 requests, 33.4M
+  rows, one thread: 3.6 s admitted against 21.0 s exact (DuckDB's
+  `ANALYZE` of the same relations: 1.46 s, single columns only); the
+  admitted facts are off by 1% (distinct) to 63% (reached degrees) in the
+  mean and the plans cost the same by the exact facts. A calibrated bloat
+  run takes 108 s in all (202 s before this and the analysis changes
+  below) and its directives differ from the exact-fact run's in one of
+  115 holes. The facts from end-of-run scans of the relations were tried
+  and rejected: a structure keeps no round and staged degrees were off by
+  a factor of 18. Not built: the device counterpart; admission on several
+  threads.
+- `cq-cost` analysis over a recorded program: the evidence document a
+  program repeats in every hole is checked once per thread
+  (`DeclaredEvidence::check`), parsed from the raw literal token (a
+  `LitStr` unescapes its text when built) and its canonical JSON kept in
+  export. `cq-cost advise` over the calibrated bloat plans (2.7 GB, one
+  4.2 MB document 347 times): 37 s against 115 s, same directives.
+
+- `cq-cost advise` selects the planned variable order of every hole whose
+  degree facts the evidence holds (PLANNING-REDESIGN, PS-Decide): no
+  estimate ratio screens it, the hole's `basis` is the new `measured`, its
+  reason states the order and its VP-Cost beside the recorded order's
+  (`Planner::recorded`), and a hole production rejects or leaves without
+  an index keeps its recorded order. A calibrated run's advice therefore
+  comes from the facts it collected. `cq_syntax::declared_evidence` keeps
+  the last evidence literal parsed and the last document printed per
+  thread, so a document a program repeats in every hole is parsed and
+  escaped once and shared; `cq-cost` parses the recorded program once per
+  analysis and finds the holes production rejects alone on threads
+  (`advice::each_alone`, also behind `Planner::adopt`). `doop_order.rs`
+  writes the inputs of a calibrated engine run
+  (`the_calibration_inputs_of_doop`) and the oracle's degree facts
+  (`DOOP_DEGREES_OUT`). Bloat, CPU engine: the calibrated run collects the
+  oracle's 699 facts exactly and takes 202 s in all (its second analysis
+  had not finished in 30 minutes before the two changes); its advice
+  changes 45 of 115 holes, compiles into the engine and returns the same
+  counts, 8% slower than the written text (12.83 s against 11.86 s; 111
+  indexes against 97). The planner's cost has no index term.
+
+- The variable-order planner's statistics are evidence (PLANNING-REDESIGN,
+  "Planner statistics path"). `cq-evidence` gains `DegreeRequest`
+  (`distinct`, `joined`, `visible`; relations by program name, columns by
+  declared position) and `DatasetEvidence::degrees`, exact rationals
+  checked against their request. `cq_load::stats::DegreeCollector` computes
+  a request list from rows delivered with their round (sorted projections
+  shared by prefix, dropped after their last use, several threads);
+  `bind_degrees` turns the values into facts.
+  `cq_storage::counters::calibration::Observer::delta` receives the rows a
+  round admits to each stratum member (and the unconsumed tail), emitted by
+  the Datalog printer under `calibration_select!`; a calibrated run
+  (`cq_cost::calibration`) feeds the collector with admitted input rows and
+  delta rows and writes the facts into its measured evidence.
+  `cost::variables::Planner::new(input, evidence)` replaces the `Degrees`
+  trait: `requests()` lists the facts planning the program asks for,
+  `plan`/`lower` read facts only, `advise()`/`adopt()` return directives
+  production accepts with the rejected variants; `cq-cost orders --plans
+  --evidence [--advice] [--requests]` is the command.
+  `advice::datalog_plans_for` is gone. The DOOP oracle and
+  `optimal_order.rs` build evidence through the collector (their own
+  degree implementations are deleted); bloat's advice is byte-identical to
+  the earlier one. Collection on bloat (699 requests, 33.4M rows): 4.4 s on
+  24 threads, 21 s on one, 4.3 GB. Not run: a calibrated DOOP engine.
+
+- Experimental GPU `packed_run` seals immutable sorted unique keys into
+  per-column frame-of-reference blocks, with pooled payload/header/fence
+  accounting, device bounds/membership, packed tiled merge and geometric set
+  admission. Blocks default to 256 rows (runtime-configurable); runs of at most
+  32,768 rows remain plain on initial admission. Merge inputs must be disjoint, as after subtraction.
+  Build the replay and its packed-only tests with `--features packed-radix`.
+  `packed-replay TRACE_DIR --block 256 --output RESULT.json` checks the shared
+  admission trace against the existing plain engine and host sets, retaining all
+  states in global sequence order and reporting pool peaks, operation timings
+  and leading-prefix lookup proxies. `--synthetic` creates a deterministic trace
+  in a new directory. Existing default Datalog and TPC-H execution paths are unchanged.
+  The Xalan replay (131 states, 25,026,847 rows) stores 93.94 MB at B=256 versus
+  269.64 MB plain (65.16% less), but admission is 1.74× slower and prefix lookup
+  is 2.81× slower on an otherwise idle RTX 6000 Ada. Full per-state results are archived under
+  `/data/design-notes/doop-memory/`. See [the engine measurements](experiments/gpu/datalog-runtime/measurements/WIRE-IN.md)
+  for the `gpu-datalog-runtime/packed-radix` opt-in and its forced-off control.
+
+- `cq_cost::cost::variables` plans a rule hole as a variable order
+  (PLANNING-REDESIGN, "Variable-order planning"): `plan(input, hole,
+  degrees)` reads the changing occurrence in full first, costs an order by
+  the bindings of its prefixes with degrees from a `Degrees` source
+  (distinct counts, degree sequences joined by value, optionally through
+  the rows the changing occurrence reaches and no younger than them), and
+  lowers it to full reads in the order occurrences first propose, without
+  binds or lookups; `lower` does the same for a given order. No body order
+  is read. `advice::datalog_plans_for` turns valuations chosen outside a
+  report into directives. The DOOP oracle plans every variant from the
+  exact degrees of its run and counts it (`vars`, `vars_hand` with
+  `DOOP_HAND_ORDERS=<SRDatalog rules.txt>`, `<out>.vars`), and with
+  `DOOP_VARS_ADVICE=<prefix>` writes both sets as advice production
+  accepts; `DOOP_SCRAMBLE=reverse|shuffle:<seed>` plans a text with every
+  rule body permuted. Bloat: 6.598e8 frames planned, 6.659e8 written
+  delta-first. CPU engine, single thread, outputs identical: planned
+  equals the written orders on bloat, eclipse and xalan (13.6/13.4,
+  33.2/33.1, 62.7/63.0 s; eclipse and xalan with bloat's plans), and stays
+  there on three scrambled texts, where the compiler's delta-first orders
+  take 47.7 s on bloat for one shuffle and exceed 300 s for the other two.
+  Not wired into `advise`; production has no such statistics yet.
+- `cq_cost::export::compile_datalog_with_driver` compiles under a declared
+  incremental driver (`DeltaFirst` as `srd-doop-gpu` runs), so the costed
+  incumbent is the order the target runs; `compile_datalog` keeps the written
+  order. The DOOP oracle takes `DOOP_DRIVER=delta_first`, and judges chain
+  models of step frames (average group, largest group, measured pair, and
+  pair with two-binder keys and round visibility) and guarded choices beside
+  the estimate, writing per-plan totals and per-step ratios to
+  `<out>.models`. `doop_pod.py --profile` sets `GPU_DATALOG_PROFILE=1`; the
+  generated-code timing it reports is not part of this change.
+  Investigation only (PLANNING-REDESIGN, "Why, and which model is
+  correct"): on bloat the delta-first orders the GPU runs are within 1.1%
+  of the frame optimum, and GPU hole time is 59% per-launch.
+- Evidence records each column's heavy values (more than four times the
+  average group, at most 32, with exact row counts) and, for integer columns,
+  the row counts of at most 64 equal-width ranges, one fact per column; `cq-load` collects
+  both. `DatasetEvidence` gains `constants`, the values of closed constants
+  by field name. `cq-cost` estimates read them (PLANNING-REDESIGN, Filter
+  selectivity): a constant column keeps its value's share of the rows, and a
+  predicate comparing a variable with a value keeps its share of the frames
+  once its variables are bound, from the heavy values and ranges; anything
+  else keeps 1. Joined filtered views (`restrict R@i where P`) and semijoin
+  reductions are no longer unknown: a view is charged a scan and a build,
+  `(1 + h) * |R@i|`, a reduction `(1 + h) * (|R@i| + |S@j|)`, per invocation
+  in every candidate. The DOOP oracle applies every predicate over one atom's
+  variables as a free restriction where its variables are bound, and
+  `DOOP_SPLIT` splits one rule on a column's heavy values. On bloat: written
+  1.34e9 frames, advised 0.51e9 (was 0.64e9), optimal 0.45e9, all
+  certificates hold; splitting `VPT_LoadArray` on 12 heavy types raises its
+  optimum from 7.0e6 to 1.86e7. Tests: the restricted-view test now checks
+  the per-invocation charge.
+- `cq-cost` candidates are valuations instead of atom orders (PLANNING-REDESIGN,
+  static costing): each occurrence is expanded, looked up then expanded, or
+  bound variable by variable then expanded, the forms WF-VO-Subatoms and CK-Le
+  admit; an atom order is the all-expand case. Lookups are certified as
+  semijoins with a support cap `min(U_P, D_R(K)*M_P(K))`; binds are generated
+  and charged by distinct keys only under the declared realization
+  `--partial-reads distinct` (default `rows`, sound for every target). The
+  searched space is declared and recorded (`--phased N`, default 1 occurrence
+  read in phases; spaces nest). Advice is emitted as `R@k(cols)` steps;
+  incumbents with lookup or bind phases are costed instead of unknown. A
+  Datalog valuation is advised only if Storage provisions every index it
+  demands, else the best atom order is advised and the reason names the gap.
+  `analyze_with`/`enumerate_under` take a `Space`; `Read` gains `partial`;
+  the report gains `space` when not default. No compiler or pass changes.
+  Tests: 22 bound (exhaustive lookup/bind soundness on 352 bag pairs), 22
+  enumeration, 14 advice (lookup advice accepted by production Storage; bind
+  advice for CQ; unprovisioned Datalog valuation falls back); calibration
+  workflow 7/7.
+- `cq-cost bound` certifies structural upper bounds for derived Datalog
+  relations from the rules and exact input facts (PLANNING-REDESIGN, static
+  costing): size-bound adornments (Fattebert et al., PODS 2026) in a factored
+  form, with degree-keyed input lookups. Per derived relation it reports the
+  cover form, a row bound, per-column distinct bounds and the cited input
+  facts; a computed head value or a missing fact is unknown, never zero.
+  Soundness is tested against naive
+  fixpoints on every small database of six programs. On the DOOP default
+  program over 21 prepared datasets (819 relation counts) no bound is below
+  the recorded count; the geometric-mean bound/count is 1 to 1e5 for
+  non-recursive relations and 4 to 7e7 for recursive ones.
+- `cq-cost profile` and `advise --profile` add an estimate tier for derived
+  relations the evidence does not bind: this dataset's structural bound
+  times the median observed/bound ratio of example runs of the same program,
+  else the structural bound alone. Estimated facts are cited `estimate:`,
+  holes that read them have `basis = predicted`. A predicted steady variant
+  defaults to the delta-first atom order with the least predicted cost;
+  another order replaces it only for a cyclic rule body or at a predicted
+  whole-run ratio of at least 2. An observation above
+  the certified bound of its dataset is rejected. Recursive holes that were
+  unknown now get a predicted certificate. The report gains `profile` and,
+  per hole, `basis`, both omitted when absent.
+- The cost tool's tests check its choice against the optimal order
+  (`tests/optimal_order.rs`): a reference semi-naive evaluator counts the
+  exact frames of every candidate valuation of every rule variant. On a
+  generated points-to workload (4,550 points-to rows, 12 rounds) every
+  certificate holds when its facts are exact; the order ranked first costs
+  201,201 frames against 192,235 optimal and 240,663 written under `rows`
+  (optimal 179,591 under `distinct`). These counts are join frames only;
+  index maintenance, which the model also charges, is not counted, so they
+  overstate the model's regret where orders need different indexes. The
+  delta-first default is within an eighth of the best fixed orders there
+  and below the written orders. No engine ran these plans.
+- `cq-cost advise` ranks valuations by an estimate and finds the least one by
+  dynamic programming instead of listing every valuation (PLANNING-REDESIGN,
+  Ranking and Search). The estimate is the containment estimate of System R
+  and DuckDB over the reads a prefix made. A relation meeting one partner on
+  several variables divides by the largest of their counts, not the product.
+  It is charged per step as certificates are, with index maintenance. The
+  search memoizes the least completion per state, exact below 10,000 states
+  and greedy above. Certificates are computed for the incumbent and the
+  winner only and reported beside the estimates; the decision rests on the
+  estimates, with the 1.05 review screen. The delta-first default for
+  predicted steady variants is removed, and with it `ProfileUse::
+  minimum_ratio`, `Candidate::delta_first`/`cyclic` and `Decision::Crossing`.
+  All advice is compiled once per pass, and that compilation is both the
+  provisioning check and the validation of the printed advice. A gap under
+  step advice rules out partial reads for that hole; a gap in an atom order
+  excludes that index. Report: `HoleAdvice::candidates` holds the incumbent
+  and the winner; `CandidateRecord` gains `estimate`; `HoleAdvice` gains
+  `search` (omitted when exact); `standalone_upper` becomes
+  `standalone_estimate`. `cost::listed` lists every valuation with its
+  estimate and per-step estimates, for oracles. Measured: planning the 115
+  holes of DOOP xalan takes 0.08 s; the whole command takes 12.1 s, against
+  85.7 s before. The DOOP oracle (`tests/doop_order.rs`, ignored by
+  default) has its own stage-labelled semi-naive evaluator, whose 40 relation
+  counts on bloat equal the engine's, and counts every valuation exactly. On
+  bloat: written orders 1.33e9 frames, advised 0.64e9, optimal 0.44e9 (110 of
+  113 variants counted completely). Under the previous certificate ranking
+  the advised orders cost 5.67e9. On the generated points-to workload the
+  advised orders cost 203,281 against 251,709 written and 202,838 optimal.
+  Tests: cost 7 + enumeration 22 + optimal order 8 (including search equals
+  listing minimum) + advice 15; calibration workflow 7/7.
+- GPU Datalog compile time. Packed word and layout types are spelled once as
+  printer-local aliases instead of an inline width expression in every device
+  record (the DOOP program carried between stages shrinks about 3.5×);
+  provider-token lookups parse one declaration instead of the whole table
+  (8,832 + 8,000 table parses per DOOP crate before); Round `erase` skips name
+  collection when there are no execution certificates. DOOP crate macro
+  expansion 32.4 s → about 10–11 s; generated DOOP device code and GPU TPC-H
+  modules are unchanged by the last two.
+- GPU Datalog full states that lower to the same physical order share one
+  state (checked ownership table). xalan device memory at the end of the
+  fixpoint 304.5 → 275.1 MB, peak 342.1 → 316.3 MB.
+- GPU runtimes allocate every CUB/Thrust scratch buffer (radix controls, merge
+  partitions, counts, scans, ranges) and DOOP native scratch from the RCCL pool
+  (RCCL `a74cb59f`, allocator-aware workspace constructors). Radix controls are
+  grow-only and reused across sorts. On xalan, synchronous `cuMemAlloc` calls
+  fall from 1,977 to 9 (pool growth only) and `cuMemAllocAsync` calls from 5,504
+  to 0.
+- GPU TPC-H records shared Offset/Rank key domains at load, preserves codes
+  through relational operators, and restores logical keys at Rust/output
+  boundaries. Publications carry measured bounds separately from computed
+  origins. First-warmup index accounting distinguishes retained allocations
+  from temporary/global-fold output and selected-row capacity from live bytes.
+  Publication bounds now share one reduction/readback across fields; Rank
+  constants are prepared at load, and canonical keys reuse recorded measured
+  bounds. Unsupported key reads in head expressions/aggregates are rejected.
+  Rank replacement accounting no longer counts the replaced column twice.
+  Internal range payloads/directories and numeric uploads reuse proven enclosing
+  bounds instead of measuring again; publication descriptors upload asynchronously.
+  Host-built input upload cost is separately reported as load-side work, exposing
+  the h13/h04_not_exists timing-boundary difference from e4e08c99.
+  Grouped host publication preallocates its decoded result from the checked row
+  count; nullable decoding and the host/device publication boundary are unchanged.
+
+- Fix: CPU TPC-H `aggregate!` kernels (Q06 default/par) failed to build since
+  `fadeecc5` (`expected struct`): the evidence adapter parsed a core struct
+  header before aggregate/correlated expansion. Evidence now attaches as the
+  final surface pass (`cq_workload_passes::tpch_evidence`), and the real Q06
+  dispatch is compiled by the default `catalog` test.
+
+- P5 independent scan hardening, without the parked join machinery:
+  encoded predicates reject column-free leaves, Fold Sum refuses encoded base
+  reads, summary levels are explicit, and execution consumes source-owned
+  vector geometry. Comparator-row capability replaces provider-name checks
+  at existing blocked canonical boundaries. Q06 adds an explicit `row-par`
+  control; `par` remains row-backed and `blocks-bytes-par` remains the candidate.
+  The original `p5-joins-q06.json` is retained unchanged as historical evidence,
+  not a current-main performance claim.
+  Initial serial timing regressions were isolated with instruction-level and
+  same-source linker controls. Summary capability checks now stay at the typed
+  boundary; `None` adds no shared-kernel branches. Final Bytes same-route ratios
+  include parity (serial 1.039 [0.982, 1.097], Tasks-24 0.999 [0.862, 1.155]);
+  Plain's unchanged-source shuffle control is 0.995 [0.969, 1.013], identifying
+  candidate placement sensitivity. No dead checks or linker tuning are retained.
+
+- P6 C resident FOR-native tile realization: independently checked positional
+  scan spines ending in order-insensitive keyless grid folds use existing
+  1024-row vectors with 256 threads and four transposed positions per thread.
+  FOR/Plain predicates compare code-domain intervals; Delta/native retain
+  correct decode. Surviving first `rust_reads` consumers reconstruct fields.
+  Every addition stays checked: unflagged sums are exact; incomplete overflow
+  flagging can change with traversal order. No S1 format or advice knob;
+  unsupported shapes stay unchanged.
+  The all-query census changes only h06, h11's Stock total and h15's Revenue
+  maximum (both scales); all 52 Physical/Structures/Sequence plans are unchanged.
+  All 26 queries pass complete first-result comparison at SF1. The three
+  affected queries also pass SF1/SF10 with FOR, Plain64, Delta and native base
+  layouts. Core tests: 81; device-column tests: 20. Paired h06 resident total:
+  0.771× [0.743, 0.796] SF1, 0.809× [0.808, 0.811] SF10 (CPU-exclusive).
+  Review follow-up preserves GPU-Capture gating for empty tile sources and
+  registers the Delta/native predicate-time decode violation explicitly.
+- GPU TPC-H manifest cold loads use reusable pinned native-width staging;
+  exact projected-set verification, row selection, bounds and encoding run
+  on the device, streaming one raw column at a time and trimming dedup scratch
+  before queries. Verified-key SHA checks, projection reuse and explicit
+  HostFor/cache measurements retain their semantics. Reports expose load phases
+  and peak/after-load memory (STORAGE §12.7).
+  Duplicate projections now release newly loaded full-source cache entries
+  before pool trimming, retaining only selected columns and earlier cache
+  entries. Query time (load excluded): the 26-query SF1 paired baseline (with
+  tiles) shows no systematic cost. Unchanged queries lie within [0.997, 1.007]
+  and the geomean is 0.991 [0.989, 0.993]. Controlled SF10 runs show an
+  address-sensitive ~2.2% difference in h06's kernel (identical SASS; STORAGE
+  §12.7). Load time, a separate cold-start metric never counted as query time:
+  h06 process wall is 0.661× (SF1) and 0.113× (SF10); suite process wall goes
+  24.3 → 18.3 s.
+- Datalog EDB loading builds no membership layout for a read-only input
+  (DL-Canonical relaxed). Inputs are sets by the IO contract, so loading
+  inserts each input row into the relation's read layouts as given. An
+  all-column canonical layout is still required, and built by
+  insert-if-absent, for a derived, returned or negated relation; any other
+  input names its first read layout (an input with no read gets one
+  empty-key layout). DOOP default Storage: 209 -> 179 full layouts (30 unread
+  all-column input sets removed; `mainclass`, an output, keeps its set).
+  Measured on xalan `doop-mini`, 9 interleaved pairs: compute 0.978
+  [0.961, 0.999] (8.86 -> 8.63 s median), peak RSS 1621 -> 1520 MiB; all 26
+  outputs (5,657,686 tuples) identical as sets. The parallel and GPU
+  pipelines take the same Storage default. On `394ed5f2` plus this change
+  `tools/gpu_gate.sh` passes on an empty card (448 s; H05 SF10 8.363 ms;
+  Cassandra 26/26 exact).
+  Behavior change: a bound input that repeats a tuple is no longer repaired
+  at load. Derived and returned relations remain sets. Calibration works on
+  loaded sets: its observer keeps each bound input's full-tuple set and fails
+  the run on a repeated complete row (`CanonicalAccumulator`), records
+  `input_unique`, and its dataset evidence must be collected over the loaded
+  set. Tests that bound duplicate raw rows now bind sets.
+- GPU Datalog set sorts accept inputs longer than one RCCL radix portion.
+  `SetOps::sort` sorts `2^28 - 2^20` rows per call; each later portion drops
+  the rows already sorted, unless certified unique, and is merged. The
+  field-flow DOOP program on jython no longer fails `Policy800 one-portion
+  maximum` on a 378 M-row candidate round (it then exhausts the card on a
+  1.96-billion-row round). Under `GPU_DATALOG_TRACE_MEMORY`, a refused pool
+  allocation reports its size and the pool counters.
+- Datalog canonical order for ordered index kinds (DL-CanonicalOrder). New
+  Storage rewrite `cq_datalog_canonical::canonical(ordered)`
+  (`features/datalog/passes/canonical`): a canonical layout keyed by every
+  column that no occurrence reads takes the column order of one of its
+  relation's read layouts, a full read in the relation's own component
+  first, with its provider respelled. Layout count, keys and reads are
+  unchanged; the default (hash) canonical choice is untouched. For index kinds
+  whose full layouts are sorted complete rows, the membership layout then
+  needs no order of its own.
+- GPU Datalog memory (design note
+  `/data/design-notes/gpu-datalog-vs-srdatalog-memory-2026-11-11.md`):
+  - Full device layouts of one relation with the same column order share one
+    state (DL-DeviceSharedOrder); both GPU DOOP engines run
+    `canonical(ordered)` before `device_storage`. The SRD field-flow program
+    keeps 96 device states for its 132 layouts. A delta no occurrence scans
+    adopts the canonical batch instead of a relation-order copy.
+  - Admission reads candidate batches one sort portion at a time
+    (`DeviceRadixRun::fresh_batches`) and never concatenates or permutes the
+    whole bag; other admitted orders are built the same way
+    (`reorder_unique`). An arena keeps a slot for the next round only up to
+    1 GiB.
+  - Device memory has two tiers (`TieredMemoryResource`): blocks under 64 MiB
+    come from the suballocating pool, larger ones are single
+    `cuMemAllocAsync` allocations in the device's default driver pool, whose
+    freed blocks stay mapped until a stratum boundary trims them. This
+    applies to every GPU workload.
+  - `GPU_DATALOG_TRACE_MEMORY` adds one line per admission and publication
+    step with pool and driver memory; a refused driver scratch allocation
+    reports its size under `CQ_GPU_VRAM_EXCEEDED`.
+  - `GPU_DATALOG_PROFILE` prints the fixpoint's wall time per (stratum,
+    phase, relation, step): holes per rule version, admission, order builds
+    and publication (`experiments/gpu/README.md`).
+
+- GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
+  adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`
+  where `detect_integer_codec` picks it) with `EncodedColumn::from_host_layout`,
+  plus `from_host_native`, `pack_for` (host FOR packing byte-identical to the
+  device encoder), `check_packed_layout`, `from_host_packed` and
+  `from_packed_parts`. `Catalog::compress_with` stores the H05
+  `tpch_domains` catalog in a chosen layout; `compress` keeps FOR. In
+  `cq-gpu-tpch`, `--base-codec for|plain64|native|hostfor|delta` selects the
+  layout for both the projection loader and the catalog. Generated code is
+  unchanged except H05's two load calls, and the default `for` reads,
+  verifies and uploads exactly as before. Results record a per-query
+  `base_columns` load report.
+  `--base-cache DIR` (with `hostfor`) persists packed columns bound to their
+  source file identity and stored-byte SHA-256. Key columns served from them
+  are rehashed against current bytes before certifying a projected set.
+  Measured (26 queries, SF1/SF10, 5 rotated rounds, all validated):
+  - plain is 1.16–1.18× slower than FOR, including H05;
+  - size-selected FastLanes DELTA is 1.35× slower (H05 1.38×, over the
+    10.35 ms ceiling) for about 10% fewer resident bytes;
+  - a tmpfs read control shows no read confound;
+  - persisted packed columns cut upload and encode to 0.10× and SF10 process
+    wall to 0.913 [0.901, 0.925].
+
+  FOR stays the default. Driver: `experiments/storage-bench/gpu_base_codec.py`.
+
+- VO ordering consumes counts and keys only through the source's checked
+  dataset document and explicit bindings. Removed the duplicate inline VO
+  evidence grammar/type and `PlanOptions.evidence`; missing facts retain the
+  existing default, and explicit orders remain authoritative. TPC-H CPU
+  default/par load a checked-in neutral SF1 document; GPU automatic callers
+  import their configured dataset manifest and file key catalog rather than
+  a Rust count/key table. CPU compilation needs no installed dataset.
+  Expected-VO steps
+  remain authored independently. Sequence evidence is unchanged: its
+  Count/Bounds source-binding migration is separate, and its other facts do
+  not duplicate the current file model.
+- Sequence considers contiguous partial groups only when Physical records no
+  canon on the group's input (`PL-GroupPartial`). Canon-dependent groups keep
+  group-key routing and canonicalize inside the routed parts, restoring H02
+  parallel grouping without changing uniqueness analysis, input-set semantics,
+  or the faster H01/H13/H15/H18 partial schedules.
+- GPU workspace pins cuda-oxide `57eacecc0` / RCCL `a776d01c`: the device
+  pipeline's scalarization, slot promotion and verification passes no longer do
+  quadratic work. `cq-gpu-sequence-runtime` (530 device functions): device
+  pipeline about 52 s -> 16 s, crate about 55 s -> 22 s. Under the previous pin
+  the new backend emitted byte-identical PTX for the five runtime device crates.
+  Under the new pins all 26 GPU TPC-H queries validate at SF1 (no query more
+  than 1.6% slower than under the old pin, geometric mean ratio 0.9975, one
+  unpaired run each) and DOOP Cassandra is exact
+  on all 26 outputs.
+- IO is a standalone library: `cq-load` retains its crate name under `io/cq-load`,
+  and loader/schema macros move to `io/cq-io-macros` without compiler macro
+  reexports. Shared evidence data moves to neutral `runtime/cq-evidence`
+  without old evidence aliases; evidence-file acquisition and Cargo tracking
+  move from compiler syntax to `cq_load::stats_manifest::load_build_input`.
+  Bidirectional dependency checks separate IO
+  from top-level compiler languages, passes, and facades, including dev/build
+  and target-specific edges. Only the user-facing `mini-linq` facade may depend
+  on IO, reexporting the separate library as `mini_linq::cq_load`. Public API and
+  external-package gates retain IO coverage independently of compiler ownership.
+- Dataset preparation can verify stored keys once and bind them to SHA-256
+  content hashes. CPU/GPU TPC-H and DOOP loaders omit complete-row deduplication
+  only when the actual loaded projection includes a matching verified key.
+  Unprepared, changed, projected-away-key and host-built inputs retain set
+  canonicalization. Manifest-path overrides allow read-only dataset adoption;
+  no query annotation or compiler uniqueness fact is introduced.
+- Physical checking, lowering and canonical rewrites share one operator-based
+  uniqueness analysis. Every input relation is a set by the IO contract;
+  collected loaders canonicalize complete rows before query execution.
+  Compiler host-set certificates and Sequence trusted/planning key annotations
+  are removed. Group and output boundary obligations are checked locally.
+- Physical lowering alone places valuation canonicalization. Sequence executes
+  the recorded canon boundaries; the `group_without_canon` rewrite and its
+  separate canon-free uniqueness proof state have been removed. Grouping still
+  consumes complete distinct valuations, including under partitioned execution.
+- Calibration descriptor version 4 records separately printed base programs in
+  `calibration::Stage::bases`: Physical for Structures, and Physical plus
+  Structures for Sequence. `Stage::annotation` retains the selected layer's
+  language and printed-program identity; continuation agreement also compares
+  bases. Flat stages have no bases. Versions 2 and 3 are no longer accepted.
+  Structures no longer embeds Physical: its parser receives Physical explicitly,
+  its printer emits only annotations, and readers/checkers take separate programs.
+  Sequence likewise no longer embeds Structures; lowering, planning, grading,
+  and realization receive separate Physical/Structures/Sequence programs.
+  Provider-changing rewrites return all changed layers. CQ entry validation
+  also checks restricted Physical facts inside realization carriers.
+- VO no longer embeds CQ (M3). Parsing and checking use `Annotation<&CQ>`;
+  ordering continuations carry CQ and VO separately. Reduction, relational
+  lowering, planning, cost export, Datalog planning, and calibration consume
+  the explicit normalized CQ. Printed VO loses only its former CQ prefix.
+- VO membership is derived from empty step introductions, not a `check`
+  suffix (M2f). Connected ranking includes introduction priority; LE builds
+  reads from occurrences without inherited phase metadata. Formal tie-breaks
+  document producer choices and E-Domain is atomic-conjunct-only (the two Q19
+  expected plans now omit the disjunctive container domain). The expected-VO
+  harness checks all 69 rule-derived plans against their fixture routes.
+- RA and Physical erase occurrence paths (IR redesign M2b). Relational
+  lowering returns a `Steps` side table for the VO↔RA seam; its total entry
+  accepts a checker-created `Checked` input. Downstream identities use Physical
+  definition names. Planning transports its occurrence/read and `Steps` tables
+  beside the program; each Smallest invocation resolves only its own selectors.
+  No pass inspects the remaining queue. Calibration
+  descriptor version 4 records `Steps`, not replayed origins; stream-work facts
+  absent from that table remain explicit unknown bounds pending M6.
+  The integrated descriptor uses version 4 because both independent branches
+  changed version 2 to incompatible version 3 schemas.
+- Calibration stage observation moved out of the IR crates (IR redesign M2d):
+  `cq_stage::Language` no longer has `calibration_snapshot`; the facade records
+  each checked stage as `calibration::Stage { language, program }` (Rust type
+  name and printed program, descriptor version 2) and the calibrator
+  (`cq_cost::calibration::lineage`) re-parses, checks and derives each stage's
+  dependency graph for `Trace::coverage`. No IR crate references calibration.
+- Ordering inputs leave the CQ grammar (IR redesign M2e). `cq_lang_cq::ordering`
+  and `Program.ordering` are deleted; the `ordering(seed, delta, driver,
+  permutation, shared_demand)` record is VO's own (`cq_lang_vo::ordering`,
+  checked by VO-OrderingInputs) and reaches the planner as the `PlanOptions`
+  `ordering(...)` option, which Plan-Prefix records unchanged in VO. Datalog
+  Fork records the inputs in Round `Planning`, and `invocation_pipeline`
+  serializes them into the owned planning invocation (DL-OrderingInputs).
+  `DriverPolicy` is defined by DL-Incremental. Printed VO loses only the
+  embedded CQ header's `ordering(...)` line.
+- Ordering is total (IR redesign M2c). `cq_order::order`, `order_unrestricted`,
+  `order_written`, `order_advised` and `evidence::order` take a WF-NF witness
+  (`Normal`) and resolved advice (`Advice`, from `resolve`, rule
+  O-AdviceResolve) and return the VO without an error type; the producer no
+  longer checks its own output. The `compile*` functions are the fronts: WF-NF
+  check, advice/evidence resolution, then the total ordering. Output
+  invariants are checked once by the pipeline: CK-Order, CK-EvidenceLe, and the
+  new `cq_order::check_advice` (CK-StepAdvice) on the facade's explicit-order
+  route. `Known::place` resolves its negation, read level and bindings first
+  (O-KnownResolve). O-BlockPlacement correlates a Rust-free union whose arm
+  cannot place from no seed (a nested union needing a domain), which every
+  ordering previously refused.
+
+- Explicit order advice now delegates dependency, subatom and phase legality to
+  the VO and lookup/expand checkers instead of duplicating producer-side errors.
+  Duplicate full occurrence selectors are rejected during resolution; partial
+  reads followed by a full read remain legal. The VO subatom checker enforces
+  that a partial read introduces at most one variable.
+
+- Rule coverage gate (IR redesign M1): `doc/formal/check.py` classifies every
+  function in `passes/*/src` and `languages/*/src` that constructs output IR or
+  returns `Err` as a decision site and requires exactly one in-file
+  `Formal rule` marker whose `\Rule` premise has no empty or undefined bare
+  predicate; today's 488 uncovered sites and 19 misplaced markers form the
+  shrink-only `doc/formal/coverage-allowlist.tsv`. CK-Order, CK-Reduce and
+  CK-RelationalLowering obligations, CK-Index/CK-Structures, the VO Schedule
+  contract (six rules), RAHeading, PHeading/PMode and Entries are restated as
+  mathematical rules; IX-Policy, PH-Lower, STR-Represent, STR-Staging and
+  P-Realize state the five previously ruleless producers.
+- Preserve realizations across I2 drainage: omit implied zero-column checks,
+  realize residual root checks as Unit guards, and retain standalone provider
+  phases when a moved check exposes a formerly separated candidate pair.
+  Recorded crossed-prefix provenance lets a moved check keep its former
+  reduction input and ordinary reciprocal absorption without enabling a new
+  future-support reducer optimization on unmoved plans.
+- GR-Retain now carries retained lookup cursors across checked nonintroducing
+  membership probes, including checks on another key/provider before reuse.
+  Producer and independent retention contracts require the original keys,
+  provider and immutable snapshot; introducing joins, opaque bindings, lost
+  keys and publication/canon escapes remain ineligible. Structural regressions
+  cover hand-authored witnesses, positions, snapshot occurrence identity and
+  rejection cases; execution regressions cover empty inputs, duplicate order
+  and one native lookup per input row without scans.
+- Planner dataset evidence has a strict versioned JSON schema/checker and a
+  separate recorded CQ/Datalog input with explicit relation/column mappings.
+  Normalization, delta/layout views and parallel scan erasure preserve that
+  input without invoking legacy P3.3e root selection. The optional `cq-cost`
+  export projects checked compiler records and source-variant identities for
+  external advice; printers do not estimate cardinalities or choose orders.
+- `cq-load` adds the offline `cq-stats stats/check` command, sharing bounded
+  CSV/Parquet source readers with typed columnar loading. It records exact
+  row/distinct/extrema/degree facts (including complete-tuple set semantics)
+  and optional full-stream HLL observations. Versioned typed-row content
+  hashing binds data order/duplicates, schema, loader options and raw metadata;
+  missing/mismatched hash modes are rejected. No runtime planner or implicit
+  recursive/target cost facts are introduced.
+- `cq-cost advise` emits static, provenance-bearing per-variant advice from
+  checked compiler records and exact-rational degree bounds. It records all
+  legal candidates, amortizes delta work over declared final rows/rounds,
+  accounts for shared read indexes, and retains structural orders for unknown
+  or crossing costs. Generated advice uses the same RulePlan parser as macros
+  and is checked through the pre-Storage compiler boundary. No default planner
+  or runtime guard is introduced.
+- Static advice now pins and checks the existing admission owner. Joined
+  restricted-view materialization/lifetimes remain explicitly Unknown rather
+  than receiving an incomplete whole-run cost; explicit single-read component
+  key builders include restriction work and one key-set build.
+- Bound-quality review now reports incumbent looseness and only same-prefix/
+  key/version observations for proposed steps. A declared 1.05 minimum claimed
+  bound-ratio screen retains noise-sized changes before shared-index ownership
+  is updated. Aggregate counters never become per-key fan-out certificates;
+  unobserved winning prefixes remain unvalidated, not performance evidence.
+- Optional `planner-calibration` captures exact canonical input statistics,
+  seed/delta/final/round counts and actual Physical operator rows, with checked
+  VO lineage, immutable task/host-binding provenance and true row-alias fusion.
+  It re-costs only after completion, emits full diagnostic evidence and an
+  explicit planning-facts projection, and never adopts a plan at runtime.
+  CPU and synchronous CPU-par hooks erase when disabled; relational-progress
+  and device counting require separate recorded models/producers.
+- Evidence iteration scope is checked against actual Round components:
+  coalesced acyclic IDBs may be iterated, seed-only components remain Frozen,
+  EDBs cannot claim RecursiveFinal, and a file cannot choose its component ID.
+
+- Structural planner step 1: ready fully-bound checks drain before every
+  variable introduction, including lets, for automatic, authored and L&E
+  schedules. Executable VOs independently check readiness, earliest checks
+  and connectivity; illegal authored/Written orders are rejected. Elimination
+  keeps its variable preference only after connected-ready candidates.
+  Transfer preserves written introducing-binding boundaries through the shared
+  `WrittenConnected` policy. Known-placement advice also obeys earliest-check
+  drainage. CPU and GPU H07 authored advice now uses a legal connected chain.
+  Datalog records seed/delta, driver and permutation facts and optional
+  no-op stratum demand. Incremental ordering and prefix-based Storage remain
+  until the separately censused step 1b ownership cutover.
+- Expanded-code gates support `--baseline-archive [CACHE]`: a locked,
+  revision-keyed archive and build cache without git worktree state changes.
+  CQ-to-RA proof references are now occurrence facts and WF binding analysis,
+  not unchecked executable VOs.
+  Independent RA correspondence additionally recognizes adjacent selection
+  conjunctions and a later complete-row witness that repairs projected views
+  only through positive, binding-preserving lineage. Semantic and projection-
+  loss mutation regressions cover this certificate.
+
+- P7.3: every join filter records one mandatory `policy` in Structures:
+  `abandon P of B keys key_count`, `abandon P of B keys ACCESSOR` (authored
+  borrowed/attached advice only), or `always`. It replaces the optional
+  `abandon … [using ACCESSOR]` field. SEL-FilterPolicy produces it,
+  STR-FilterPolicy checks it, and the printer emits it unchanged. The veto-only
+  P7.3 cost rule found no departure in the 29 TPC-H kernels or the DOOP rules,
+  so default/radix code is unchanged. Census:
+  `/data/design-notes/p7-3-design.md`.
+
+- Move the shared `bench-check` library/CLI from `tools/bench-check` to
+  `testkit/bench-check`, keeping feature consumers within the core dependency
+  roots and including the external-consumer check in tooling gates.
+
+- GPU flat publications record a compact per-publication layout: the
+  publication's resident heading (deferred provider payload excluded), unique
+  fields, dense stride. The independent checker validates coverage, stride,
+  union staging and provider-descriptor reads against the producer record;
+  stores, allocation extents, parent copies, union staging, host downloads and
+  provider descriptors print the recorded offsets. The shared five-slot
+  carrier stride is gone (H03 Lineitem 40 B → 16 B, Orders → 24 B). H03 SF1
+  vs `dbe4c2cb`, exclusive CPU: 0.660 [0.659, 0.661] (5 pairs; GPU-lock-only
+  10 pairs 0.710 [0.701, 0.721]). Publication records now print (ToTokens)
+  and GPU TPC-H plans.json stages carry them as `gpu_publications`.
+
+- P7.2 merged advice-only: Structures records `Construction::Ordinary` or
+  `Statistics(BuildDemand)` (rows/max-group), with declared `statistics_build`
+  support and independently checked publication witnesses. Ordinary builds do
+  not accumulate demanded statistics; statistic builds use `BuildWithStatistics`.
+  CPU run/hash statistics, borrowed ordered-run filters and attached sidecars
+  remain explicitly authored. Default activation is unchanged; P7.3 is design.
+
+- `tools/remote_gpu` builds execution bundles locally and runs gates/benchmarks
+  on disposable RunPod pods, with pinned HF dataset seeding on a persistent
+  volume and a 60-minute deletion watchdog. Bundles include Python benchmark
+  drivers, the prebuilt DuckDB CLI and HF's `click` dependency; pod execution
+  exports `DUCKDB_CLI` and puts bundle binaries on `PATH`. `--no-tests`,
+  `--gate-bundles` and `BUNDLE_DIRS` support benchmark-only and interleaved
+  multi-bundle sessions. Extraction uses `--no-same-owner`; result retrieval
+  streams tar over SSH. Sessions prune older pod directories and remove their
+  own bundles after successfully pulling results to avoid filling the volume.
+  Benchmark ceiling failures are recorded without skipping exactness checks.
+
+- Timing protocol: builds/tests take the shared timing lock per command, never
+  around a multi-command runner. CPU measurements take the gate and exclusive
+  timing lock; GPU timing holds only the GPU lock, rotates interleaved samples
+  and records load average. Claims whose CI lies within 5% of one require a
+  repeat with the CPU exclusive lock acquired after the GPU lock.
+
+- DriftFix6/7 repair ordering readiness, asynchronous empty GPU publications,
+  lazy owner lifetimes, recorded radix windows/logical identities and kernel ABI
+  launch caches; radix work counters are feature-gated. Rejection tests retain
+  specific behavioral coverage rather than diagnostic wording. The workspace
+  split test is gated and benchmark reports mark provisional/unconfirmed effects.
+  `retail_h07_block` parallel compilation is restored through declared Positions
+  capability; external fixtures consume recorded provider tokens/types.
+
+- Recorded 2026-11-02/03 comparisons (not new runs of this tree): CPU TPC-H SF1
+  default/par geometric means are 0.908/0.820 versus `c1b75718`. Corrected GPU
+  TPC-H SF1 is 0.948 [0.946, 0.949], an exploratory three-pair result; H03
+  remains 1.141 with publication-write layout under investigation. Pod DOOP GPU
+  xalan/batik ratios 0.239/0.724 are low confidence (up to 10x same-binary
+  spread), not a fresh SRDatalog comparison. See planning progress for evidence.
+
+- GPU TPC-H separates final host downloads into `download_ms`, outside build
+  and total, restoring the reference benchmark boundary without removing work.
+  Checked stage-use facts retain intermediate downloads inside query execution;
+  reports expose the executed accounting paths. The 2026-11-02 GPU TPC-H ratios
+  are boundary-confounded: current included terminal downloads, reference did not.
+
+- Timing validation uses one shared `tools/bench-check` implementation for CPU
+  TPC-H, raw/prepared DOOP, GPU TPC-H and paired pod benchmarks. Each
+  binary/configuration's first measured sample is fully compared; later samples
+  retain exact per-relation counts and seeded actual-tuple membership checks
+  (up to 1,000 tuples, all for smaller outputs). References are indexed outside
+  sample loops, validation evidence/timing is explicit, and Python drivers use
+  the native checker rather than repeated complete tuple comparisons. Tests and
+  explicit correctness checks stay full; query timers and fresh-process pairing
+  are unchanged. Mac and storage microbenchmarks retain their existing checks.
+
+- P8 measures Masks against the unconditional Tree reducer on all 29 CPU TPC-H
+  SF1 default kernels and the 30-scenario planners corpus. Masks stays default:
+  Tree's supported-kernel geometric mean is 1.03541x, versus 1.26056x on the
+  supported corpus. H09 and H12 improve substantially; the planning entry
+  records exact paired evidence, cyclic/advice exclusions, intermediate-size
+  counters, and an unimplemented count/filter-rank selection proposal whose
+  census selects those two strong winners. No compiler, checker or printer
+  behavior changes.
+
+- Tasks key partitioning preserves native positional Selection publications:
+  automatic advice retains their selected carrier, and Sequence rejects a
+  partitioned store pretending to publish that carrier. Sharded providers now
+  implement their declared flat `Build` capability as a singleton cover,
+  preserving exact reads without rerouting or copying input rows. The KP-1/KP-2
+  regression executes exact answers with one and four workers.
+  P8's separate routing-projection census closes at a measured stop: 66 exchanges,
+  782 MB of carriers and no droppable columns at SF1; no projection is added.
+
+- P5's authored CPU blocked-scan checkpoint connects Plain/Bytes ScanTables to
+  checked Structures and printable Sequence execution facts. Pull and Tasks
+  share bounded masks, source-qualified positions and demanded-only reads;
+  canonical ordinal keys are gathered once without semantic reconstruction.
+  Q06 alone adds explicit blocked Plain/Bytes serial/parallel routes, leaving
+  defaults unchanged. Join/index consumers, encoded-base grouping, restricted
+  source renames and undischarged host-set verification remain checked
+  unsupported boundaries of this initial checkpoint, not decoded-row fallbacks.
+  The P5 planning entry records the rollout boundary and measurement evidence.
+  The completed SF1 Q06 comparison retains this as opt-in: Bytes/row is
+  1.112 [1.097, 1.130] serial (slower) and 0.766 [0.719, 0.843] with 24 Tasks
+  workers. Five paired processes per comparison, exact answers in all 2,520
+  samples and 600 warmups, page faults and same-source linker controls are
+  recorded in `experiments/storage-bench/results/p5-s3-q06.json`. Stop the
+  rollout at Q06; no default promotion or other-kernel authorship.
+
+- Non-GPU rejection tests assert failure and applicable formal rule IDs rather
+  than diagnostic prose. Behavioral and compile-fail coverage remains independent
+  of error-message wording; GPU tests are unchanged.
+
+- Consolidate 28 Cargo workspaces into three: root, `experiments/gpu` and
+  `experiments/mac`. Portable compiler, feature consumers, formal examples and
+  CPU benchmarks share the root lockfile and target directory. Keep GPU's oxide
+  toolchain and Metal's platform dependencies in separate workspaces; preserve
+  standalone external-packaging fixtures as isolation test inputs. Regression
+  rows select explicit packages and retain formerly grouped consumer tests.
+  Closed-core dependency checks remain independent of workspace membership.
+  Preserve package versions/MSRVs, workload debug settings and benchmark LTO
+  profiles; relocate external consumers using materialized public dependencies.
+  Relocated consumer dependencies retain their directory group's sibling datasets.
+  Root default members exclude the five packages whose dev-dependencies enable
+  counters; explicit package regression gates retain their instrumented coverage.
+
+- GPU Sequence placement keeps descriptor-backed `abi columns` index builds at
+  their host publication boundary. It no longer copies whole resident columns
+  through unpartitioned device publications merely because the index token
+  differs from the scan token. Row-oriented native provider rebuilds still
+  publish device rows; the choice is recorded in Sequence grades and checked
+  through ordinary catalog/grading obligations. The GPU batch gate now runs
+  advised H05 SF10 and enforces its unchanged 10.35 ms benchmark ceiling.
+
+- P4-GPU slice E records complete-codec active-bit sort windows and admitted
+  input certificates in device Storage. Full/delta consumers share one sorted
+  batch per recorded physical order; canonical-order input is adopted without
+  sorting. Independent checks reject stale permutations, omitted significant
+  bits and false sortedness claims. Full-key sets use explicit implicit-unit
+  offsets and no item-source map; occurrences retain materialized group offsets.
+  Opt-in phase work counters distinguish canonical/layout radix work, modeled
+  traffic, merges, group readbacks and metadata materialization. Directory and
+  provider defaults remain conservative; performance evidence is recorded in
+  the P4-GPU plan entry.
+  Five exact pairs versus `1b1540bc` retain the combined change: fixpoint ratios
+  xalan 0.96599, batik 0.95177, Cassandra 0.96163; each 95% CI is below one
+  and below its same-source linker-shuffle control CI. Planned radix passes
+  drop 15–16%; sort/merge counts stay unchanged and unit-offset allocations
+  disappear. GPU/CPU/API gates and all 104 advised/automatic TPC-H exactness
+  cases pass. The separate H05 performance ceiling fails on pristine baseline
+  too (951.291 ms versus current 952.262 ms). Full evidence:
+  `experiments/gpu/compare/p4-gpu-e.results.json`.
+
+- P4-GPU slice D cuts Datalog EDB/full/delta/negative layouts over to ordinary
+  complete-key `RadixLayout<_, (), W, u64, ()>` sets backed by
+  `DeviceRadixRun<W, u64, ()>`, with `radix_relation` /
+  `NativeAbi::RadixRelation` and no old `DeviceRuns`/`DeviceLayout` aliases.
+  Per-layout records include offset, full-key-set construction, key-prefix
+  reads, legal configurable radix bits (default zero), ratio and launch
+  geometry. Independent checks validate those facts, schemas, initializers
+  and source erasure without replaying realization. Read-only `fresh`
+  returns a `SortedBatch`; all secondary permutations use that same admitted
+  batch, delta moves and frozen negative deduplication are preserved, and
+  maintained views use `republish(&state)`. Prefix lookup compares encoded
+  intervals and decodes only demanded complete-key fields. Lane scheduling
+  and per-hole reservation are unchanged. Checked host-derived Word witnesses
+  preserve function-local type aliases without leaking them into CUDA modules.
+  GPU runtime/core/facade suites pass; xalan/batik match 43/43 duplicate-free
+  tuple sets, Cassandra 26/26. Root, quick, formal and API gates pass; all 46
+  CPU expansions are identical to `b7e83c6f`. Five exact interleaved pairs give
+  current/baseline fixpoint ratios 1.01059 [0.99901,1.02241] for xalan,
+  0.98145 [0.97875,0.98556] for batik, and 0.49983 [0.48944,0.51058] for
+  matched-workflow Cassandra. Xalan is neutral/slightly slower; sort/unique
+  work did not shrink, and unit-offset maintenance increased. Nsight kernel/API
+  attribution and per-command gate times are in
+  `experiments/gpu/compare/p4-gpu-d.results.json`; slice E targets measured
+  sorting and metadata materialization costs.
+
+- P6b GPU host preparation: `Realization.launches` records invocation
+  occupancy or a program-owned one-block/resident launch envelope.
+  Program slots use the CUDA module's opaque compiled entry identity,
+  including callable specialization, and retain validated function/configuration
+  with the context and query scope. Generated typed scalar-ABI wrappers borrow
+  those preparations; runtime checks only context and grid-envelope bounds,
+  without repeated occupancy, function/device-attribute or module lookup calls.
+  Row-dependent grid caps, root sharing, count/failure readbacks, replay and
+  stream synchronization are unchanged. `Execution.grid` is removed rather
+  than duplicating the target realization's launch decision.
+
+- GPU-7/8/9: GPU bindings record separate checked host collection/index
+  adapters instead of collecting a device `RangeProvider` in host subplans.
+  Closed range subjects obtain their capture context from row-valued bounds.
+  Checked macro rejections produce one diagnostic expression, including the
+  deliberately unsupported grouped-answer-gate case, without secondary Rust
+  syntax diagnostics. Each finding has a default-tier regression.
+
+- Restore the 26-output DOOP GPU pipeline after declaration-local codec IDs:
+  its storage schema explicitly records `DoopSymbols` as codec 0, and its
+  decomposition catalog explicitly authorizes that identity, ordering and
+  host/device/block/lane levels. No checker or implicit codec authorization
+  is relaxed; the integer-only SRD DOOP pipeline needs no symbol token.
+  Closed symbolic answer captures also retain their declared answer-slot
+  logical identity during GPU codec/carrier recording, so arena metadata uses
+  the recorded code carrier rather than requiring the logical symbol to
+  implement `Scalar`. The symbols oracle covers a closed symbolic head.
+
+- Fix (DriftWatch5 #1): a hoisted arm without a finite domain sees its free
+  columns but no seed provides them. VO records `provided_before` per step
+  (the scope's seed plus its earlier steps), so a nested domain-taking block's
+  free columns enter `domain_requires` and WF-BlockPlacement, the reducers'
+  domain boundary and cq-order readiness (schedule, Fine and the Filtered
+  check) wait for the arm's own generator instead of lowering
+  `project Unit keep {x}`. Regression:
+  `a_nested_domain_block_in_an_unseeded_hoisted_arm_follows_its_generator`.
+
+- Elaboration redesign slice 5 (pure rename): `cq-elaborate` is now
+  `cq-relational-lowering` (`cq_relational_lowering::{compile, check}`), and
+  its rules use the `RL-` prefix: E-Emit→RL-Emit, E-Relation→RL-Occurrence,
+  E-Check→RL-Check, E-Project→RL-Project, B-Root→RL-Root, B-Join→RL-Join,
+  C-Guard→RL-Guard, C-Bind→RL-Bind, C-For→RL-For, E-ReduceWith→RL-Reduce,
+  C-Finish→RL-Finish, E-Constraint→RL-Constraint, E-Restrict→RL-Restrict,
+  E-Neg→RL-Neg, E-BlockPlacement→RL-Block, CK-Elaborate→CK-RelationalLowering
+  and CK-ElaborateRestrict→CK-RelationalLoweringRestrict (C-Ready in
+  `cq-order` no longer shares a prefix). The formal subsection is "Relational
+  lowering: VO → RA′"; stage-differential labels read `ra:relational_lowering`.
+  Generated code is unchanged.
+
+- GPU fuzz regressions: catalog selection uses its checked retention contract
+  rather than the strict Physical-preserving Structures wrapper; whole-relation
+  reads demand recorded source rows and counts, including filtered Cartesian
+  operands. Independent literal-column restrictions remain predicates instead
+  of being forced into one interval. Dense range providers normalize signed
+  keys with a recorded base and checked domain size, preserving signed payloads.
+  Inferred resident-IDB answer binders carry the declared head's scalar inference
+  constraint into bounds and arena publication metadata.
+  Closed computed restrictions evaluate as recorded host Boolean captures;
+  ordered query answer gates return empty row/arena results before later
+  captures or inputs, and host subplans reuse outer capture bindings.
+  Grouped publication with an answer gate remains explicitly unsupported and
+  is rejected before printing. Minimized cases are default-tier regressions.
+
+- Resolve planning issue 7 with declaration-owned `cq_syntax::LogicalTypeId`:
+  relation and provider schemas preserve explicit identities and intern omitted
+  identities once. Sequence codec obligations, GPU codec registries and Datalog
+  symbols look up logical IDs rather than Rust types; mismatched schema IDs and
+  conflicting codec IDs reject, while equal spellings with explicitly different
+  IDs remain distinct. GPU Value captures also record `CodecId`; their checker
+  rejects identity drift, and capture/device-input codec payloads must match
+  their declarations before printing. Runtime codec laws remain premises.
+
+- Documentation audit: distinguish current compiler/runtime contracts from
+  historical mechanisms and benchmark snapshots; add report provenance and
+  same-workload supersession links without changing measured data. The GPU
+  profiling guide separates the removed cvc5 backend from the later P6b DOOP
+  evidence, and explicitly flags unavailable measurement provenance.
+
+- DriftFix4: domain-id exhaustion is a parse error rather than overflow;
+  IX checks recorded supply legality without replaying demand classification.
+  Whole-relation reads are checked access facts consumed by pull and push
+  printers, preserving their generated code. Physical evaluator panics and
+  malformed reads now fail differential tests and count as accepted-mutant
+  holes; generated seeds have no blanket exemptions. Remove the obsolete
+  zero-column-index fuzz pass and unfinished strings profile flag; narrowing
+  mutations use typed column metadata. Formal and conformance inventories
+  describe the current rewrite, retention, planning and provider rules.
+
+- Elaboration redesign slice 4: a hoisted block that takes a finite prefix
+  domain (an arm lacks a generator for a free column) now takes it from the VO
+  prefix that binds its free columns. VO records this as `domain_requires`
+  (all free columns outside the scope context, no longer only Rust-produced
+  ones); WF-BlockPlacement requires the block, and every reduction naming it,
+  to follow those columns; `cq-order` waits for them and `cq-reduce` places
+  reductions at that boundary. Lowering and CK-BlockPlacement no longer join
+  the written prefix in written order. H-Local loses its hoisted-domain cut
+  (and `local_predicates` its `context`/`hoisted` parameters): a predicate
+  written after such a block restricts the atoms before it, since the domain
+  is the restricted prefix. The checked RA→RA rewrites `simplify_reductions`
+  and `simplify_expansions` move from `cq-elaborate` to the new pass crate
+  `cq-ra-rewrites`. `cq_reduce::filter_ranks` (Masks, Hypergraph, planner
+  transfer and their checkers) ranks through the scope's recorded
+  `restrict` steps instead of rerunning H-Local, so a VO with fewer
+  restrictions (the written reference) never ranks a support as filtered;
+  `hypergraph::filter_ranks` takes `(target, predicate, written)` triples.
+  Fix F6: an equality-class reduction (repeated atom argument, Fine split +
+  Tree) now joins the support projected to its recorded subatom columns, the
+  wiring CK-Elaborate states, so `stage_differential -- --ignored` passes for
+  seeds 557/877/941 (regression test in `pass_contracts`).
+
+- The opt-in GPU fuzz harness selects the GPU catalog, downloads device CQ
+  answers explicitly, and builds generated consumers with the pinned oxide
+  materialized-cubin release path. It attempts both CQ and Datalog lanes and
+  reports each outcome instead of letting the first failure hide the second.
+
+- P7 construction and authored filter publication preserve deferred choice
+  ownership: exact indexes, attached sidecars and filter predicates are owned
+  outside lazy alternatives and initialized only by the selected arm. A runtime
+  regression checks both choices, one build, and exact answers after the choice.
+- GPU Datalog input bindings now instantiate their declared Structures providers
+  through the shared CPU/GPU declaration producer, preserving the construction
+  record instead of inventing a printer default. Scan argument printing reads
+  recorded Round provider types directly; host-only tests cover ordinary input
+  construction and rejection of unrequested statistic construction.
+- P7.2 implementation, subject to integrated gates: CPU run/hash providers expose
+  O(1) optional build statistics (`RT-BuildStats`) without forcing lazy work.
+  Structures now records ordinary versus statistics construction with a demand
+  mask (`STR-Construction`), checked against provider-declared `statistics_build`
+  support and matching immutable publications. Printers no longer infer a
+  constructor from a MaxGroup accessor. No-consumer construction emits plain
+  `Build::build`; the runtime's ordinary Build does not accumulate statistics.
+  `BuildWithStatistics` and `BuildWithSidecar` carry the recorded row/max mask.
+  Lazy hash demanded-initializer selection is outside the ordinary OnceCell
+  closure, avoiding the H09 hot-loop register-allocation regression identified
+  with expanded code, counters, CPU perf and an isolated diagnostic. Cheap
+  lengths and explicit direct-constructor behavior remain unchanged.
+  Routed unit-sidecar finalization reuses its original shard-handle allocation;
+  the allocation-identity regression checks the absence of a second vector.
+  Borrowed run filters provide exact point and interval tests (`RT-RunFilter`);
+  `run_filter` source capability and mutually exclusive `borrowed_filter` /
+  `attached_filter` realizations are declared token facts. P7.2 optional-statistic
+  activation and unit-sidecar publication are authored-advice-only: the built-in
+  default retains main's ordinary Build, exact key-count threshold and projected
+  filter construction. The activation-enabled candidate's 20 paired measurements
+  are recorded in PLANNING-REDESIGN P7; H05/H21/d72 losses prohibit promotion.
+  Automatic activation, device and committed-round publication remain unselected.
+- P7.1 records provider statistic declarations and immutable build publications
+  with typed units, precision, producer/accessor ABI, availability and domain
+  epochs (`STR-BuildStats`). Sequence statistic guards check publication
+  dominance, exact reference identity and host scalar placement, with explicit
+  unavailable-value fallback (`BE-StatsRead`); no automatic choices are added.
+  Evidence retains per-fact authored/original-VO provenance. Legacy ambiguous
+  Sequence `key` is replaced by advice-only `planning_key` and explicitly
+  semantic `trusted_key`; only the latter feeds key-dependent rewrites.
+
+- Codec identity is now `cq_lang_structures::provider::CodecId(pub u32)`.
+  Structures `InputColumn`, Sequence `Obligation::Codec` and `CodecToken`
+  record `codec_id: Option<CodecId>` beside the printing-only codec type;
+  `None` denotes identity. The Structures declaration boundary interns omitted
+  ids once by opaque token spelling, so automatic equal spellings share an id
+  but explicitly different ids stay distinct even with identical spellings.
+  Input syntax accepts `codec [0] Type` or an omitted id to be interned.
+  Checking, GPU compatibility and catalog admission compare recorded ids,
+  never codec types. Builtin syntactic `Dense` catalog tokens are removed;
+  custom codecs must be supplied explicitly. GPU arguments use
+  `decompose(codecs [CodecToken { codec_id: Some(0), codec: Some(Type),
+  ordered: true, levels: [[host], [host, device]] }])`; identity uses
+  `codec_id: None, codec: None`. Codec injectivity/order laws remain premises.
+  GPU Datalog advice also accepts `symbols(T => [7] Codec)`; omitted ids
+  in `symbols(T => Codec)` are interned once across the advice. Storage retains
+  named logical/codec_id/codec records, and input schemas copy those ids;
+  checkers compare recorded ids without re-interning.
+
+- P4-GPU slice C replaces the packed/wide canonical stores with ordinary
+  full-row/unit-item `RadixLayout` construction and the constrained `radix_set`
+  Distinct token. Complete-key uniqueness shares stable ordering with the
+  occurrence engine; device count publication and sorted owned-prefix
+  adoption avoid a synchronizing snapshot. Checked `SetBuild` records explicit
+  construction parameters including block width; the consumed FOR codec owns
+  domain/width provenance, without a redundant classification. Set construction
+  reuses growing per-thread/pool sort, permutation, compaction and count scratch,
+  separate from immutable result owners; query teardown releases it in stream
+  order. Canonical grouping, union and chained callers use this one protocol;
+  h06's keyless fold and CPU provider selection are unchanged.
+
+- P6 slice A adds an opt-in shared S1 Plain/Bytes format/runtime boundary
+  and checked per-consumer carrier-read facts. Explicit domain/layout/family/
+  carrier and snapshot metadata, optional encode-time vector extrema and
+  initialized-byte transfer preserve the existing format rather than aliasing
+  GPU FastLanes. Read authorization remains a Structures decision, not a
+  runtime or printer inference. No automatic/default selection, shared-format
+  FastLanes selection, retirement of the 74 P6 V sites, or performance claim;
+  untouched default expansions must remain identical. Formal/conformance
+  registration describes obligations and fixtures, not executed gate results.
+
+- F5: task decomposition recognizes independent union arms beneath unary
+  consumers (including the canonicalization of lowered set union), publishes
+  each arm separately, and concatenates/canonicalizes at host. The dispatch
+  checker remains unchanged: identical-valued relation occurrences do not
+  make their stored spaces interchangeable. Default tasks-route regressions
+  check grading and empty/duplicate-containing answers.
+- Updated the task routed-membership test's stale token declaration to the
+  canonical `AdaptiveMembership<_, 16777216>` declaration; catalog equality
+  checking remains strict.
+
+- GPU integration: explicit `decompose(codecs [CodecToken { ... }])`
+  declarations admit custom codecs by exact identity; the symbols fixture
+  declares `TestCodec`. Publication builds record device-layout indices,
+  excluding host-only indexes. Whole-relation lookups are recorded and
+  checked before emission, and scan resident or published rows without
+  constructing empty-key indexes (TPC-H h07, h07_block, h11 and h15).
+
+- Elaboration redesign slice 3b: H-Local is order-independent. A relational
+  predicate restricts every covering positive atom of its scope, written
+  before or after it; the only positional premise left is the domain cut (a
+  predicate written after a hoisted domain-needing block does not restrict the
+  atoms before that block). Ordering, H-FilterRank, Masks and lowering share
+  the rule, so `R(a,x), where x < 5, S(x,b)` and `R(a,x), S(x,b), where x < 5`
+  restrict the same occurrences, and `A(a,b), B(b,x), where x < 5, C(x,d)`
+  now restricts `C`, the Masks support its rank names.
+
+- Datalog Source interns code-domain identities across its full declaration
+  table before producing Storage/Round or individual CQ holes. Hole subsets
+  preserve those recorded ids instead of assigning new local identities;
+  exact declaration correspondence remains unchanged.
+
+- DriftFix1: IF-Capture binds each host value once and gives every `move`
+  closure that reads it an owned `Clone::clone` at closure creation, rebinding
+  the capture reference inside that closure. Nested closures own their own
+  clones; there is no per-row clone inserted into the closure body, type-based
+  ownership choice, compiler-introduced `Rc`/`Arc`, or forced answer collection.
+  A closure created per row still pays its own creation-time clone per row.
+  Typed `Capture::Domain` records carry the declared domain, operation
+  (`exact`, `lower`, or `upper`) and closed operand through the IR; printing
+  realizes that record rather than recognizing generated Rust calls.
+  Domain identity is interned once in the declaration table and recorded by
+  id in captures; A-Domain and WF-Domain compare those ids, not Rust syntax.
+  The former `cq_storage::capture::Value::new(c).share()` handle protocol and
+  its runtime module are removed.
+
+- GPU realization records a single provider-build owner: a source or a
+  publication step, never both. The realization checker rejects duplicate
+  source/publication ownership before emission; printers consume the checked
+  records instead of selecting another provider owner.
+
+- Retire obsolete Arc/share-handle approvals from the optional
+  `tools/expanded_gate_classes_interned_strings.json` expanded-output ledger.
+  Its historical exact hashes do not approve the owned-clone/typed-domain
+  cutover. Unrelated reviewed rules remain; removing obsolete approvals is
+  fail-closed, so new capture hunks require their own reviewed hashes.
+- Independently validate GPU Datalog storage facts instead of replaying
+  realization. Record merge tiles and auxiliary launch widths, remove the
+  temporary sorter's hidden ratio, and make worker lanes consume recorded
+  arena initializers and release thread-local scratch at component boundaries.
+
+- GPU Sequence checkers validate recorded facts by legality instead of
+  replaying their producers: constant guards, source intervals, device
+  carriers, downloads, radix reads, launch partition/share/metadata, and the
+  realization (union arms, transfer coverage, provider origins, captures,
+  auxiliary geometry). A provider now has one owner that precedes every
+  reader, so a resident rename republished below host is no longer built twice. Publication storage records
+  the arena encoding of a raw-candidate terminal; the printer reads it, the
+  recorded BE-Resource payload parents, terminal-group and combine geometry,
+  per-family auxiliary kernel geometry and numeric upload bounds provenance,
+  which the runtime takes as explicit `Geometry`/`Auxiliary`/`UploadColumn`
+  arguments. Bindings name declared provider tokens (`packed_provider`,
+  `host_scan`) and the GPU grouping check compares tokens, not spellings.
+
+- Check TPC-H grouped publication slots against their head arguments and bounds
+  residency against recorded table-loader or staged-input placement; reject
+  missing placement records instead of silently assuming device residency.
+
+- Fix automatic Datalog in-plan admission after CQ reorders positive reads:
+  only explicit `known(at(...))` advice records a numeric `Planning.known` pin;
+  automatic anti-joins run once their actual head bindings are ready. CPU
+  heap-allocation coverage checks captured filters, changed constants, and empty
+  inputs. Known-placement diagnostics retain the valuation-contract error.
+
+- Elaboration redesign slice 3a: relational predicate placement is recorded in
+  VO. `cq-order` emits `restrict R@i where P;` at the head of each scope
+  (O-Restrict) from one shared definition, `hypergraph::local_predicates`
+  (H-Local), which H-FilterRank, Masks/Hypergraph reductions and planner
+  transfer also rank through. A written predicate with a restriction target on
+  every written instance has no prefix step; E-Domain implied domains exist only
+  as restrictions. Every VO producer (ordering, advice, step advice, evidence,
+  LE and the transfer planner) records them; `compile_written` records none.
+  The LE planner schedules `cq_order::compile_unrestricted` and then calls
+  `cq_order::restrict`, so prefix predicates still drive its expansions.
+  WF-Restrict checks legality, CK-Order checks consistent step omission, and
+  CK-Elaborate checks each restriction selects its own occurrence. Lowering
+  applies only recorded restrictions: `scope_predicates`, `optimize_predicates`
+  and `cq_elaborate::compile_written` are removed (the written reference is
+  `cq_elaborate::compile` of `cq_order::compile_written`). The cq-testkit VO
+  evaluator executes restrictions. Masks no longer reduces by a support whose
+  filter elaboration never applied (`A(a,b), B(b,x), where x < 5, C(x,d)`).
+
+- GPU Datalog negative key providers are selected in Storage before Fork
+  declares their CQ inputs; binding an arena must not replace a provider
+  underneath its recorded host-read capabilities. A CPU-only regression covers
+  `device_storage` through `bind_round` with negation and rejects fabricated
+  host membership declarations without weakening Fork correspondence.
+
+- Datalog invariant materialization preserves the complete projected column
+  schema, including its declared code domain. The independent invariant
+  certificate checker requires the same domain, preventing hoisted frozen
+  filters from joining interned codes through an undeclared domain.
+
+- Sequence Analysis now owns checked BE-PrefixBound row/key records and
+  BE-GroupKey canon-free group facts. Retention replay consumes these records,
+  with explicit tile/threshold parameters and checked root, first-bound and
+  following-expansion premises; it no longer reruns bound production.
+  Group canon removal is selected only from the outermost Group constructor's
+  recorded fact (slot zero), never a nested Group's fact, and rewrite failures
+  propagate instead of silently becoming negative uniqueness decisions.
+
+- Sequence catalog admission no longer admits silently. `Obligation::Codec`
+  records the declared Structures input `codec_id` of each column's logical
+  type (`None` for identity; conflicting ids are a BE-Code error), and only a
+  `CodecToken` matching that id, ordering and every graded level discharges it.
+  `Obligation::Canon` records the answer boundary's identity index
+  (`answer_index`) and the `level` grading assigns; the catalog check reads
+  them exactly instead of accepting any Distinct entry or defaulting to host.
+  Codec types are retained only as `codec: Option<syn::Type>` printing payloads.
+
+- Sequence placement recognizes a native host provider by its token's declared
+  `abi` fact (GPU-NativeAbi) instead of inferring nativeness from catalog
+  entries without a host read level. A rebuilt index over such a scan is row
+  work published below host; level shape alone no longer confers nativeness, so
+  `abi columns` scans (e.g. `DeviceColumns`) now count even when the target
+  catalog does not register their token. Tests cover the declared, host-level
+  alternative, matching, undeclared and PL-Catalog-rejected omission records.
+
+- Datalog review fixes: fork records Round planning decisions and lowers them
+  through a mechanical pipeline, checked by an independent scan/negation
+  correspondence checker. Storage `Negative` records now carry their key-set
+  provider token and hasher (checked as `set`-protocol instances over `_`);
+  `hasher(keyed)` selects them and fork copies them into Round, so the
+  `hasher_round` Round rewrite is removed (drop it from `round = [...]`).
+  Aggregate lowering no longer builds a redundant `seen` `HashSet`.
+
+- Align current storage documentation and task-catalog comments with direct calls:
+  document `build typed`, native-read and `abandon N of H` grammar, declared host
+  reads, explicit provider codecs, and recorded dense membership and abandonment.
+  Match IF-HostDecl's empty-read and present-support-clause premises to the checker.
+  Generated-code compatibility: merge readers select a recorded ordered fallback
+  rather than a native ordered lookup, which Sequence cannot execute. The checker
+  continues to reject authored native ordered Sequence lookups.
+  BE-NativeBind records the required capability per actually checked lookup
+  `(provider, reader, keys)`. Grading promotes only the affected lookup
+  requirements and rechecks each against its own native read, not an aggregate
+  requirement shared by unrelated readers.
+
+- IX correspondence now checks per-read requirement coverage, no extras, and
+  first-use naming without replaying demand construction. Physical lowering
+  consumes matched recorded supply and key ordinals instead of reclassifying
+  selections or intersecting join headings; independent demand correspondence
+  remains in place. Valid programs retain the same lowered operators and keys.
+- Sequence resource accounting now consumes Structures' shared carried-column
+  demand and Rust dependency helper instead of duplicating the Physical DAG
+  analysis, preserving checked-program payload layouts.
+- Structures argument slots (RevMiddle F5, S1, S2): a provider declaration may
+  declare `items N [rows T, columns T]` or `choice N [eager A, lazy A]`; an
+  instance spelling ends before that argument and the checked analysis prints
+  it from the recorded fact. `radix_run` declares its layout slot, so the
+  `items rows|columns` fact alone prints RadixRun's layout argument and
+  `radix_runs` records the token's default instance (STR-ItemLayout); retype
+  advice states `items rows|columns`. `keyset` declares its laziness slot,
+  printed from the served reader's Physical eager/lazy choice
+  (STR-ReaderChoice), replacing the hand-spelled `KeySet<_, false>`.
+  Adaptive thresholds are declared once per token: `adaptive_membership`
+  (`AdaptiveMembership<_, 16777216>`), new `join_filter_membership`
+  (`<_, 67108864>`) and `positional_keyset`
+  (`AdaptiveKeySet<_, I64Codec, 67108864>`). Printed spellings are unchanged
+  except that eager host key sets now print the default `KeySet<_, true>`
+  explicitly.
+- Physical records the head-dedup obligation (RevMiddle F6, PH-HeadDedup):
+  `return [canon] [dedup] r as H`. Lowering records `dedup` when a computed
+  head may collapse valuations and the return is not `canon`; the Physical
+  checker requires it where answers collapse and admits an extra one.
+  Structures checks only that an answer identity index types the recorded
+  obligation; `cq_lang_structures::head_needs_dedup` is removed.
+
+- Fix CQ normalization of `where` predicates over hoisted closed `let` captures:
+  capture binders remain in scope and both predicate operands resolve as closed
+  host values, including previously canonicalized equalities. Regression tests
+  cover literal and opaque let/guard/head captures and facade answer correctness
+  with host-once evaluation.
+
+- GPU correctness: preserve full-width secondary membership keys, intersect
+  folded equality bounds with preceding constraints, and reject unmapped live
+  row reads instead of substituting zero. Flat publications now write only
+  recorded resident columns; deferred payloads are read at expansion. GPU launch
+  legality checks offset/synchronization records and positive tile sizes.
+  Removed the unused dense-row carrier path and narrowing membership helper.
+  Regressions reproduce the failures before repair; Sequence/core and SRD
+  exactness pass, and TPC-H SF1 advised/automatic are each 26/26 exact.
+- P4-GPU slice B: GPU CQ built indices over `RadixLayout` and genuine
+  `probe smallest`. The GPU catalog registers `radix_layout` (reads
+  exact/range/membership/candidates, abi radix) after the existing tokens;
+  each instance carries authored `radix { word; offset; ratio; radix_bits;
+  merge_tile }` advice (GPU-RadixAdvice). GPU binding records
+  `ProviderAbi::Radix` with key/lane carriers, advice and read forms
+  (GPU-RadixProvider); builds use `RadixLayout::from_sources`
+  (GPU-RadixSourceBuild); probes encode once into whole-word intervals
+  (GPU-RadixEncodedProbe); `device::distinct`/`distinct_at` give exact union
+  candidate counts (GPU-RadixCandidates). GPU-Smallest records each
+  PH-Smallest probe's column, sides, exact counts and first-in-order ties and
+  rejects non-radix sides (never a First probe); the blanket T-Gpu smallest
+  rejection is removed. Retain/Expand stay unregistered. Packed canonical
+  field bounds saturate at `i64::MAX` instead of rejecting 64-bit spans with
+  a positive base. The parent row counts and chooses once and passes the
+  choice in a recorded position tag (`ChoiceCarrier::PositionTag`). The new
+  authored `triangle-smallest` binary (radix sides, smallest, WideCanon) is
+  exact on DBLP and on full-domain signed i64 DBLP, but 1.54× slower in
+  paired timing than `triangle-compiled`, which is now the `probe first`
+  Range plan. Radix smallest is not a default anywhere.
+  GPU TPC-H SF1 advised/automatic are 26/26 exact each, with generated
+  `queries.rs`/`plans.json` byte-identical to `17a14b93` apart from the
+  build directory and generation times; srd-doop-gpu field-flow exactness
+  passes; all 46 expanded-Rust targets match `17a14b93`, 29 with the
+  `cq-sequence-tasks` runtime fingerprint change (`radix: None` field).
+
+- Sequence rewrites now reject non-retention Structures/Physical changes with
+  `BE-PhysicalPreserved`, including support-equivalent join reordering.
+  Removed the unused join-reexpression certificate; result-support equality
+  remains for construction checks. Formal rules and conformance now record
+  this boundary and GR-RetainPrefix's stop at the first unknown bound.
+- GPU provider identity (contract 7, C7Provider G1/G2): provider declarations
+  record native ABI, contiguous-range eligibility and resident-column bounds;
+  input instances record ordered logical/storage schemas and explicit codecs.
+  Native binding and range publication consume these records rather than Rust
+  constructor/generic-argument recognition. Structures checks schema cardinality,
+  required native Host input and declaration consistency. GPU builds and suites
+  pass; TPC-H SF1 advised/automatic are each 26/26 exact, SRD field-flow fixture
+  checks all 43 outputs, and Cassandra matches all 26 complete tuple sets.
+  Advised and automatic Sequence execution records and kernel sources preserve
+  identity after erasing added facts/module hashes. All 46 expanded-Rust targets
+  match `c395fe83`; 29 require fresh CPU verification for the conservative
+  `cq-sequence-tasks` runtime fingerprint change (catalog initialization only).
+- No fallback tiers (contract 7). Autoref dispatch tiers are deleted
+  (`Host`, `BorrowedHost`, `PointHost`, `RangeHost`, `build!`, `AutoDense`,
+  `BuildTarget`/`BuildProvider`, `JoinFilterKey` eligibility); every decision
+  is a recorded, checked fact printed as one direct call, and rustc reports
+  mismatches. Inputs declare keyed reads with `relation R(..) [= (e)] host
+  [k..] [borrowed] reads [exact|membership|candidates|range|ordered]
+  [supports [retain|expand]]` (IF-HostDecl); undeclared hosts are row
+  sources read through recorded fallbacks. Structures records `R native
+  <reader> = <read> [key]` in host declaration order (SEL-/STR-NativeHost),
+  Sequence binding accepts it (BE-NativeBind), and the printer emits one
+  `dispatch::*` call with a `require::native_*` guard naming the missing
+  trait. Providers build through `<T as Build<_>>::build` (`build typed`
+  replaces `build macro`); key sets and sorted runs spell `I64Codec`;
+  one-column membership records `dense_membership` (requires `OrderKey`),
+  wider keys `adaptive_membership`. Join filters (selection and the
+  `join_filter` advice) record `dense_membership` and `abandon 35 of <base>`
+  (SEL-JoinFilterAbandon). `OrderKey` gains `i8`, `i16`, `isize`, `u8`,
+  `u16`, `usize`, `char` and `bool`. Tests declare the hosts they read
+  natively; a compile-fail test checks rustc names `IndexRead`/`ExactMembership`
+  for an unsupported declared capability or key type. Ordered-read rejection
+  fixtures declare their native host contracts explicitly; undeclared maps may
+  legitimately build an ordered index. Literal native reads have no string
+  special case: the declared map fixture uses interned integer codes.
+
+- Datalog provider tokens declare CQ host reads (contract 7, no fallback
+  tiers). Storage `Token` gains `reads {[exact | membership | candidates |
+  range | ordered]}` and `supports {[retain | expand]}` (WF-DL-Storage checks
+  each listed once, supports only with `exact`). `hash_set`: membership;
+  `hash_map`, `sharded_layout`, `run_layout`: exact, membership, candidates;
+  `rows_vec` and device tokens: none; no base token declares supports (their
+  cursors are not `Copy`). Fork and Round correspondence give every layout
+  and key-set hole input one `host [leading key columns] reads [..]`
+  declaration from its token (none for key-zero layouts, deltas and scans);
+  a key set with projected columns collected by a non-batch key hole stores
+  borrowed columns and declares `borrowed reads [membership]`.
+
+- Datalog provider identity (contract 7, C7Provider C2). Storage/Round
+  providers are recorded `@token as Type` instances: `Layout.provider` plus
+  `hasher { fx | keyed | none }`, `Providers.delta/next` (`rows_vec`) and
+  Round `KeySet.provider`/`hasher`. Storage `Program.tokens` declares each
+  token once with its spelling function, `protocol`, `admission`
+  (`sharded_hash` | `sorted_subtract` | none), `hashed` and `task_hasher`;
+  WF-DL-Storage checks every spelling against its token's spelling of the
+  recorded key/payload schema. `hasher(fx|keyed)` records the hasher of hashed
+  tokens and respells them (no Rust path or generic-argument recognition);
+  `shard_storage` converts `hash_set`/`hash_map` to `sharded_layout` or
+  `run_layout` by token identity (A-127); the parallel printer reads admission
+  and task hasher from the canonical token (A-128). Partition admits non-bulk
+  layouts by declared protocol, so authored grouped-map/set tokens partition.
+  GPU Datalog device storage declares verbatim `device_layout`/`device_view`
+  tokens (compile-only). Generated code unchanged: expanded gate 46/46
+  identical vs `c395fe83`; DOOP CPU engine expansions identical.
+
+- Evidence-driven Lookup/Expand ordering and grading (P3.3 slices A, B).
+  The VO records `valuation evidence from "<source>" { count R = n; key R
+  [cols]; }`; `PlanOptions` gains `evidence …` (exclusive with `order`) and
+  `known(R@i at k)` (O-KnownAt, applied before Masks, re-checked after; the
+  pinned read follows the bindings and filters directly after the k-th read,
+  so it sees `let`-named computed head terms).
+  O-EvidenceLe streams the largest-count key-functional root that dominates
+  the written root (count ≥, filter rank ≥, no neighbour other than the
+  written root filtered as strongly), expands keyed reads by filter rank and
+  looks up other ready filtered keyed reads first; CK-EvidenceLe checks the
+  recorded choice against the recorded evidence. Grading bounds prefixes from
+  recorded counts and keys: a GPU root below one tile retains the first prefix
+  reaching `retain_prefix_rows` (65,536) and tiles over it (GR-RetainPrefix);
+  later keyless expansions are segmented (GR-SegmentFanout); `retain(name,
+  rows)` advice is re-checked. Only the GPU TPC-H automatic route records CQ
+  evidence. Paired GPU vs `c1b75718`: H04 automatic SF1 0.661, SF10 0.500;
+  H02/H11 SF10 advised 0.733/0.422; H05 step-R order SF1 0.121, SF10 0.070;
+  d85 identical code.
+
+- CPU evidence and Datalog fan-out evidence (P3.3e). CPU TPC-H `default`
+  and `par` record CQ evidence (R-TpchEvidence): the `query!` driver in
+  `features/workloads/src/tpch_runtime.rs` records, for each canonical base
+  relation (`Lineitem`, `Orders`, …, bound by every kernel to
+  `data.<table>`), its dbgen SF1 row count and its TPC-H primary key when
+  every key column is declared, and compiles with `plan(evidence …)`
+  (O-EvidenceLe/CK-EvidenceLe unchanged). Only `retail_h04` changes plan:
+  Lineitem streams and looks up the date-filtered Orders by key. 5 locked
+  AB/BA pairs vs `c395fe83`, SF1 exact: `default` 0.565 [0.543, 0.598]
+  (minor faults 67.9K → 38.5K), `par` 0.229 [0.213, 0.248] (151.6K →
+  40.8K). Datalog: source `evidence from "…" { key R [c…]; }`
+  (WF-DL-Evidence); fork records `RuleHole.fanout` (DL-Fanout: a read is
+  `multiply` iff it introduces a variable and binds no recorded key) and
+  FK-Known puts an unadvised hole of a planned queue in plan iff a later
+  read is recorded `multiply`; correspondence checks the record and the
+  placement. DOOP mini/SRD sources record keys checked functional on the
+  xalan and batik facts; with them no DOOP hole is in plan by default and
+  every DOOP CPU engine (`doop-mini`, `-keyed`, `-par`, `-par-keyed`,
+  `srd-doop-mini`, `-par`) expands byte-identical to `c395fe83`.
+- ADM-InPlan for CPU Datalog (P3.3 slice C). Fork records `RuleHole.known =
+  admit | in_plan` (FK-Known). Advice `plan(L, known(at(level k)))` puts a
+  hole in plan: it binds computed head terms with `let` and appends `!C(x̄)`
+  over the head's committed canonical layout after the k-th positive read
+  (CQ `known(C@i at k)`, O-KnownAt), so later fan-out reads expand only
+  unknown heads. Without advice (or with `known(admit)`) holes stay `admit`:
+  the structural default "head binds before the last read" measured DOOP
+  xalan `mini` 2.36x [2.30, 2.42] and batik `mini-par` 2.95x [2.84, 3.06]
+  slower than `c1b75718` (early anti-joins probe every intermediate row where
+  later reads only filter), and CPU Datalog records no fan-out evidence.
+  With the advice-only default, paired CPU DOOP vs `c1b75718`: xalan `mini`
+  0.950 [0.911, 0.976], batik `mini-par` 1.024 [0.980, 1.075].
+  `order(..)` is optional with `known`. Fork correspondence erases exactly
+  that suffix; Round checks DL-AdmitOnce and records the committed head read
+  in the schedule. The serial printer omits the committed probe for in-plan
+  holes; the parallel printer admits covered and checked candidates as two
+  batches (`ShardedLayout::admit_batches`, runs skip subtraction). GPU Datalog
+  records `admit` and rejects in-plan advice (follow-up). Admit holes print
+  unchanged code.
+- P4-GPU slice A (runtime only): `gpu_datalog_runtime::RadixLayout<K, V, W,
+  O, C>`, the typed relational view over one immutable `DeviceRadixRun`
+  publication (GPU-RadixLayout). The key packing is checked against `K` and
+  `W`; each `V` field needs a `C` lane holding its domain (`LaneKind`).
+  `DeviceRadixRun::snapshot` now returns a cached `Arc<RadixSnapshot>` per
+  publication with a process-unique identity and a resident occurrence count
+  (no host sync); `republish` returns the same layout for unchanged runs and
+  shares field descriptors otherwise. `probe_groups`/`ItemRange` are replaced
+  by `probe_matches` returning `RadixMatches` of `RadixMatch` cursors
+  (snapshot, run, run-local `[begin, end)`; GPU-RadixCursor) that retain
+  their snapshot and `gather` one demanded `ItemColumn`. Reads name an
+  execution pool sharing the snapshot's memory (GPU-RadixLaneRead); pool
+  checks use `Pool::shares_memory`. New `tests/radix_layout.rs` laws. No
+  catalog token, compiler record or Candidates/Distinct claim; no generated
+  code uses the provider yet.
+- P6b GPU Datalog, per-hole op reduction and wave lanes. GPU-ResidentMeta
+  (`Execution.meta`): a `reserve_previous` arena terminal with a local fold
+  keeps its count/failure/cursor words in arena-resident words that its last
+  block re-zeroes, so attempts no longer allocate or clear metadata (and skip
+  the zero-length partials buffer). `DeviceLayout::republish` shares field
+  descriptors with its predecessor and returns the same layout for unchanged
+  runs. xalan profile: memsets 17.8K→6.2K, H2D copies 16.0K→6.2K per
+  fixpoint; 43/43 relations byte-identical. DL-WaveLanes: the Round schedule
+  records `streams` and per-wave `lanes` (WF-DL-Lanes), written by the explicit
+  rewrite `::cq_gpu_datalog::lanes(streams = K)`; the GPU printer forks lanes
+  onto persistent worker threads with `Pool::lane` streams sharing the
+  allocator (`Pool::shares_memory` identity) and joins by events before
+  admission. `srd-doop-gpu` records `lanes(streams = 4)`: fixpoint xalan
+  0.865× [0.852, 0.892], batik 0.811× [0.800, 0.816] of one stream (locked
+  pairs), peak pool memory unchanged. `doop-gpu` records `lanes(streams = 4)`
+  (Cassandra 0.723× [0.702, 0.765]) and `roots(spread)` again (0.953×
+  [0.923, 0.960] with relational heads); 26/26 outputs exact. Host printers
+  reject recorded lanes. `radix_run.rs` uses `RadixRun::merge` and compiles
+  again.
+- P5 S1 adds runtime-only `cq_storage::scan` Plain/Bytes block columns,
+  same-input-pass optional min/max summaries, caller-buffer vector decoding
+  and exact encoded point/window/membership filtering. Bytes caps residuals
+  at 16 bits and otherwise retains plain native-width ordinals. Runtime law
+  tests cover inverse decoding, enclosure and predicate preservation; no
+  compiler selection or source migration is part of this slice.
+- P5 S2 adds incremental block builders, validated `ScanTable` column tuples,
+  and explicit-family columnar Arrow/Parquet/CSV loaders, including interned
+  string-code columns whose final remap is the block encode pass. Payload and
+  optional summaries share input traversal, without an eager tuple vector.
+  Columnar loader macros preserve existing row-loader declarations. The zone
+  Parquet diagnostic and TPC-H example use encoded scan columns; the obsolete
+  `ZoneRows::from_batches` API and fourteen P5-owned decode violations are
+  retired. CSV hash/btree grouping still awaits P4 encoded keys. Loader laws
+  cover round-trip, batch independence and summary enclosure; compiler
+  selection is unchanged.
+- GPU TPC-H source authoring moves to 26 explicit `queries/*.stages` programs.
+  The checked, printable frontend records table/dictionary/host producers,
+  captures, stage dependencies, owned publications and terminal projections.
+  It no longer discovers stages through Rust `map`/`collect`/`chain`, follows
+  `data`/`load` conventions, strips dereferences/`clone`/dictionary publication,
+  or evaluates calls named `date`. Dictionary domains feed shared CQ
+  host-once operand normalization; Rust payloads remain opaque. Reports retain
+  the authored stage record alongside each Sequence and publication record.
+  Independent CPU queries remain exactness references, not compiler input.
+- Strings are always interned (A-Domain, WF-Domain; clean cutover). A column
+  declaration may name its code domain, `c: StringCode in (D)`, with `D` a
+  query-closed `cq_storage::CodeDomain`. CQ normalization translates every
+  closed operand compared with such a column (in `where`, atoms, negated
+  atoms, membership and ranges) into one host-once capture
+  `::cq_storage::domain::{exact,lower,upper}(&(D), &(t))`; `<=`/`>` use
+  `upper`, ranges `lower`/`upper`, literal membership becomes equalities.
+  WF-Domain rejects joins and comparisons across domains. Ordered
+  translation needs `OrderedCodeDomain`, which `StringDictionary`
+  implements (absent `exact` is `StringCode::MAX`, bounds are sorted ranks)
+  and unordered domains such as DOOP `IStr` do not. Removed with no
+  replacement branch: `StringValue`, `relational_string_eq`,
+  `relational_str_cmp`, `StringLiteral`, the `&str` `PredicateValue`
+  adapters, `Dictionaries::literal` (use `Dictionaries::domain`), every
+  printer string branch (a string bound no longer forces a scan), the
+  literal-value union disjointness proof (only fallback construction proves
+  disjointness), the `Expr::Lit` tests in aggregate `constant_group`
+  (keys must be A-Capture-recorded lets) and GPU closed extraction, and
+  Datalog fork literal key embedding (`where v == (e)` after the scan).
+  P5 S0: 17 TPC-H sources write their literals in atoms/`where` over
+  declared dictionary domains, and typed_* workloads intern text.
+  contains/LIKE stay load-time `dictionary_where` code sets. A selection
+  equating a column with a closed operand (any capture, including every
+  A-Domain code) is a point-read key like a literal (`Select::constant_keys`
+  returns `Term`s): leading map keys read directly through
+  `cq_storage::dispatch::BorrowedPointRead`, which owns the borrowed key once
+  per read (`OwnKey`) and otherwise falls back to the scan. The following
+  IF-Capture handle design is historical, superseded by DriftFix1's owned
+  clone per closure above: each `let` capture was bound in a handle that
+  `move` closures cloned and rebound, keeping lazy answers uncollected.
+  The printer emitted `cq_storage::capture::Value::new(c).share()` and Rust
+  method resolution selected either the `Copy` value itself or one shared
+  `Arc` for a non-`Copy` value. Historical measurements of that removed
+  design: an `Arc` for every capture made CPU `retail_h07` 1.058
+  [1.047, 1.137] slower than `c395fe83`; with handle choice it was 0.961
+  [0.805, 1.104] against `17a14b93`. These are not measurements of the current
+  owned-clone design. GPU TPC-H timing now includes the final answer download for
+  every query (the stage frontend times every stage's `to_host`, which the
+  removed standalone path did not); paired GPU comparisons use a base built
+  with the same boundary.
+- Query-closed values are host captures (A-Capture, A-CaptureRef,
+  WF-Capture, IF-Capture). CQ normalization records a top-level `let`/`if`
+  that reads no query variable, a closed head operand and a closed aggregate
+  argument once in `capture { let p: T = e; if g; }`; RA (`Plan.captures`)
+  and Physical (`Body.captures`) carry the list unchanged and check it. A
+  capture is never a heading column, so ordering never places it: a closed
+  `let` no longer becomes an empty-key unit prefix that builds an index
+  (`cq-order` `ready()` placed it first since `0124315f`; the counters test
+  `empty_negative_keys_test_existence_without_building_indexes` passes
+  again). A query-closed union-branch `let`/`if` becomes a fresh capture and
+  the branch keeps its binder as `let p = capture c` / `if capture c`, so
+  block interfaces are unchanged. Printers bind each capture once before
+  any loop, copy it into answers, group keys, fold arguments and capture
+  references, and an `if` capture gates the whole answer. GPU Sequence
+  binds captures on the host, folds `sum(capture)` from a kernel scalar
+  (GPU H12) and publishes a capture answer column from a host-encoded kernel
+  scalar (GPU H12 `answer(shipmode, 0)`); capture group keys, `if` captures
+  and device-placed capture references are rejected as unsupported targets.
+  The Datalog reference interpreters evaluate captures before their loops.
+- Provider identity is a recorded token id (contract 7, slice C1). Every
+  provider-bearing Structures entry records `@token as Type` (inner instance
+  for nested/routed tokens) and the program's `providers { .. }` table
+  declares each referenced token's facts once (STR-Provider, STR-Routed,
+  PL-Catalog); passes read `Analysis::facts`, and `CatalogEntry::covers`
+  matches by token (and inner token), never by Rust type. `ProviderToken`,
+  `elements` and `matches_type` are removed. The base `cq_storage`
+  declarations live in `cq_lang_structures::provider::base`. Structure
+  selection no longer recognizes spellings: `supports [keys]` and join-filter
+  eligibility come from the chosen declaration. Sequence catalog matching,
+  catalog rewrites/placement, key partition (`@sharded(..)`, routed rejection)
+  and publication read recorded routing; cq-print's accounting guards, build
+  labels and retained-key guards read declared facts. `features/sequence-tasks`
+  (levels from `shared`), `features/rewrites` (index/structure rewrites by
+  token) and `features/workloads` (HashIndex override by token) follow. The GPU
+  Sequence core only compiles against the new API; its recognizers remain for
+  G1. Gates: expanded gate vs `c1b75718` has identical expansions on all 46
+  targets (29 runtime-changed, verified by TPC-H SF1 29/29 DuckDB-exact for
+  default and par with counters unchanged); DOOP xalan `--check` ok;
+  regressions 119/119; root tests 1,207 passed; sequence-tasks 63, rewrites
+  197, workloads 2,308 passed.
+
+- DOOP heads are relational projections. Since contract 7 every Ascent-style
+  head copy `rel(*x, ..)` was opaque Rust reading a Symbol-encoded column, so
+  BE-RustRepresentation put all 155 `doop-gpu` holes partly at host: each
+  dispatch downloaded complete rows, ran the copy and re-encoded the result
+  (cassandra fixpoint 2.1 s at `4944b917`, 6.8 s on main). The shared DOOP
+  source now writes `rel(x, ..)`; Datalog fork projects batch key-hole columns
+  as plain variables instead of generating `*column`; and each Round hole
+  records its answer ownership (DL-AnswerOwnership: on host interfaces a head
+  variable whose defining binder is a positive atom is borrowed, everything
+  else owned; batch columns owned), printed in Round text. WF-DL-Hole checks
+  soundness without rerunning fork: `borrowed` only where a positive atom
+  defines the column on a host interface, `owned` always. DL-InsertNew builds its owned key from either representation and forms
+  the owned NEW row only for admitted candidates; printers that materialize
+  candidates clone at collection;
+  the hard-coded owned admission is gone. DL-Source checks head range
+  restriction by free variables instead of recognizing `*x` / `x.clone()`.
+  Cassandra `doop-gpu`: no host stage in any Sequence program, 26/26 exact,
+  fixpoint 6.85 → 1.94 s (5 interleaved pairs, new/main 0.284, 95% CI
+  0.276–0.292), 307K → 34.5K launches, D2H 1,392 → 0.2 MB. CPU DOOP `--check`
+  passes on xalan and batik for every engine; CPU paired timings show no CI
+  entirely above 1.0
+  (`experiments/gpu/compare/doop_cassandra.relational_heads.results.json`).
+  Plan issues 9 and 10 are now closed: recursion heads use plain relational
+  variables and Context records per-column answer ownership, while frozen-filter
+  invariant helpers project plain variables and use existing DL-AnswerOwnership.
+  Removed Rust-copy recognition and the primitive-type ownership classifier.
+  Old recursion `*x`/`.clone()` heads now diagnose writing the plain variable;
+  non-Copy String and alias copies remain supported without type inspection.
+  Recursion's uniform Clone realization is recorded in owned hole heads before
+  CQ planning/canonicalization, not after sorting borrowed tuples. The latter
+  was rejected by paired timing (+2.8%); the retained form preserves all
+  expanded operations except four dereference-to-Clone spellings. Extension,
+  Datalog, parallel, workload, String/alias and full-set xalan checks pass;
+  five locked timing pairs show no CI entirely above 1.0 for recursion-path
+  or invariant-enabled xalan (`tools/c7_open_issues.results.json`).
+
+- `doop-gpu` builds again (broken since contract 7, `0124315f`). Placement
+  predicted descendant reads of a pipe-host handle with its own blanket
+  rejection, while the catalog check admits them under an explicit `Resident`
+  token (PL-Resident, added in `1c0523a7`). A resident `DeviceLayout`
+  anti-join membership or exact probe feeding opaque host Rust over encoded
+  Symbol columns (MethodImplemented, both MethodLookup inheritance rules) was
+  therefore left at host, where no token admits it. Placement now predicts
+  read levels with the catalog's own `provider_admitted` predicate. Cassandra
+  matches `doop-mini` on all 26 outputs; GPU TPC-H advised modules and every
+  `srd-doop-gpu` planned Sequence program are unchanged.
+
+- `HashIndex` initialization reserves the remaining source rows once its first
+  65,536 rows carry distinct keys, instead of doubling through a chain of
+  Swiss tables and arenas. Large unique-key builds (H12's 1.5M-key Orders
+  directory) no longer rehash, and no longer allocate, fault in and free the
+  intermediate tables on every run: CPU TPC-H SF1 H12 drops from 22.4K to 8.7K
+  page faults and from 368M to 286M instructions per query. Sources with
+  repeated keys in the prefix keep doubling growth.
+
+- P3d track A, canonical reference cutover: a canon result is stored in its
+  canonical index, an ordinary index chosen by index selection. Structures
+  records `r canon = rows | [cols] | host` (STR-Canon) and `r head = Type`;
+  default selection types rows by the sorted-array provider
+  `::cq_storage::dedup::Sort` (SEL-Canon), an existence-only single complete
+  Built index may be the reference, and a direct load-verified host rename
+  uses `host`. Canon results lower to `let` unless they are host-rename pipes
+  (PH-Canon); single-consumer rows records move by value (STR-RowsByValue,
+  shared predicate `Analysis::rows_by_value`), so Sequence lowers a by-value
+  canon `let` without a Store, exactly like a canon pipe: Tasks still routes
+  it and canonicalizes per part, folding partial groups over tiles.
+  Sequence catalogs offer `Capability::Distinct` providers (PL-Distinct)
+  instead of canon tokens, and `Obligation::Canon` carries the canonical
+  source. Removed: `CanonStrategy`, the `sort`/`ordered`/`using` canon
+  syntax, `CanonToken`/`Catalog.canons`, and the
+  `cq_storage::maintain::{Fresh, Publish}` traits with their impls, laws and
+  D-only `Default` impls; `RadixRun` publication becomes `RadixRun::merge`.
+  Formal: IX-Fresh, IX-Publish and IX-RunPublish are replaced by IX-RunMerge.
+- Formal: EXT-MergeRetained (`merge_joins` treats a single-unkeyed-reader
+  canon `let` as a canonical stream, not retained merge order) and
+  BE-OrderedFallback (an ordered host read uses its merge reader's recorded
+  fallback provider).
+
+- Unify dense membership and radix/rank keys under `cq_storage::OrderKey`:
+  one total, injective, order-preserving ordinal covers stored and absent keys.
+  Remove `DenseOrdinal` and `RadixKey`; custom keys implement `OrderKey`.
+  `KeyCodec` is now a sealed representation policy: enabled adapters reuse
+  that canonical ordinal, while `NoDense` retains the generic fallback.
+  Partial/custom codec implementations are replaced by the shared key law.
+  Signed i32 and unsigned u32 adapters now use the same ordinals as radix runs;
+  native u64/u128 membership and existing provider reads remain supported.
+  Export `cq_storage::HashMap` with configurable/default `HashState`.
+- Radix index runs use ratio-bounded immutable runs, stable merge-path and
+  narrow group offsets; the inherent `RadixRun::merge` (IX-RunMerge) is a
+  multiset union. Membership/count/range reads do not touch payloads.
+  `RadixRun<K,V,C=Vec<V>>` supports explicit `ItemColumns` layouts, including
+  tuple-of-vector SoA columns and selective `column_groups` reads; old flat
+  constructors and contiguous item APIs remain available. Radix lookup now
+  returns a Copy/ExactSize cross-run cursor through `IndexRead::Cursor`.
+  Set-bucket hash maps support ordinary reads with independent key/payload
+  hashers. Single-run retained radix expansion resolves its directory once;
+  key scans merge runs without sorting.
+- P3.3-lite: remove `lookup_first`, adaptive optional-filter advice/provenance,
+  and automatic Sequence relational replanning. Default and GPU automatic
+  routes now use order-preserving decomposition with existing grading.
+  Authored Sequence recipes, `choose`, key partitions, evidence and the custom
+  `Planner` interface remain supported; the advised GPU path is unchanged.
+  Retire EXT-SeqLookup, EXT-SeqAdaptive and PL-OptionalFilter; retain BE-Choose.
+- P3.1 hand planning: default `plan(order(...))` accepts explicit
+  `R@k(cols)` lookup/Fine subatoms alongside full `R@k` expansions. WF-VO
+  and a shared CK-Le checker validate dependencies, occurrence phases,
+  written ownership and outer stream; no-advice planning is unchanged.
+  Physical `smallest_intersections` gains checked k-way and per-site
+  `smallest(R@a, S@b, ...)` advice.
+- Contract 7 (doc/PLANNING-REDESIGN.md): every Rust `if`/`let`/`for` is one
+  opaque, pure, total-by-premise expression placed by its free variables;
+  relational predicates are written `where P` (`where x in lo..hi`,
+  `where x in [..]`, `where x == y` as a join equality). Closed Rust operands
+  print as `@(expr)`. Removed `cq_syntax::{guard, arithmetic}`, CQ-Arith,
+  wrapping/Decimal/widening rewrites, Ord-f32 checks and
+  `AggregateBinding::value_type`: the compiler no longer inspects types for
+  meaning. Sequence records `representation { identity, encoded }`
+  (BE-RustRepresentation); GPU runs verbatim Rust only on identity-represented
+  columns. Type-dependent provider choices use Rust trait dispatch (`build!`,
+  `DenseOrdinal`, `Keys`, `encode_predicate`). Datalog accepts `where`; DOOP
+  sources were regenerated. Expanded Rust of all 29 TPC-H queries and the
+  migrated library was audited against the previous commit: 1,440 hunks, all
+  in recorded classes; paired storage counters identical for 73/79 TPC-H
+  configurations, with the other six classified placement or arithmetic
+  changes.
+- Contract 8 storage design (doc/STORAGE.md): no denotation change; laws for
+  decode, summary enclosure, grouped-run factorization, bounded-error
+  directories and per-codec preserved operations. Two storage roles: scan
+  columns and plain grouped index runs (RadixRun). Dictionary code assignment
+  is treated as a publication decision. Byte layout is shared across targets;
+  memory placement is per target (CUDA vs Metal unified memory).
+- Storage evidence (experiments/storage-bench): CPU/CUDA codec
+  microbenchmarks with exact checks and bootstrap CIs. Results: plain wins
+  for lookup/expand and merges on both targets; CPU scans favor byte
+  truncation over bit-packing (bit-packing pays only at 24 threads); GPU
+  compression pays mainly for PCIe transfer; grouping on dictionary codes is
+  12–16× faster than `String`. TPC-H in load order gives no zone-map or
+  join-filter block skipping.
+- Design anchors: 22 `DESIGN <id>` comments at decision owners, registered in
+  `doc/DESIGN-ANCHORS.tsv`; `doc/formal/check.py` requires each exactly once
+  and rejects unregistered anchors.
+- GPU TPC-H after contract 7: every manifest dictionary column is declared
+  as published `u32` codes; string predicates are authored
+  `dictionary_where` code-set relations evaluated once per dictionary entry
+  (h02, h09, h12, h13, h14, h16, h20, h22); literals translate once (absent →
+  empty match). `Decimal`/`Date` are transparent POD scalars that the device
+  reads unchanged; layouts come from `Scalar`/`ScalarTuple` trait constants.
+  Authored `let` annotations record identity representations for computed
+  bindings. A query-scoped program cache in `sequence-runtime/src/group.rs`
+  removes the ~28 ms per-group module reload: h06 SF1 7.42 → 0.44 ms. All 26
+  queries × 2 modes exact at SF1; no advised regression above 1.15×.
+- Fix: in `operator-timing` builds `CountingHasher` built a fresh
+  `RandomState` per hash, so `DistinctSet` failed to deduplicate equal rows
+  (915/1000 duplicate inserts accepted). It now uses fixed seeds; regression
+  test in `runtime/cq-storage/src/counters.rs`.
+- Decode-site registry: every code→value conversion carries a
+  `// DECODE R|P|V|I|?:` comment registered in `doc/DECODE-SITES.tsv`
+  (audit in `doc/DECODE-AUDIT.md`, widths in `doc/DECODE-COLUMNS.md`);
+  `check.py` enforces the correspondence. Engine-wide rules (strings interned
+  at input, sort-based dedup, decode only for Rust reads and publication)
+  are recorded in `doc/STORAGE.md` §13 with the h01 measurements.
+- Restore dense codecs for sorted runs and positional keysets through Rust
+  build-capability dispatch rather than compiler type-name inspection. An
+  explicit `AutoDense` build request selects `BorrowedI64TupleCodec` for supported
+  borrowed integer tuple keys and `I64Codec` for supported scalar keys; other
+  keys resolve to `NoDense`. Explicit/default `NoDense` providers stay unchanged.
+  Routed builds apply the same dispatch per shard, retaining their recorded
+  routing, parallel construction, and allocation-free singleton source path.
+- Preserve streaming output for captured relational path parameters: borrow the
+  existing value directly instead of treating it as a temporary-producing closed
+  expression and eagerly collecting the answer.
+- Keep staged positional selections as position streams between relational
+  `where` predicates, including conjunctive windows on successive columns.
+  This preserves recorded positional sources when compiling TPC-H Q6.
+- P0 regression gates: document supplementary-filter capability dispatch as
+  public API rather than hiding it. Publication regressions check parsed
+  operations instead of closure-block and tuple-punctuation spelling; fan
+  counters distinguish membership construction from candidate/probe savings.
+- Keep the scalar positional scan inlined into residual iterator chains.
+  This removes repeated scan-state reloads introduced by late positional
+  Decimal filtering without changing predicates or generated query Rust.
+  SF1 default paired timing against `4944b917`: Q6 1.003× (15 quiet-window
+  pairs, 95% CI 0.968–1.053), H6 1.006× (5 pairs, 0.957–1.058), exact against
+  DuckDB. The Q6 confirmation retains both conflicting earlier five-pair
+  datasets in `experiments/gpu/compare/cpu_q06_confirmation_sf1.json`.
+- Recorded-facts cutover (doc/formal/CONFORMANCE.md). Decisions that lowerings,
+  printers and drivers previously made from names, syntax or literals are now
+  recorded, checked and printable IR facts; each has a formal rule, a unique
+  `rules.tsv` marker and an `exact` conformance row (308 rules, 363 rows;
+  `check.py` now validates the conformance tables).
+  - GPU launch: `Dispatch::gpu` records partition, occupancy policy, deferred
+    lookup ranges, device-wide offset scan, fold completion and sync points
+    (GPU-Launch, GPU-LAUNCH-OCCUPANCY, GPU-OffsetScan, GPU-FoldCompletion).
+    Grids come from kernel residency × SM count; no literal `2272` remains;
+    deferred ranges run multi-block followed by a CUB exclusive scan; whole
+    folds use block partials plus a combine kernel; BE-Resource reads the same
+    recorded fact as the emitter. H05 automatic SF10 1859 → 115 ms (exact);
+    advised 8.53 ms (unchanged).
+  - GPU realization: capture domains recorded per definition (no kernel-name
+    reparsing), one checked codec per logical symbol type (conflicts rejected),
+    native ABI by catalog constructor identity, one provider layout with
+    explicit directory allocation (GPU-Capture, GPU-CodecIdentity,
+    GPU-NativeAbi, GPU-ProviderLayout).
+  - Sequence planning: optional-filter provenance recorded and consumed by
+    `adaptive` (PL-OptionalFilter; no generated-name prefixes); BE-Length uses
+    checked `Len` facts; PL-Select builds an explicit representation-preserving
+    catalog order; PL-Cost reads checked group modes.
+  - Front/middle: typed Structures `ReaderRef` (STR-Reader), recorded group
+    accumulator (STR-Group/SEL-Group/P-GroupState), VO block `Placement`
+    (WF-BlockPlacement/E-BlockPlacement), independent CK-Masks/CK-Order checks,
+    CQ-Atom and WF-VO rules corrected to the intended semantics.
+  - Drivers: one core default plan composition (`facade/cq-planning`,
+    `mini_linq::planning`) used by the facade, GPU TPC-H advice and explain;
+    printers declare `print_input = structures|sequence` (ST-Endpoint) instead
+    of path-name classification; TPC-H device→host fallback, publication
+    residency and recipes are explicit records (DR-Target/Publication/Recipe);
+    explain observes the real pipeline at all 12 boundaries (DR-Explain).
+  - Datalog: recorded `LayoutProtocol` (no provider-suffix dispatch),
+    parallel publication executes the recorded operation order, holes record
+    their planning and binding invocations, GPU codecs from declared symbols,
+    explicit run-ratio advice (DL-LayoutProtocol, P-DL-PublicationOrder,
+    DL-PlanningOwner, DL-DeviceBindings, DL-DeviceSymbols, DL-DeviceRatio).
+  - Rayon/pull: producer identities replace token scanning; Tile/Choose staging
+    buffers are recorded carrier publications (BE-TaskProducer,
+    BE-CarrierPublication).
+  - Verified: root, datalog, datalog-parallel and workloads workspaces; GPU
+    suites; regression inventory 119/119; TPC-H SF1 default 29/29 exact, worst
+    ratio vs `performance_cpu_sf1.tsv` 1.08 (h22, 24 ms); DOOP GPU xalan 2.2 s,
+    batik 6.4 s fixpoint, all 40 counts equal to SRDatalog.
+  - Still open (CONFORMANCE.md): placement first-child machine spine and
+    string host policy in shared Sequence placement; typed provider
+    capabilities and arithmetic IR across stages; `lookup_first` demotion.
+- Planning redesign, phase 1 (doc/PLANNING-REDESIGN.md). Driving case: SRDatalog
+  DOOP `HeapAllocHelper`, an acyclic rule with a captured-constant guard written
+  last that compiled to a written-order cross product (xalan: 2.0e9 pairs for
+  3.27e6 answers) with zero reductions.
+  - CQ guard recognition: a field path rooted at a captured name
+    (`constants.c_x`) is a host parameter like a bare name; `Term::Parameter`
+    now carries `constraint::Parameter { root, members }` (`@name.field` in IR
+    text). Comparisons against such values become relational selections,
+    placed where their variables are bound and used as Masks supports.
+  - `mini_linq::passes::plan` default order is `Prefix(Connected)/Coarse`:
+    written root, then a ready atom sharing a bound variable before a
+    disconnected one. `Heuristic::Written` stays the exact reference and
+    `plan(order(..))` the authored override. All 119 regression targets and the
+    root workspace pass; TPC-H SF1 default rerun recorded in
+    experiments/gpu/compare (see that entry).
+  - GPU Datalog route realizes filtered reduction supports: `!=` selections are
+    row work placed on device (`cq-sequence-plan` placement), run-derived
+    computed providers publish after device materialization and measure their
+    key bounds (`rows.rs`, `sequence-runtime` SourceView bounds), catalog
+    matching recognizes wildcard native tokens and keeps concrete native keyed
+    layouts (`catalog.rs`, `lookup_first.rs`), and the new
+    `::cq_gpu_sequence::select_catalog` adapter retypes computed structures;
+    `srd-doop-gpu`, `doop-gpu` and the GPU tests use it.
+  - Regression fixtures on every route: `facade/mini-linq/tests/doop_heapalloc.rs`
+    (RA shape through library passes and `compile!`, execution work ≤ 8×(input+output)
+    with `cq_storage` counters), `features/datalog/tests/counters.rs`
+    (`datalog!` hole), `experiments/gpu/datalog/facade/tests/heapalloc.rs`
+    (GPU exactness vs CPU).
+  - Authored Datalog orders reach the hole planner: a `plan(Label, ..)` variant
+    is marked `authored` in the Incremental IR and Fork passes its order to the
+    hole's default CQ `plan` as `order(..)`, so storage layouts and the hole's
+    atom order agree (`doc/formal/datalog.tex`, fork and counters tests).
+  - Masks docs match the code: it is the bottom-up Yannakakis pass restricted
+    to filter-carrying subtrees, not a full reducer (`passes.tex`, `STATUS.md`).
+  - BE-Resource and the GPU emitter agree on shared-memory parents: backward
+    liveness removes a map's written columns, and a lookup key still live after
+    its flatten is carried from the parent on both sides.
+  - Not adopted: treating head copies as transparent to `lookup_first`. It let
+    the Sequence rewrite every recursive DOOP hole (xalan fixpoint 2.20 → 9.35 s,
+    batik OOM); the cause was not attributed to plan nodes.
+  - Docs: `SEQUENCE-PLAN.md` [6] records the GPU emitter decisions that violate
+    T-Gpu ("deciding nothing"): grid 1 vs literal 2272, deferred lookup ranges,
+    one-block serial offset scan, whole-fold finalize, per-dispatch host sync.
+    §11 now states what L&E and RPT actually specify (Bloom SIP, iterator
+    Expand, two-phase only for α-acyclic) versus our exact-semijoin `transfer`
+    and re-probing Expands, and that GPU automatic entries are opt-in. H05
+    automatic SF10 1859 ms vs advised 8.55 ms; one-block launches are 98% of
+    its kernel time.
+  - Result, SRDatalog default DOOP query on GPU, fixpoint: xalan 6.72 → 2.19 s,
+    batik 9.10 → 6.21 s (SRDatalog 1.01 / 1.82 s); all 40 relation counts equal.
+    TPC-H SF1 default: no regression vs `performance_cpu_sf1.tsv`; h09 completes.
+- Datalog per-rule join-order advice, consistent with CQ `plan(order(...))`.
+  Rules take optional labels (`Label: head :- body;`); `incremental(..)` accepts
+  `plan(Label, [delta(R@k),] order(R, S@i, ...));` using `cq_order::OrderAtom`
+  selectors (`OrderAtom::resolve_in`). Advice targets one version (base or one
+  changing occurrence) and yields the incremental pass's checked occurrence
+  permutation; other versions keep `driver(..)`. `translate.py` emits
+  SRDatalog's rule names, and its 18 DOOP `with_plan` orders only with `--plans`
+  (measured slower: batik 9.1 → 21.3 s); `block_group` is recorded as unlowered
+  in the schema JSON. `srd_doop_engine!(run, incremental(..), pipeline {..})`
+  applies advice; `srd-doop-gpu` uses `driver(delta_first)`. The `default-query` feature selects SRDatalog's
+  default (non-field-flow) DOOP program. SRD `HeapAllocHelper` no longer probes
+  `HeapAllocation_Type` with an empty key (1.5e10 xalan pairs); the only
+  remaining empty-key probe is the inherent `Precompute0_String` product.
 - Reconcile the canonical MCCL tree with its standalone upstream, preserving
   ordered GPU hashmap, blocked Bloom filter and multiset-difference APIs alongside
   shared-relation indexes and GPU RadixRun. Publish identical source trees from
@@ -583,8 +2698,9 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   and kept opt-in (no CGU or runtime gain).
 
 - Fx hashing is the Datalog default (Storage and Round providers, hole dedup
-  sets). Keyed aHash for adversarial inputs: `hasher(keyed)` +
-  `hasher_round(keyed)`; DOOP engines `mini-keyed` / `mini-par-keyed`.
+  sets). Keyed aHash for adversarial inputs: `hasher(keyed)` (originally paired
+  with the since-removed `hasher_round(keyed)`); DOOP engines `mini-keyed` /
+  `mini-par-keyed`.
   Exact vs Ascent on all six apps; goldens unchanged.
 
 - Sequence GPU providers reuse setup-time count owners and payload view tables;

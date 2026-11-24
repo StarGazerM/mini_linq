@@ -13,8 +13,8 @@
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
 //! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! its existing recognition. Only fallback construction proves union arms
+//! disjoint; literal values prove nothing, and no data keys or constraints are assumed.
 //!
 #![forbid(unsafe_code)]
 
@@ -29,6 +29,8 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token};
 
 mod le;
+
+pub use cq_planning::{PlanOptions, compile_prefix, prefix_valuation};
 
 /// The eleven supported planning passes. Ranking selects written IR at compile
 /// time; it introduces no configuration carried into execution.
@@ -90,9 +92,10 @@ impl Planner {
                 (Heuristic::Written, Split::Coarse)
             }
             Self::WrittenFine => (Heuristic::Written, Split::Fine),
-            // Transfer must not expand disconnected prefixes when a ready
-            // connecting atom exists, even where opaque Rust forbids reducers.
-            Self::Transfer | Self::PrefixConnectedCoarse => {
+            // Preserve introducing-binding boundaries and same-boundary filter
+            // preference; shared cq-order still enforces I1/I2/I3.
+            Self::Transfer => (Heuristic::WrittenConnected, Split::Coarse),
+            Self::PrefixConnectedCoarse => {
                 (Heuristic::Prefix(Ranking::Connected), Split::Coarse)
             }
             Self::PrefixConnectedFine => (Heuristic::Prefix(Ranking::Connected), Split::Fine),
@@ -202,90 +205,37 @@ impl ToTokens for Planner {
     }
 }
 
-/// Normalize CQ and record its chosen schedule, split and tree reductions.
-pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<vo::Program> {
+/// Normalize CQ and return it alongside its chosen schedule, split and tree reductions.
+pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<(cq::Program, vo::Program)> {
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
     let ordering = planner.ordering();
-    let ordered = if planner == Planner::Transfer {
-        connect_transfer_atoms(cq_order::compile(&normal, &Options::default())?)
-    } else {
-        cq_order::compile(&normal, &ordering)?
-    };
-    cq_order::check(&normal, &ordered, &ordering)?;
     let ordered = if planner == Planner::Le {
-        le::compile(&ordered)?
+        // LE reschedules the prefix with every predicate at its prefix
+        // position; restrictions are recorded on its schedule.
+        let unrestricted = cq_order::compile_unrestricted(&normal, &ordering)?;
+        cq_order::check(&normal, &unrestricted, &ordering)?;
+        let mut scheduled = le::compile(&normal, &unrestricted)?;
+        cq_order::restrict(&normal, &mut scheduled)?;
+        scheduled
     } else {
+        let ordered = cq_order::compile(&normal, &ordering)?;
+        cq_order::check(&normal, &ordered, &ordering)?;
         ordered
     };
     let reductions = planner.reductions(&normal);
-    let reduced = cq_reduce::compile(&ordered, &reductions)?;
-    cq_reduce::check(&ordered, &reduced, &reductions)?;
-    if planner == Planner::Transfer {
-        transfer(&reduced)
+    let reduced = cq_reduce::compile(&normal, &ordered, &reductions)?;
+    cq_reduce::check(&normal, &ordered, &reduced, &reductions)?;
+    let valuation = if planner == Planner::Transfer {
+        transfer(&normal, &reduced)?
     } else {
-        Ok(reduced)
-    }
-}
-
-/// Avoid disconnected prefixes within each top-level run of atoms. Keep every
-/// predicate, binding and block boundary in its written position: hoisting a
-/// total binding can otherwise change a later aggregate's recorded domain.
-fn connect_transfer_atoms(mut ordered: vo::Program) -> vo::Program {
-    let graph = cq::hypergraph::Analysis::of(&ordered.cq);
-    let canonical = |name: &syn::Ident| {
-        let name = name.to_string();
-        graph.canonical_names.get(&name).cloned().unwrap_or(name)
+        reduced
     };
-    let mut bound = std::collections::BTreeSet::new();
-    let steps = &mut ordered.valuation.steps;
-    let mut position = 0;
-    while position < steps.len() {
-        if matches!(steps[position], vo::Step::Atom(..)) {
-            let end = position
-                + steps[position..]
-                    .iter()
-                    .take_while(|step| matches!(step, vo::Step::Atom(..)))
-                    .count();
-            while position < end {
-                let connected = |step: &vo::Step| {
-                    let vo::Step::Atom(atom, _) = step else {
-                        unreachable!("atom run");
-                    };
-                    atom.variables()
-                        .any(|(_, name)| bound.contains(&canonical(name)))
-                };
-                if !bound.is_empty() && !connected(&steps[position]) {
-                    if let Some(next) = steps[position + 1..end].iter().position(connected) {
-                        steps[position..=position + 1 + next].rotate_right(1);
-                    }
-                }
-                let vo::Step::Atom(atom, _) = &steps[position] else {
-                    unreachable!("atom run");
-                };
-                bound.extend(atom.variables().map(|(_, name)| canonical(name)));
-                position += 1;
-            }
-        } else {
-            match &steps[position] {
-                vo::Step::Let(binding, _) => {
-                    bound.extend(cq::rust::bindings(&binding.pattern).iter().map(canonical));
-                }
-                vo::Step::For(generator, _) => {
-                    bound.extend(cq::rust::bindings(&generator.pattern).iter().map(canonical));
-                }
-                vo::Step::Block(block, _) => {
-                    bound.extend(block.source.variables().map(|(_, name)| canonical(name)));
-                }
-                _ => {}
-            }
-            position += 1;
-        }
-    }
-    ordered
+    Ok((normal, valuation))
 }
 
-/// Predicate transfer on a Masks-reduced plan with connected atom runs.
+
+/// Predicate transfer on a Masks-reduced plan with shared connected ordering.
 /// The reduction tree is rooted at the stream; when that is the largest
 /// relation the root coincides with RPT's LargestRoot. After the Masks forward
 /// pass into every other clause, the stream is reduced by each child whose
@@ -294,10 +244,10 @@ fn connect_transfer_atoms(mut ordered: vo::Program) -> vo::Program {
 /// child's subtree. As in RPT, no transfer starts from a side without filters.
 /// Inner block scopes keep their Masks reductions.
 /// Formal rule Plan-Transfer: Masks forward pass, then the stream's forward edges, then the backward pass, all before the stream.
-fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
-    let analysis = vo::contract::check(reduced)?;
-    let graph = cq::hypergraph::Analysis::of(&reduced.cq);
-    let body = &reduced.cq.query.body;
+fn transfer(source: &cq::Program, reduced: &vo::Program) -> syn::Result<vo::Program> {
+    let analysis = vo::contract::check(source, reduced)?;
+    let graph = cq::hypergraph::Analysis::of(source);
+    let body = &source.query.body;
     let steps = &reduced.valuation.steps;
     // Scopes with opaque Rust keep Masks only. There, the structural RA
     // correspondence check rejects some sound transfer schedules (a backward
@@ -318,7 +268,7 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
         children.entry(parent).or_default().push(child);
     }
     let mut filtered: std::collections::BTreeSet<usize> =
-        cq::hypergraph::filter_ranks(body, &graph)
+        cq_reduce::filter_ranks(body, steps, &graph)
             .into_iter()
             .filter(|&(_, rank)| rank < 3)
             .map(|(clause, _)| clause)
@@ -371,24 +321,44 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
         .position(|step| matches!(step, vo::Step::Atom(..) | vo::Step::Block(..)))
         .unwrap_or(target.valuation.steps.len());
     target.valuation.steps.splice(first..first, extra);
-    vo::contract::check(&target)?;
+    vo::contract::check(source, &target)?;
     Ok(target)
 }
 
 /// CQ→RA′ through the public order, reduce and elaborate APIs. Relational
-/// pushdown is performed by elaboration; opaque Rust always stays in its chain.
-/// Hypergraph and Transfer share the facade's checked redundant-support absorption.
+/// predicate placement is recorded by ordering (O-Restrict) and applied by
+/// elaboration; opaque Rust always stays in its chain.
+/// Hypergraph and Transfer then apply the checked redundant-support absorption
+/// and LE the dead-expansion elimination of `cq-ra-rewrites`.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
-    let valuation = compile_valuation(source, planner)?;
-    let target = cq_elaborate::compile(&valuation)?;
-    cq_elaborate::check(&valuation, &target)?;
+    let (normal, valuation) = compile_valuation(source, planner)?;
+    let (target, steps) = cq_relational_lowering::compile(&normal, &valuation)?;
+    cq_relational_lowering::check(&normal, &valuation, &target, &steps)?;
     let target = match planner {
-        Planner::Hypergraph | Planner::Transfer => cq_elaborate::simplify_reductions(&target)?,
-        Planner::Le => cq_elaborate::simplify_expansions(&target)?,
+        Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&target)?,
+        Planner::Le => cq_ra_rewrites::simplify_expansions(&target)?,
         _ => target,
     };
     check(source, &target)?;
     Ok(target)
+}
+
+/// Preserve normalized CQ, the selected VO and pre-rewrite lowering correspondence.
+/// The executable target is checked and simplified exactly as in [`compile`].
+pub fn compile_with_steps(
+    source: &cq::Program,
+    planner: Planner,
+) -> syn::Result<(ra::Program, cq::Program, vo::Program, ra::Program, cq_relational_lowering::Steps)> {
+    let (normal, valuation) = compile_valuation(source, planner)?;
+    let (lowered, steps) = cq_relational_lowering::compile(&normal, &valuation)?;
+    cq_relational_lowering::check(&normal, &valuation, &lowered, &steps)?;
+    let target = match planner {
+        Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&lowered)?,
+        Planner::Le => cq_ra_rewrites::simplify_expansions(&lowered)?,
+        _ => lowered.clone(),
+    };
+    check(source, &target)?;
+    Ok((target, normal, valuation, lowered, steps))
 }
 
 /// Independently check an authored valuation, including split and selected
@@ -415,14 +385,14 @@ pub fn check_valuation(
     }
     erase_reductions(&mut erased.valuation.steps);
     if planner == Planner::Le {
-        le::check(&normal, &erased)?;
+        cq_order::le::check(&normal, &erased)?;
     } else {
         cq_order::check(&normal, &erased, &planner.ordering())?;
     }
     if planner == Planner::Transfer {
         // Formal rule CK-Transfer: The transfer schedule equals the one recomputed from the erased plan.
         let reductions = planner.reductions(&normal);
-        let expected = transfer(&cq_reduce::compile(&erased, &reductions)?)?;
+        let expected = transfer(&normal, &cq_reduce::compile(&normal, &erased, &reductions)?)?;
         if expected != *target {
             return Err(syn::Error::new_spanned(
                 &target.valuation,
@@ -431,7 +401,7 @@ pub fn check_valuation(
         }
         return Ok(());
     }
-    cq_reduce::check(&erased, target, &planner.reductions(&normal))
+    cq_reduce::check(&normal, &erased, target, &planner.reductions(&normal))
 }
 
 /// Check CQ→RA′ refinement against the exact written normal-form schedule,
@@ -440,26 +410,11 @@ pub fn check_valuation(
 pub fn check(source: &cq::Program, target: &ra::Program) -> syn::Result<()> {
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
-    cq_elaborate::check(&written_valuation(&normal)?, target)
+    let steps = written_steps(&normal.query.body, &std::collections::BTreeSet::new(), None);
+    let analysis = vo::order::analyze_reference(&normal, &steps)?;
+    cq_relational_lowering::check_reference(&normal, &steps, &analysis, target)
 }
 
-/// Construct the source meaning directly, with one full generator per written
-/// clause and no optimization. This is deliberately independent of cq-order.
-fn written_valuation(normal: &cq::Program) -> syn::Result<vo::Program> {
-    cq::normal::check(normal)?;
-    let steps = written_steps(&normal.query.body, &std::collections::BTreeSet::new(), None);
-    let reference = vo::Program {
-        cq: normal.clone(),
-        valuation: vo::Valuation {
-            valuation_token: Default::default(),
-            join_branches: None,
-            brace: Default::default(),
-            steps,
-        },
-    };
-    vo::contract::check(&reference)?;
-    Ok(reference)
-}
 
 fn written_steps(
     body: &cq::CommaList<cq::BodyItem>,
@@ -524,6 +479,11 @@ fn written_steps(
                                 .collect(),
                         },
                         kind: block.kind,
+                        placement: if facts.rust {
+                            vo::blocks::Placement::Correlated
+                        } else {
+                            vo::blocks::Placement::Hoisted
+                        },
                         branches,
                     },
                     Default::default(),
@@ -549,4 +509,44 @@ fn written_steps(
         });
     }
     steps
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    #[test]
+    fn options_reject_duplicate_singletons_and_trailing_commas() {
+        for tokens in [
+            quote!(order(R), order(S)),
+            quote!(no_reduce, no_reduce),
+            quote!(no_reduce,),
+            quote!(reduce(R with S),),
+        ] {
+            assert!(syn::parse2::<PlanOptions>(tokens).is_err());
+        }
+    }
+
+    #[test]
+    fn prefix_exposes_the_same_checked_valuation_it_elaborates() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Query;
+            relation R(x:i32);
+            relation S(x:i32, y:i32);
+            answer(x, y) :- R(x), S(x, y);
+        };
+        for tokens in [
+            quote!(),
+            quote!(no_reduce),
+            quote!(order(S, R), no_reduce, reduce(R with S)),
+        ] {
+            let options = syn::parse2::<PlanOptions>(tokens).unwrap();
+            let (normal, valuation) = prefix_valuation(&source, &options).unwrap();
+            let target = compile_prefix(&source, &options).unwrap();
+            let (_, steps) = cq_relational_lowering::compile(&normal, &valuation).unwrap();
+            cq_relational_lowering::check(&normal, &valuation, &target, &steps).unwrap();
+        }
+        let invalid = syn::parse2(quote!(no_reduce, skip(R with S))).unwrap();
+        assert!(compile_prefix(&source, &invalid).is_err());
+    }
 }

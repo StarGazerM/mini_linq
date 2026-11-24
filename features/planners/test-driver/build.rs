@@ -1,5 +1,5 @@
 //! Generate compiled refinement consumers from the public testkit's model.
-//! All 200 seeds are partial; every planner invocation is compiled.
+//! All 200 seeds use opaque Rust; every planner invocation is compiled.
 use cq_planners_plan::{Planner, cq};
 use cq_testkit::fuzz::Case;
 use quote::ToTokens;
@@ -8,7 +8,7 @@ use std::fmt::Write;
 fn executable(case: &Case, name: &str, invocation: &str) -> String {
     let mut code = format!("pub(super) fn {name}(data: &[Vec<Vec<i32>>]) -> cq_testkit::Rows {{\n");
     for (index, relation) in case.query.schema.iter().enumerate() {
-        let fields = (0..relation.arity)
+        let fields = (0..relation.arity())
             .map(|column| format!("row[{column}],"))
             .collect::<String>();
         writeln!(
@@ -32,12 +32,20 @@ fn executable(case: &Case, name: &str, invocation: &str) -> String {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let directory = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let mut consumers = String::new();
-    let mut registry = String::from("const EXECUTABLES: &[ExecutableCase] = &[\n");
+    let mut consumers = std::array::from_fn::<_, 8, _>(|_| String::new());
+    let mut registries = std::array::from_fn::<_, 8, _>(|_| {
+        String::from("const EXECUTABLES: &[ExecutableCase] = &[\n")
+    });
+    let mut seeds = [Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for ordinal in 0..200 {
         let seed = ordinal * 2;
+        let shard = ordinal as usize % consumers.len();
+        seeds[shard].push(seed);
+        let consumers = &mut consumers[shard];
+        let registry = &mut registries[shard];
         let case = cq_testkit::fuzz::generate(seed);
-        assert!(case.has_partial_terms());
+        assert!(case.requires_rust_oracle());
         // The independent model printer preserves parentheses, uniform owned
         // i32 expressions and tautological/contradictory random constraints.
         // Keep those authored terms intact; these allowances affect syntax
@@ -52,8 +60,8 @@ fn main() {
         // written elaboration disables alias solving and relational hoisting.
         let source: cq::Program = syn::parse_str(&case.written_cq()).unwrap();
         let normal = cq::normal::normalize(&source).unwrap();
-        let written = cq_order::compile(&normal, &cq_order::Options::default()).unwrap();
-        let reference = cq_elaborate::compile_written(&written).unwrap();
+        let written = cq_order::compile_written(&normal).unwrap();
+        let (reference, _) = cq_relational_lowering::compile(&normal, &written).unwrap();
         let invocation = format!(
             "mini_linq::passes::index_demands! {{ pipeline {{ mini_linq::passes::lower, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull }}; {} }}",
             reference.to_token_stream()
@@ -79,7 +87,16 @@ fn main() {
         )
         .unwrap();
     }
-    registry.push_str("];\n");
-    consumers.push_str(&registry);
-    std::fs::write(directory.join("refinement.rs"), consumers).unwrap();
+    for (shard, (mut consumers, mut registry)) in
+        consumers.into_iter().zip(registries).enumerate()
+    {
+        registry.push_str("];\n");
+        consumers.push_str(&registry);
+        std::fs::write(directory.join(format!("refinement_{shard:02}.rs")), consumers).unwrap();
+    }
+    let metadata = seeds.iter().map(|seeds| format!("&{seeds:?}")).collect::<Vec<_>>().join(",");
+    std::fs::write(
+        directory.join("refinement_seeds.rs"),
+        format!("const SHARD_SEEDS: &[&[u64]] = &[{metadata}];\n"),
+    ).unwrap();
 }

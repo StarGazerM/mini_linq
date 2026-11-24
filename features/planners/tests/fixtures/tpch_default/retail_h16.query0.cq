@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h16.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct BadSuppliers ; relation Supplier (s_suppkey : i64 , s_comment : StringCode) ; relation BadComments (comment : StringCode) ; relation answer (suppkey : i64) ; answer (suppkey) :- Supplier (suppkey , comment) , BadComments (comment) ;

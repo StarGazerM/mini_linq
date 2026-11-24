@@ -1,5 +1,8 @@
 //! Authored surface and extension queries, independent SQL, and tiny fixtures.
 //! This catalog does not send an extension through a positive-CQ evaluator.
+//! Relational comparisons use `where` with bare query variables, including
+//! values produced by `let` or scalar subqueries. Row-dependent arithmetic
+//! and method calls stay opaque Rust expressions in `if` guards.
 use std::path::{Path, PathBuf};
 
 use cq_syntax::RelationDecl;

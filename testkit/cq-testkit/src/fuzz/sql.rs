@@ -2,7 +2,9 @@
 //! the same prefix CTE. Union uses UNION; fallback uses UNION ALL and NOT EXISTS
 //! against the original earlier branch CTEs on the prefix columns.
 
-use super::model::{BlockKind, Case, Query, Step, Term, sql_constraint, sql_expression, sql_guard};
+use super::model::{
+    BlockKind, Case, Query, Step, Term, sql_constraint, sql_expression, sql_guard, sql_negation,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 struct Printer<'a> {
@@ -75,6 +77,12 @@ impl Printer<'_> {
                         binding.variable
                     ));
                     bound.insert(binding.variable);
+                }
+                Step::Negation(index) => {
+                    input = self.define(format!(
+                        "SELECT p.* FROM {input} p WHERE {}",
+                        sql_negation(&self.query.negations[index], &env, None)
+                    ))
                 }
                 Step::Guard(index) => {
                     input = self.define(format!(

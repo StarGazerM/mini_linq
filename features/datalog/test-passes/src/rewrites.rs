@@ -7,9 +7,11 @@ pub fn deduplicate_source(source: &source::Program) -> syn::Result<source::Progr
     source::contract::check(source)?;
     let mut target = source.clone();
     target.rules.clear();
-    for rule in &source.rules {
+    target.labels.clear();
+    for (rule, label) in source.rules.iter().zip(&source.labels) {
         if !target.rules.contains(rule) {
             target.rules.push(rule.clone());
+            target.labels.push(label.clone());
         }
     }
     Ok(target)
@@ -54,13 +56,19 @@ pub fn alternate_storage(source: &storage::Program) -> syn::Result<storage::Prog
             .iter()
             .find(|declaration| declaration.name == old.relation)
             .expect("checked layout relation");
-        let types = columns.iter().map(|&i| &declaration.columns[i].ty);
+        let (key, payload) = storage::layout_schema(declaration, &columns, 0);
+        let token = storage::provider::hash_map();
         let layout = storage::Layout {
             relation: old.relation.clone(),
             columns: columns.clone(),
             key: 0,
-            provider: syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(#(#types,)*)>, ::cq_storage::HashState>),
+            provider: storage::Provider {
+                ty: storage::provider::spell(&token, &key, &payload, storage::Hasher::Keyed)?,
+                token: token.token,
+            },
+            hasher: storage::Hasher::Keyed,
             maintenance: old.maintenance.clone(),
+            protocol: storage::LayoutProtocol::GroupedMap,
         };
         // The fixed publication policy maintains every declared layout, even
         // one no longer referenced. A key-zero scan is legal at every binding.
@@ -77,9 +85,36 @@ pub fn alternate_storage(source: &storage::Program) -> syn::Result<storage::Prog
     Ok(target)
 }
 
+/// Ordered layouts are authored tokens: verbatim spellings with the declared
+/// set and grouped-map protocols of their hash counterparts (DL-LayoutProtocol).
 pub fn ordered_storage(source: &storage::Program) -> syn::Result<storage::Program> {
     let analysis = storage::contract::check(source)?;
     let mut target = source.clone();
+    // `BTreeSet<K>` answers membership and ordered reads; `BTreeMap<K, Vec<V>>`
+    // also the grouped exact and candidate reads.
+    let ordered = |name: &str, protocol, reads: &[storage::provider::HostRead]| {
+        storage::provider::declared(
+            name,
+            storage::provider::Spelling::Verbatim,
+            Some(protocol),
+            storage::provider::Admission::None,
+            false,
+            storage::provider::TaskHasher::Fx,
+            reads,
+            &[],
+        )
+    };
+    use storage::provider::HostRead::{Candidates, Exact, Membership, Ordered};
+    let set = ordered(
+        "ordered_set",
+        storage::LayoutProtocol::Set,
+        &[Membership, Ordered],
+    );
+    let map = ordered(
+        "ordered_map",
+        storage::LayoutProtocol::GroupedMap,
+        &[Exact, Membership, Candidates, Ordered],
+    );
     for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
         let declaration = &source.incremental.strata.source.declarations
             [analysis.positions[&symbol_name(&layout.relation)]];
@@ -89,8 +124,27 @@ pub fn ordered_storage(source: &storage::Program) -> syn::Result<storage::Progra
             .map(|&i| &declaration.columns[i].ty)
             .collect();
         let (keys, values) = types.split_at(layout.key);
-        layout.provider = syn::parse_quote!(::std::collections::BTreeMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>>);
+        let (token, ty, protocol) = if values.is_empty() {
+            (
+                &set,
+                syn::parse_quote!(::std::collections::BTreeSet<(#(#keys,)*)>),
+                storage::LayoutProtocol::Set,
+            )
+        } else {
+            (
+                &map,
+                syn::parse_quote!(::std::collections::BTreeMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>>),
+                storage::LayoutProtocol::GroupedMap,
+            )
+        };
+        layout.provider = storage::Provider {
+            token: token.token.clone(),
+            ty,
+        };
+        layout.hasher = storage::Hasher::None;
+        layout.protocol = protocol;
     }
+    target.tokens.extend([set, map]);
     Ok(target)
 }
 

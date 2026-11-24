@@ -1,6 +1,10 @@
 //! External, checked transformations for Physical and Structures programs.
 //!
 //! These functions accept the same opaque argument tokens as their proc macros.
+//! Structures rewrites take the separate Physical program first, followed by
+//! Structures annotations and argument tokens, and return only the annotations.
+//! Callers retain the supplied Physical program; no Physical program is embedded
+//! in the Structures result.
 //! They preserve declarations, graph, Rust expressions, keys, and unrelated
 //! decisions. `retain_streams` records explicit retention. Shared `retype` and
 //! `build_host_reads` helpers are owned by `cq_structure_selection`.
@@ -17,20 +21,24 @@
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
 //! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! its existing recognition. Only fallback construction proves union arms
+//! disjoint; literal values prove nothing, and no data keys or constraints are assumed.
 //!
 #![forbid(unsafe_code)]
 
 mod indexes;
 mod physical;
+mod registry;
 mod structures;
+
+pub use cq_structure_selection::{build_host_reads, retype};
+pub use registry::{invoke_physical, invoke_structures};
 
 pub use indexes::{chain_cover, check_chain_cover, sorted_indexes};
 pub use physical::{
-    canon_prefixes, hoist, host_sets, lazy_semijoins, merge_joins, retain_streams,
-    smallest_intersections,
+    canon_prefixes, hoist, lazy_semijoins, merge_joins, retain_streams, smallest_intersections,
 };
 pub use structures::{
-    expand_lookups, hashed_runs, join_filter, membership, radix_runs, retain_lookups, sorted_runs,
+    expand_lookups, hashed_runs, join_filter, membership, packed_canon, radix_runs, retain_lookups,
+    sorted_runs,
 };

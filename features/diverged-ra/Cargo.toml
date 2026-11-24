@@ -4,11 +4,6 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-[workspace]
-members = ["ra-theta", "theta-passes"]
-default-members = [".", "ra-theta", "theta-passes"]
-resolver = "3"
-
 [dependencies]
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
 theta-passes = { version = "0.0.0", path = "theta-passes" }

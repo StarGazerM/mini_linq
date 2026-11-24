@@ -1,16 +1,13 @@
-//! Valuation plans for `T X = bottom + Set X`.
-//! Relational subatoms, negations, equalities and semijoin reductions commute. They may
-//! move earlier across opaque Rust lets/guards; the Rust chain retains written
-//! order and all its written relational predecessors. This chain/Before check
-//! is a sufficient refinement condition: a target may panic only on an input
-//! where the written reference panics. I/O, mutation and evaluation counts are
-//! outside this denotation. A split atom is a predecessor only once its full
-//! correlated row has been checked. Rust guards are never reductions.
+//! Valuation plans for set-valued comprehensions.
+//! Rust lets, generators and guards are opaque, pure and total by premise.
+//! Their expressions remain unchanged and may be placed wherever their free
+//! variables are bound. Only explicit relational constraints support reductions.
 //!
 //! ```text
 //! Step ::= Subatom ";" | "!" Atom ";" | Constraint ";"
 //!        | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
 //!        | "reduce" Ident "@" Int "with" Subatom ";"
+//!        | "restrict" Ident "@" Int "where" Constraint ";"
 //! ```
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
@@ -18,17 +15,16 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
-//! VO records block @path(columns) { steps } | { steps }; or else arms, retaining recursive branch steps and reduction occurrence paths R@c.j.k.
-//! Its contract checks coverage, interface scope and Before sets recursively.
+//! VO records block @path(columns) hoisted/correlated { steps } | { steps }; or else arms, retaining recursive branch steps and reduction occurrence paths R@c.j.k.
+//! Its contract checks coverage and interface scope recursively.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Rust expressions are never recognized as relational predicates. Only differing
+//! literals on one interface column prove union arms disjoint.
 //!
 pub use cq_lang_cq as cq;
 
@@ -38,11 +34,15 @@ use syn::{Ident, Token, token};
 
 pub use cq_syntax::{CommaList, Occurrence, symbol_name};
 pub mod blocks;
-pub mod join_branches;
-pub use join_branches::{JoinBranch, JoinBranches};
+pub use blocks::Placement;
+pub mod restrict;
+pub use restrict::Restrict;
+pub mod order;
+pub mod ordering;
 
 pub mod kw {
     syn::custom_keyword!(reduce);
+    syn::custom_keyword!(restrict);
     syn::custom_keyword!(valuation);
     syn::custom_keyword!(with);
     syn::custom_keyword!(block);
@@ -51,8 +51,8 @@ pub mod kw {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Valuation {
     pub valuation_token: kw::valuation,
-    #[parse(join_branches::parse_optional)]
-    pub join_branches: Option<JoinBranches>,
+    #[parse(ordering::parse_optional)]
+    pub ordering: Option<ordering::OrderingFacts>,
     #[syn(braced)]
     pub brace: token::Brace,
     #[syn(in = brace)]
@@ -71,7 +71,7 @@ fn parse_steps(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Step>> {
 
 // Syntax-tree enum, like syn's AST; boxing would change public construction.
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step {
     Block(blocks::Block, Token![;]),
     Equality(cq::Equality, Token![;]),
@@ -81,7 +81,25 @@ pub enum Step {
     Let(Box<cq_syntax::Let>, Token![;]),
     For(Box<cq_syntax::For>, Token![;]),
     Reduce(Reduce, Token![;]),
+    Restrict(Restrict, Token![;]),
     Atom(Subatom, Token![;]),
+}
+
+impl quote::ToTokens for Step {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.extend(match self {
+            Self::Block(value, semi) => quote::quote!(#value #semi),
+            Self::Equality(value, semi) => quote::quote!(#value #semi),
+            Self::Constraint(value, semi) => quote::quote!(where #value #semi),
+            Self::Negation(value, semi) => quote::quote!(#value #semi),
+            Self::Guard(value, semi) => quote::quote!(#value #semi),
+            Self::Let(value, semi) => quote::quote!(#value #semi),
+            Self::For(value, semi) => quote::quote!(#value #semi),
+            Self::Reduce(value, semi) => quote::quote!(#value #semi),
+            Self::Restrict(value, semi) => quote::quote!(#value #semi),
+            Self::Atom(value, semi) => quote::quote!(#value #semi),
+        });
+    }
 }
 
 impl syn::parse::Parse for Step {
@@ -90,6 +108,14 @@ impl syn::parse::Parse for Step {
             Self::Block(input.parse()?, input.parse()?)
         } else if input.peek(Token![!]) {
             Self::Negation(input.parse()?, input.parse()?)
+        } else if input.peek(Token![where]) {
+            input.parse::<Token![where]>()?;
+            let constraint: cq::Constraint = input.parse()?;
+            let semi = input.parse()?;
+            match constraint.equality() {
+                Some(equality) => Self::Equality(equality, semi),
+                None => Self::Constraint(constraint, semi),
+            }
         } else if input.peek(Token![if]) {
             Self::Guard(input.parse()?, input.parse()?)
         } else if input.peek(Token![let]) {
@@ -98,21 +124,19 @@ impl syn::parse::Parse for Step {
             Self::For(input.parse()?, input.parse()?)
         } else if input.peek(kw::reduce) {
             Self::Reduce(input.parse()?, input.parse()?)
+        } else if input.peek(kw::restrict) {
+            Self::Restrict(input.parse()?, input.parse()?)
         } else if input.peek(Ident) && input.peek2(Token![@]) {
             Self::Atom(input.parse()?, input.parse()?)
         } else {
-            let c: cq::Constraint = input.parse()?;
-            match c.equality() {
-                Some(e) => Self::Equality(e, input.parse()?),
-                None => Self::Constraint(c, input.parse()?),
-            }
+            Self::Equality(input.parse()?, input.parse()?)
         })
     }
 }
 
 /// A restriction of one clause's relation, normally before its first subatom.
-/// A finite block domain that requires prefix Rust delays reductions until
-/// that context exists; a late reduction also filters the current prefix.
+/// A hoisted block's finite prefix domain delays reductions until VO binds
+/// that block's free columns; a late reduction also filters the current prefix.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Reduce {
     pub reduce_token: kw::reduce,
@@ -175,10 +199,18 @@ impl Subatom {
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
     pub branches: BTreeMap<usize, Vec<Analysis>>,
-    /// Rust-produced free columns required before a finite block domain exists.
+    /// Binding-only facts for independent ordering checks, indexed by step.
+    pub order: Vec<order::StepFacts>,
+    /// For each hoisted block that takes a finite prefix domain: its free
+    /// columns the scope's seed does not provide. VO provides them before the
+    /// block and before any reduction that reads it.
     pub domain_requires: BTreeMap<usize, BTreeSet<String>>,
     /// Variables bound before each step, in binding order.
     pub bound_before: Vec<Vec<String>>,
+    /// Variables the scope's seed and its earlier steps provide before each
+    /// step. It equals `bound_before` except in a hoisted arm without a finite
+    /// domain, whose free columns are visible but provided by no seed.
+    pub provided_before: Vec<BTreeSet<String>>,
     /// For atom steps: the variables the step newly binds.
     pub introduces: Vec<Vec<String>>,
     /// Clause index → the full atom of the normal-form query.
@@ -187,9 +219,10 @@ pub struct Analysis {
 
 pub mod contract {
     /// Formal rule WF-VO: Check NF and the local valuation schedule with coverage and reduction premises.
-    pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
-        super::cq::normal::check(&program.cq)?;
-        super::analyze(program)
+    pub fn check(cq: &super::cq::Program, program: &super::Program) -> syn::Result<super::Analysis> {
+        let analysis = super::order::analyze(cq, program)?;
+        super::order::check(program, &analysis)?;
+        Ok(analysis)
     }
 }
 
@@ -203,41 +236,45 @@ fn error<T>(
     ))
 }
 
-fn analyze(program: &Program) -> syn::Result<Analysis> {
-    join_branches::check(program)?;
-    let schema = program
-        .cq
+fn analyze(cq: &cq::Program, program: &Program) -> syn::Result<Analysis> {
+    if let Some(ordering) = &program.valuation.ordering {
+        ordering.check()?;
+    }
+    analyze_reference(cq, &program.valuation.steps)
+}
+
+fn analyze_reference(cq: &cq::Program, steps: &[Step]) -> syn::Result<Analysis> {
+    let schema = cq
         .inputs()
         .map(|d| (symbol_name(&d.name), d))
         .collect();
     analyze_steps(
-        &program.cq.query.body,
-        &program.valuation.steps,
+        &cq.query.body,
+        steps,
         Vec::new(),
+        BTreeSet::new(),
         None,
         &schema,
         &BTreeMap::new(),
     )
 }
 
+/// Formal rule WF-VO-Rust: Place each unchanged Rust expression exactly once where its free variables are bound.
+/// Formal rule WF-BlockPlacement: Hoisted arms are Rust-free and a hoisted block taking a finite prefix domain follows its free columns; correlated arms require their free prefix, and repeated reads preserve placement.
 fn analyze_steps(
     body: &cq_syntax::CommaList<cq::BodyItem>,
     steps: &[Step],
     context: Vec<String>,
+    seed: BTreeSet<String>,
     parent: Option<(Occurrence, usize)>,
     schema: &BTreeMap<String, &cq::RelationDecl>,
     inherited_types: &BTreeMap<String, syn::Type>,
 ) -> syn::Result<Analysis> {
     let types = cq::blocks::types(schema, body, inherited_types)?;
-    let arithmetic: BTreeSet<_> = body
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| item.arithmetic(&types).is_some())
-        .map(|(clause, _)| clause)
-        .collect();
     for step in steps {
         match step {
             Step::Atom(a, _) => a.clause.check()?,
+            Step::Restrict(r, _) => r.clause.check()?,
             Step::Block(b, _) => b.source.clause.check()?,
             Step::Reduce(r, _) => {
                 r.clause.check()?;
@@ -251,7 +288,6 @@ fn analyze_steps(
     let mut analysis = Analysis::default();
     let mut written_bound: BTreeSet<_> = context.iter().cloned().collect();
     let mut block_facts = BTreeMap::new();
-    let mut rust_chain = Vec::new();
     let mut dependencies = BTreeMap::new();
     let mut equalities = BTreeMap::new();
     let mut constraints = BTreeMap::new();
@@ -276,37 +312,26 @@ fn analyze_steps(
                         .collect(),
                 };
                 analysis.atoms.insert(clause, atom);
-                if !facts.rust {
-                    let missing: BTreeSet<_> = block
-                        .branches
-                        .iter()
-                        .flat_map(|arm| {
-                            let generated: BTreeSet<_> = cq::blocks::walk(&arm.body)
-                                .into_iter()
-                                .filter_map(cq::BodyItem::atom)
-                                .flat_map(cq_syntax::Atom::variables)
-                                .map(symbol_name)
-                                .collect();
-                            let negative_context = cq::blocks::walk(&arm.body).into_iter().any(|item| {
-                                matches!(item, cq::BodyItem::Negation(n)
-                                    if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
-                            });
-                            facts
-                                .free
-                                .keys()
-                                .filter(|name| negative_context || !generated.contains(*name))
-                                .cloned()
-                                .collect::<Vec<_>>()
-                        })
+                if !facts.rust
+                    && block.needs_domain(&facts)
+                    && steps.iter().any(|step| {
+                        matches!(step, Step::Block(planned, _)
+                            if planned.source.clause() == clause
+                                && planned.placement == blocks::Placement::Hoisted)
+                    })
+                {
+                    let required: BTreeSet<_> = facts
+                        .free
+                        .keys()
+                        .filter(|name| !seed.contains(*name))
+                        .cloned()
                         .collect();
-                    let required: BTreeSet<_> = missing.intersection(&let_bound).cloned().collect();
                     if !required.is_empty() {
                         analysis.domain_requires.insert(clause, required);
                     }
                 }
                 if facts.rust {
                     let_bound.extend(facts.interface.keys().cloned());
-                    rust_chain.push(clause);
                 }
                 written_bound.extend(facts.interface.keys().cloned());
                 block_facts.insert(clause, facts);
@@ -329,9 +354,6 @@ fn analyze_steps(
                 dependencies.insert(clause, step.free_variables.dependencies(&written_bound));
                 written_bound.extend(step.bindings.iter().map(symbol_name));
                 let_bound.extend(step.bindings.iter().map(symbol_name));
-                if !arithmetic.contains(&clause) {
-                    rust_chain.push(clause);
-                }
             }
             _ => unreachable!("normal form checked"),
         }
@@ -360,15 +382,34 @@ fn analyze_steps(
         Ok(variables)
     };
     let mut bound = context;
+    let mut provided = seed;
     let mut seen_atoms = BTreeSet::new();
     let mut complete = BTreeSet::new();
     let mut placed_equalities = BTreeSet::new();
     let mut placed_constraints = BTreeSet::new();
     let mut placed_negations = BTreeSet::new();
-    let mut next_rust = 0;
+    let mut restricted = BTreeSet::new();
+    let mut started = false;
     for step in steps {
         analysis.bound_before.push(bound.clone());
+        analysis.provided_before.push(provided.clone());
+        if let Step::Restrict(restriction, _) = step {
+            analysis.order.push(order::StepFacts {
+                preprocessing: true,
+                ..Default::default()
+            });
+            let expected_path = match &parent {
+                Some((path, branch)) => path.child(*branch, restriction.clause()),
+                None => Occurrence::new(restriction.clause()),
+            };
+            restricted.extend(restrict::check(body, restriction, &expected_path, started)?);
+            analysis.introduces.push(Vec::new());
+            continue;
+        }
+        started = true;
+        let mut order = order::StepFacts::default();
         match step {
+            Step::Restrict(..) => unreachable!("restrictions handled above"),
             Step::Block(block, _) => {
                 let clause = block.source.clause();
                 let Some(cq::BodyItem::Block(written)) = body.iter().nth(clause) else {
@@ -389,40 +430,44 @@ fn analyze_steps(
                     );
                 }
                 let facts = &block_facts[&clause];
-                if facts.rust {
-                    if rust_chain.get(next_rust) != Some(&clause) {
-                        return error(
-                            block,
-                            "Rust blocks must retain their written position in the parent chain tree",
-                        );
-                    }
-                    next_rust += 1;
+                if block.placement == blocks::Placement::Hoisted && facts.rust {
+                    return error(block, "hoisted blocks cannot contain Rust steps");
                 }
-                if facts.rust
-                    && (0..clause).any(|earlier| {
-                        !complete.contains(&earlier)
-                            && matches!(
-                                &body[earlier],
-                                cq::BodyItem::Positive { .. }
-                                    | cq::BodyItem::Equality(_)
-                                    | cq::BodyItem::Constraint(_)
-                                    | cq::BodyItem::Negation(_)
-                                    | cq::BodyItem::Block(_)
-                            )
-                    })
-                {
+                let correlated = block.placement == blocks::Placement::Correlated;
+                order.atom = true;
+                order.provides.extend(block.source.variables().map(|(_, v)| symbol_name(v)));
+                if correlated {
+                    order.required.extend(facts.free.keys().cloned());
+                }
+                if let Some(required) = analysis.domain_requires.get(&clause) {
+                    order.required.extend(required.iter().cloned());
+                }
+                order.required.extend(
+                    order.provides.iter()
+                        .filter(|name| facts.free.contains_key(*name) && let_bound.contains(*name))
+                        .cloned(),
+                );
+                if correlated && !facts.free.keys().all(|name| bound.contains(name)) {
                     return error(
                         block,
-                        "Before condition: a Rust branch must follow every written prefix clause",
+                        "correlated block requires every free prefix variable",
                     );
                 }
-                if facts.rust && !facts.free.keys().all(|name| bound.contains(name)) {
-                    return error(block, "Rust block requires every free prefix variable");
+                if analysis
+                    .domain_requires
+                    .get(&clause)
+                    .is_some_and(|names| names.iter().any(|name| !provided.contains(name)))
+                {
+                    return error(block, "hoisted block precedes its finite prefix domain");
                 }
-                let branch_context: Vec<_> = if facts.rust {
-                    bound.clone()
-                } else {
+                let branch_context: Vec<_> = facts.free.keys().cloned().collect();
+                // A correlated arm runs over the prefix and a domain-taking
+                // hoisted arm over its finite domain; any other hoisted arm
+                // starts from no seed.
+                let branch_seed: BTreeSet<String> = if correlated || written.needs_domain(facts) {
                     facts.free.keys().cloned().collect()
+                } else {
+                    BTreeSet::new()
                 };
                 let mut branches = Vec::new();
                 for (j, (branch, source_branch)) in
@@ -432,6 +477,7 @@ fn analyze_steps(
                         &source_branch.body,
                         &branch.steps,
                         branch_context.clone(),
+                        branch_seed.clone(),
                         Some((expected_path.clone(), j)),
                         schema,
                         &types,
@@ -474,6 +520,12 @@ fn analyze_steps(
                 if facts.rust && block.source.variables().count() != variables.len() {
                     return error(block, "a Rust block cannot split its row across reads");
                 }
+                if facts.rust && seen_atoms.contains(&clause) {
+                    return error(
+                        block,
+                        "each block containing Rust expressions must be placed exactly once",
+                    );
+                }
                 seen_atoms.insert(clause);
                 if block.source.variables().count() == variables.len() {
                     complete.insert(clause);
@@ -481,8 +533,14 @@ fn analyze_steps(
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
             }
+            // Formal rule WF-VO-Subatoms: Validate source columns and bound-column retention; a partial subatom introduces at most one variable, and every atom completes its full row.
             Step::Atom(subatom, _) => {
                 let clause = subatom.clause();
+                order.atom = true;
+                order.provides.extend(subatom.variables().map(|(_, v)| symbol_name(v)));
+                order.required.extend(
+                    order.provides.intersection(&let_bound).cloned(),
+                );
                 let expected_path = match &parent {
                     Some((path, branch)) => path.child(*branch, clause),
                     None => Occurrence::new(clause),
@@ -525,6 +583,9 @@ fn analyze_steps(
                         Column::Dropped(_) => {}
                     }
                 }
+                if subatom.variables().count() < variables.len() && introduced.len() > 1 {
+                    return error(subatom, "a partial subatom introduces at most one variable");
+                }
                 seen_atoms.insert(clause);
                 if subatom.variables().count() == variables.len() {
                     complete.insert(clause);
@@ -532,10 +593,25 @@ fn analyze_steps(
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
             }
+            // Formal rule WF-VO-Predicates: Match each predicate or negation to one source clause, require its inputs, and introduce nothing.
             Step::Equality(equality, _) => {
-                let Some((&clause, _)) = equalities.iter().find(|(clause, expected)| {
-                    !placed_equalities.contains(*clause) && ***expected == *equality
-                }) else {
+                order.required.extend(equality.variables().map(symbol_name));
+                let clause = equalities
+                    .iter()
+                    .find(|(clause, expected)| {
+                        !complete.contains(*clause) && ***expected == *equality
+                    })
+                    .map(|(&clause, _)| clause)
+                    .or_else(|| {
+                        constraints
+                            .iter()
+                            .find(|(clause, expected)| {
+                                !complete.contains(*clause)
+                                    && expected.equality().as_ref() == Some(equality)
+                            })
+                            .map(|(&clause, _)| clause)
+                    });
+                let Some(clause) = clause else {
                     return error(
                         equality,
                         "every relational equality must appear exactly once from the query",
@@ -551,13 +627,28 @@ fn analyze_steps(
                     );
                 }
                 placed_equalities.insert(clause);
+                placed_constraints.insert(clause);
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
             Step::Constraint(constraint, _) => {
-                let Some((&clause, _)) = constraints.iter().find(|(clause, expected)| {
-                    !placed_constraints.contains(*clause) && ***expected == *constraint
-                }) else {
+                order.required.extend(constraint.variables().map(symbol_name));
+                let clause = constraints
+                    .iter()
+                    .find(|(clause, expected)| {
+                        !complete.contains(*clause) && ***expected == *constraint
+                    })
+                    .map(|(&clause, _)| clause)
+                    .or_else(|| {
+                        let equality = constraint.equality()?;
+                        equalities
+                            .iter()
+                            .find(|(clause, expected)| {
+                                !complete.contains(*clause) && ***expected == equality
+                            })
+                            .map(|(&clause, _)| clause)
+                    });
+                let Some(clause) = clause else {
                     return error(
                         constraint,
                         "every relational constraint must appear exactly once from the query",
@@ -573,10 +664,14 @@ fn analyze_steps(
                     );
                 }
                 placed_constraints.insert(clause);
+                placed_equalities.insert(clause);
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
             Step::Negation(negation, _) => {
+                order.required.extend(
+                    negation.atom.variables().map(symbol_name).filter(|v| logical.contains(v)),
+                );
                 let Some((&clause, _)) = negations.iter().find(|(clause, expected)| {
                     !placed_negations.contains(*clause) && ***expected == *negation
                 }) else {
@@ -599,6 +694,7 @@ fn analyze_steps(
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
+            // Formal rule WF-VO-RustSteps: Preserve every Rust payload exactly once with its lexical dependencies and pattern bindings.
             Step::Guard(_, _) | Step::Let(_, _) | Step::For(_, _) => {
                 let identical = |clause: usize| match (step, &body[clause]) {
                     (Step::Guard(a, _), cq::BodyItem::Filter(b)) => a == b,
@@ -606,45 +702,22 @@ fn analyze_steps(
                     (Step::For(a, _), cq::BodyItem::For(b)) => a == b,
                     _ => false,
                 };
-                let total = arithmetic
-                    .iter()
+                let Some(clause) = dependencies
+                    .keys()
                     .copied()
-                    .find(|clause| !complete.contains(clause) && identical(*clause));
-                let Some(clause) = total.or_else(|| rust_chain.get(next_rust).copied()) else {
-                    return error(step, "more Rust steps than the query has");
-                };
-                let identical = identical(clause);
-                if !identical {
+                    .find(|clause| !complete.contains(clause) && identical(*clause))
+                else {
                     return error(
                         step,
-                        "Rust lets, generators and guards must keep their written relative order (chain)",
+                        "Rust steps must preserve each source expression exactly once",
                     );
-                }
+                };
+                order.required.extend(dependencies[&clause].iter().cloned());
                 if let Some(missing) = dependencies[&clause].iter().find(|v| !bound.contains(*v)) {
                     return error(
                         step,
                         format!("Rust step uses `{missing}` before it is bound"),
                     );
-                }
-                for earlier in (0..clause).filter(|_| total.is_none()) {
-                    if (arithmetic.contains(&earlier)
-                        || matches!(
-                            &body[earlier],
-                            cq::BodyItem::Positive { .. }
-                                | cq::BodyItem::Equality(_)
-                                | cq::BodyItem::Constraint(_)
-                                | cq::BodyItem::Negation(_)
-                                | cq::BodyItem::Block(_)
-                        ))
-                        && !complete.contains(&earlier)
-                    {
-                        return error(
-                            step,
-                            format!(
-                                "Before condition: relational clause #{earlier} must be completed before Rust clause #{clause}"
-                            ),
-                        );
-                    }
                 }
                 let introduced = body[clause]
                     .rust_step()
@@ -653,15 +726,14 @@ fn analyze_steps(
                     .iter()
                     .map(symbol_name)
                     .collect::<Vec<_>>();
+                order.provides.extend(introduced.iter().cloned());
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
-                if total.is_none() {
-                    next_rust += 1;
-                } else {
-                    complete.insert(clause);
-                }
+                complete.insert(clause);
             }
+            // Formal rule WF-VO-Reductions: Check distinct relational operands, exact shared columns, and finite-domain placement.
             Step::Reduce(reduce, _) => {
+                order.preprocessing = true;
                 let clause = reduce.clause();
                 let variables = atom_clause(reduce, &reduce.relation, clause)?;
                 let domain_ready = !analysis.domain_requires.is_empty()
@@ -669,7 +741,7 @@ fn analyze_steps(
                         .domain_requires
                         .values()
                         .flatten()
-                        .all(|name| bound.contains(name));
+                        .all(|name| provided.contains(name));
                 if seen_atoms.contains(&clause) && !domain_ready {
                     return error(
                         reduce,
@@ -679,10 +751,23 @@ fn analyze_steps(
                 let Reduction::With(_, subatom) = &reduce.reduction;
                 let support = subatom.clause();
                 for dependent in [clause, support] {
+                    if let Some(required) = analysis.domain_requires.get(&dependent) {
+                        order.required.extend(required.iter().cloned());
+                    }
+                    if steps.iter().any(|step| {
+                        matches!(step, Step::Block(block, _)
+                            if block.source.clause() == dependent
+                                && block.placement == blocks::Placement::Correlated)
+                    }) {
+                        return error(
+                            reduce,
+                            "a correlated block cannot be a reduction target or support",
+                        );
+                    }
                     if analysis
                         .domain_requires
                         .get(&dependent)
-                        .is_some_and(|names| names.iter().any(|name| !bound.contains(name)))
+                        .is_some_and(|names| names.iter().any(|name| !provided.contains(name)))
                     {
                         return error(reduce, "reduction precedes its block context domain");
                     }
@@ -725,6 +810,18 @@ fn analyze_steps(
                 analysis.introduces.push(Vec::new());
             }
         }
+        analysis.order.push(order);
+        // Every column the step reads is now provided by this scope.
+        match step {
+            Step::Atom(subatom, _) => {
+                provided.extend(subatom.variables().map(|(_, v)| symbol_name(v)))
+            }
+            Step::Block(block, _) => {
+                provided.extend(block.source.variables().map(|(_, v)| symbol_name(v)))
+            }
+            _ => (),
+        }
+        provided.extend(analysis.introduces.last().into_iter().flatten().cloned());
     }
     for (clause, atom) in &analysis.atoms {
         if !complete.contains(clause) {
@@ -736,13 +833,13 @@ fn analyze_steps(
     }
     if let Some((_, missing)) = equalities
         .iter()
-        .find(|(clause, _)| !placed_equalities.contains(clause))
+        .find(|(clause, _)| !placed_equalities.contains(clause) && !restricted.contains(clause))
     {
         return error(*missing, "every relational equality must be placed");
     }
     if let Some((_, missing)) = constraints
         .iter()
-        .find(|(clause, _)| !placed_constraints.contains(clause))
+        .find(|(clause, _)| !placed_constraints.contains(clause) && !restricted.contains(clause))
     {
         return error(*missing, "every relational constraint must be placed");
     }
@@ -752,39 +849,52 @@ fn analyze_steps(
     {
         return error(*missing, "every relational negation must be placed");
     }
-    if let Some(&missing) = arithmetic.iter().find(|clause| !complete.contains(clause)) {
-        return error(&body[missing], "every arithmetic clause must be placed");
-    }
-    if next_rust != rust_chain.len() {
+    if let Some(&missing) = dependencies
+        .keys()
+        .find(|clause| !complete.contains(clause))
+    {
         return error(
-            &body[rust_chain[next_rust]],
+            &body[missing],
             "every Rust guard and binding must be placed",
         );
     }
     Ok(analysis)
 }
 
+/// Formal rule WF-VO-Blocks: Recursive block schedules preserve source kind, interfaces and placement, including identical repeated arm plans.
 fn same_branch_steps(block: &blocks::Block, steps: &[Step], clause: usize) -> bool {
     steps.iter().all(|step| match step {
         Step::Block(other, _) if other.source.clause() == clause => {
-            block.kind == other.kind && block.branches == other.branches
+            block.kind == other.kind
+                && block.placement == other.placement
+                && block.branches == other.branches
         }
         _ => true,
     })
 }
 
-/// A query and the complete schedule of its valuations.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+/// A complete valuation annotation over a separately supplied CQ program.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Program {
-    pub cq: cq::Program,
     pub valuation: Valuation,
+}
+
+impl Program {
+    pub fn parse(input: syn::parse::ParseStream<'_>, _cq: &cq::Program) -> syn::Result<Self> {
+        Ok(Self { valuation: input.parse()? })
+    }
 }
 
 pub use cq_syntax as syntax;
 
-pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    contract::check(source)?;
-    contract::check(target)?;
+pub fn check_rewrite(
+    source_cq: &cq::Program,
+    source: &Program,
+    target_cq: &cq::Program,
+    target: &Program,
+) -> syn::Result<()> {
+    contract::check(source_cq, source)?;
+    contract::check(target_cq, target)?;
     fn erase(steps: &[Step]) -> Vec<Step> {
         steps
             .iter()
@@ -815,8 +925,8 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             })
             .collect()
     }
-    if source.cq != target.cq
-        || source.valuation.join_branches != target.valuation.join_branches
+    if source_cq != target_cq
+        || source.valuation.ordering != target.valuation.ordering
         || erase(&source.valuation.steps) != erase(&target.valuation.steps)
         || reductions(&source.valuation.steps)
             .iter()
@@ -829,11 +939,22 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     }
     Ok(())
 }
-impl cq_stage::Language for Program {
-    fn check(&self) -> syn::Result<()> {
-        contract::check(self).map(|_| ())
+
+impl cq_stage::Annotation<&cq::Program> for Program {
+    fn parse(input: syn::parse::ParseStream<'_>, base: &cq::Program) -> syn::Result<Self> {
+        Self::parse(input, base)
     }
-    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+
+    fn check(&self, base: &cq::Program) -> syn::Result<()> {
+        contract::check(base, self).map(|_| ())
+    }
+
+    fn check_rewrite(
+        source_base: &cq::Program,
+        source: &Self,
+        target_base: &cq::Program,
+        target: &Self,
+    ) -> syn::Result<()> {
+        check_rewrite(source_base, source, target_base, target)
     }
 }

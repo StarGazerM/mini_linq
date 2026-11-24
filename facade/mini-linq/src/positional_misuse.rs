@@ -6,7 +6,7 @@
 //! let _: Vec<_> = mini_linq::compile! {
 //!     pipeline { select = mini_linq::passes::select(positional(R)); }
 //!     struct BadHost; relation R(a:i64) = (rows);
-//!     answer(a) :- R(a), if *a == 1;
+//!     answer(a) :- R(a), where a == 1;
 //! }.collect();
 //! ```
 //!
@@ -18,20 +18,20 @@
 //!     pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation L(a:i64) = (left); relation R(b:i64,c:i64) = (right);
-//!         l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x,c -> z};
+//!         l = pipe rename L {a -> x}; r = pipe rename R {b -> x,c -> z};
 //!         s = let point select r if (z = 1);
 //!         t = pipe semi eager [x] l,s;
-//!         out = pipe canon project t keep {x}; return out as answer(x);
+//!         out = let canon project t keep {x}; return out as answer(x);
 //!     }
-//!     structures {
-//!         l host scan = ::core::iter::Map<_,_> [];
-//!         r host scan = ::core::iter::Map<_,_> [];
-//!         r host s = ::core::iter::Map<_,_> [z];
-//!         s rows = ::std::vec::Vec<_>;
-//!         s keyset = NoInterval<_> [x] owned base R lineage{x -> b,z -> c};
+//!     structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; no_interval = NoInterval<_> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+//!         l host scan = @host_scan as ::core::iter::Map<_,_> [];
+//!         r host scan = @host_scan as ::core::iter::Map<_,_> [];
+//!         r host result(s) = @host_scan as ::core::iter::Map<_,_> [z];
+//!         s rows = @vec as ::std::vec::Vec<_>;
+//!         s keyset = @no_interval as NoInterval<_> [x] owned base R lineage{x -> b,z -> c};
 //!         t read = positional base L lineage{x -> a} column a
 //!             marker ::cq_load::ColumnAt<0> predicate membership s[x] summary exact;
-//!         out canon = ::std::collections::HashSet<_>;
+//!         out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
 //!     }
 //! }.collect();
 //! ```

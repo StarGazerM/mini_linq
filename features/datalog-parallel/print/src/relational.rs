@@ -52,8 +52,19 @@ pub(super) fn step_loop(
     let admits: Vec<_> = (0..stratum.members.len())
         .map(|m| format_ident!("__cq_rel_admit_{m}", span = Span::mixed_site()))
         .collect();
-    let seen_locks: Vec<_> = (0..stratum.members.len())
-        .map(|m| format_ident!("__cq_rel_seen_{m}", span = Span::mixed_site()))
+    // DL-AdmitOnce: in-plan producers' candidates wait in their own buffer and
+    // are admitted without the committed probe.
+    let covered: Vec<_> = stratum
+        .members
+        .iter()
+        .enumerate()
+        .map(|(m, &member)| {
+            stratum
+                .steps
+                .iter()
+                .any(|rule| rule.head == member && rule.known == round::Admission::InPlan)
+                .then(|| format_ident!("__cq_rel_covered_{m}", span = Span::mixed_site()))
+        })
         .collect();
     let local: BTreeMap<_, _> = stratum
         .members
@@ -66,10 +77,7 @@ pub(super) fn step_loop(
         .iter()
         .map(|&member| {
             let relation = &context.relations[member];
-            let mut hosts = vec![
-                relation.all.clone(),
-                relation.delta_host.clone().expect("checked delta host"),
-            ];
+            let mut hosts = vec![relation.delta_host.clone().expect("checked delta host")];
             let publication = stratum
                 .publication
                 .iter()
@@ -87,24 +95,28 @@ pub(super) fn step_loop(
         })
         .collect();
     let initial = hosts.iter().map(|hosts| {
-        let delta = &hosts[1];
+        let delta = &hosts[0];
         quote!(!#delta.is_empty())
     });
     let declarations = stratum.members.iter().enumerate().map(|(m, &member)| {
         let lock = &locks[m];
         let admit = &admits[m];
-        let seen_lock = &seen_locks[m];
         let hosts = &hosts[m];
         let relation = &context.relations[member];
-        let seen = &relation.seen;
-        let types = relation.declaration.columns.iter().map(|column| &column.ty);
+        let types: Vec<_> = relation.declaration.columns.iter().map(|column| &column.ty).collect();
         let hasher = format_ident!("__cq_rel_hasher_{member}", span = Span::mixed_site());
-        let hasher = program.certificate.self_dedup.is_some().then(|| quote!(let #hasher = #seen.hasher().clone();));
+        let state = super::task_hasher(&program.round.storage.tokens, &context.layouts[relation.providers.canonical]);
+        let hasher = program.certificate.self_dedup.is_some().then(|| {
+            quote!(let #hasher = <#state as ::core::default::Default>::default();)
+        });
+        let covered = covered[m].as_ref().map(|covered| {
+            quote!(let #covered = ::std::sync::Mutex::new(::std::vec::Vec::<::std::vec::Vec<(#(#types,)*)>>::new());)
+        });
         quote!(
             #hasher
             let #lock = ::std::sync::RwLock::new((#(&mut #hosts,)*));
-            let #seen_lock = ::std::sync::Mutex::new(&mut #seen);
             let #admit = ::std::sync::Mutex::new(::std::vec::Vec::<::std::vec::Vec<(#(#types,)*)>>::new());
+            #covered
         )
     });
     let mut hole_reads = Vec::new();
@@ -146,7 +158,10 @@ pub(super) fn step_loop(
             }
         }
         let head = local[&rule.head];
-        let admit = &admits[head];
+        let admit = match rule.known {
+            round::Admission::InPlan => covered[head].as_ref().expect("in-plan member buffer"),
+            round::Admission::Admit => &admits[head],
+        };
         let (evaluation, candidates) = super::evaluate(
             std::slice::from_ref(rule),
             context,
@@ -174,11 +189,35 @@ pub(super) fn step_loop(
     // Reuse provider-aware publication under each exclusive member guard:
     // sharded layouts bulk-fill without introducing a separate commit path.
     let publications = cq_datalog_print::publication(context, stratum);
+    // A commit is one publication (PS-After).
+    let tick = cq_datalog_print::publication_tick();
     let commit_arms = stratum.members.iter().enumerate().map(|(m, &member)| {
         let lock = &locks[m];
         let admit = &admits[m];
-        let seen_lock = &seen_locks[m];
-        let next = &context.relations[member].next;
+        let relation = &context.relations[member];
+        let next = &relation.next;
+        let canonical = &context.layouts[relation.providers.canonical];
+        let provider = &canonical.provider.ty;
+        let field = syn::Index::from(
+            hosts[m]
+                .iter()
+                .position(|host| *host == canonical.host)
+                .expect("canonical layout is published by its member"),
+        );
+        let take = |buffer: &Ident| quote!(::core::mem::take(&mut *#buffer.lock().unwrap()));
+        let checked = take(admit);
+        let covered = covered[m].as_ref().map(take);
+        let admission = super::admit_chunks(
+            &program.round.storage.tokens,
+            context,
+            member,
+            Some(&checked),
+            covered.as_ref(),
+            &quote!(&*__cq_rel_write.#field),
+            &quote!((&mut __cq_rel_new)),
+            threshold,
+            false,
+        );
         let mut names = BTreeMap::new();
         for (k, host) in hosts[m].iter().enumerate() {
             let field = syn::Index::from(k);
@@ -187,28 +226,30 @@ pub(super) fn step_loop(
         let p = stratum.publication.iter().position(|p| p.relation == member).expect("checked publication");
         let publication = rename(publications[p].clone(), &names);
         quote!(#m => {
-            let #next = {
-                let chunks = ::core::mem::take(&mut *#admit.lock().unwrap());
-                #seen_lock.try_lock().expect("P-DL-Relational: exclusive admission").admit(chunks, #threshold)
-            };
+            // Commits exclude every reader, so the write guard is uncontended.
+            let mut __cq_rel_write_guard = #lock.try_write().expect("P-DL-Relational: scheduler isolation");
+            // Reborrow the tuple once so Rust can split its disjoint fields.
+            let __cq_rel_write = &mut *__cq_rel_write_guard;
+            #[allow(unused_mut, unused_variables)]
+            let mut __cq_rel_new: #provider = ::core::default::Default::default();
+            let #next = #admission;
             let fresh = !#next.is_empty();
             if fresh {
-                let mut __cq_rel_write_guard = #lock.try_write().expect("P-DL-Relational: scheduler isolation");
-                // Reborrow the tuple once so Rust can split its disjoint fields.
-                let __cq_rel_write = &mut *__cq_rel_write_guard;
+                #tick
                 #publication
             }
             ::cq_datalog_parallel_runtime::relational::Completion::Commit { fresh }
         })
     });
+    let action = quote!(match action {
+        ::cq_datalog_parallel_runtime::relational::Action::Hole { hole, .. } => match hole { #(#hole_arms,)* _ => unreachable!("checked hole index") },
+        ::cq_datalog_parallel_runtime::relational::Action::Commit { member } => match member { #(#commit_arms,)* _ => unreachable!("checked member index") },
+    });
     Ok(quote!(if ::rayon::current_num_threads() > 1 {
         let __cq_rel_initial = [#(#initial,)*];
         #(#declarations)*
         let mut __cq_rel_scheduler = ::cq_datalog_parallel_runtime::relational::RelationalScheduler::new(::std::vec![#(#hole_reads,)*], &__cq_rel_initial);
-        ::cq_datalog_parallel_runtime::relational::drive(&mut __cq_rel_scheduler, &|action| match action {
-            ::cq_datalog_parallel_runtime::relational::Action::Hole { hole, .. } => match hole { #(#hole_arms,)* _ => unreachable!("checked hole index") },
-            ::cq_datalog_parallel_runtime::relational::Action::Commit { member } => match member { #(#commit_arms,)* _ => unreachable!("checked member index") },
-        });
+        ::cq_datalog_parallel_runtime::relational::drive(&mut __cq_rel_scheduler, &|action| #action);
     } else { #default }))
 }
 
@@ -237,7 +278,12 @@ mod tests {
             key: 1,
             name: syn::parse_quote!(layout),
             host: syn::parse_quote!(full),
-            provider,
+            provider: round::storage::Provider {
+                token: syn::parse_quote!(test_layout),
+                ty: provider,
+            },
+            hasher: round::storage::Hasher::None,
+            protocol: round::storage::LayoutProtocol::Bulk,
             maintenance: syn::parse_quote!(insert),
         };
         let mut delta_layout = layout.clone();

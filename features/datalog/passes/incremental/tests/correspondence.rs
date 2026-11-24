@@ -36,14 +36,34 @@ fn both_passes_preserve_complete_round_trippable_programs() {
 #[test]
 fn delta_first_records_and_checks_source_occurrence_permutations() {
     let strata = stratify::compile(&source()).unwrap();
-    let planned = seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
+    let planned =
+        seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
     roundtrip(&planned);
-    let moved = planned.variants.iter().find(|variant| variant.rule == 2 && variant.delta == Some(1)).unwrap();
+    let moved = planned
+        .variants
+        .iter()
+        .find(|variant| variant.rule == 2 && variant.delta == Some(1))
+        .unwrap();
     assert_eq!(moved.order, [1, 0]);
-    let BodyItem::Positive { atom } = &moved.query.body[0] else { panic!("delta must drive the variant") };
-    assert_eq!(atom.relation, planned.deltas.iter().find(|delta| delta.relation == "Reach").unwrap().name);
+    let BodyItem::Positive { atom } = &moved.query.body[0] else {
+        panic!("delta must drive the variant")
+    };
+    assert_eq!(
+        atom.relation,
+        planned
+            .deltas
+            .iter()
+            .find(|delta| delta.relation == "Reach")
+            .unwrap()
+            .name
+    );
     let mut invalid = planned.clone();
-    invalid.variants.iter_mut().find(|variant| variant.rule == 2 && variant.delta == Some(1)).unwrap().order = vec![0, 1];
+    invalid
+        .variants
+        .iter_mut()
+        .find(|variant| variant.rule == 2 && variant.delta == Some(1))
+        .unwrap()
+        .order = vec![0, 1];
     assert!(seminaive::check(&strata, &invalid).is_err());
 }
 
@@ -60,7 +80,8 @@ fn delta_first_connects_the_remaining_prefix_and_checks_the_full_permutation() {
         R(*x,*z) :- Methods(m), Link(m,x,y), R(y,z);
     };
     let strata = stratify::compile(&source).unwrap();
-    let planned = seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
+    let planned =
+        seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
     assert_eq!(planned.variants[1].order, [2, 1, 0]);
     roundtrip(&planned);
     for order in [vec![2, 2, 0], vec![2, 1], vec![3, 1, 0]] {
@@ -87,14 +108,132 @@ fn delta_first_does_not_cross_rust_or_negation() {
         relation Reach(x:i32,y:i32);
         output Reach;
         Reach(*x,*y) :- Edge(x,y);
-        Reach(*x,*z) :- Edge(x,y), if *x != *y, Reach(y,z);
+        Reach(*x,*z) :- Edge(x,y), where x != y, Reach(y,z);
         Reach(*x,*z) :- Edge(x,y), !Blocked(x), Reach(y,z);
     };
     let strata = stratify::compile(&source).unwrap();
     let written = seminaive::compile(&strata).unwrap();
-    let planned = seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
-    assert_eq!(planned, written);
+    let planned =
+        seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
+    assert_eq!(written.driver, seminaive::DriverPolicy::WrittenOrder);
+    assert_eq!(planned.driver, seminaive::DriverPolicy::DeltaFirst);
+    assert_eq!(planned.strata, written.strata);
+    assert_eq!(planned.deltas, written.deltas);
+    assert_eq!(planned.variants, written.variants);
     roundtrip(&planned);
+}
+
+fn plans(tokens: proc_macro2::TokenStream) -> Vec<seminaive::RulePlan> {
+    use syn::parse::{Parse, Parser};
+    let parser = |input: syn::parse::ParseStream<'_>| {
+        let mut plans = Vec::new();
+        while !input.is_empty() {
+            let content;
+            syn::parenthesized!(content in input);
+            let rule = content.parse()?;
+            content.parse::<syn::Token![,]>()?;
+            let delta = if content.peek(syn::Token![@]) {
+                content.parse::<syn::Token![@]>()?;
+                let delta = content.parse()?;
+                content.parse::<syn::Token![,]>()?;
+                Some(delta)
+            } else {
+                None
+            };
+            let order = content.parse_terminated(seminaive::OrderAtom::parse, syn::Token![,])?;
+            plans.push(seminaive::RulePlan {
+                rule,
+                delta,
+                order: order.into_iter().collect(),
+                smallest: Vec::new(),
+                known: None,
+            });
+        }
+        Ok(plans)
+    };
+    parser.parse2(tokens).unwrap()
+}
+
+fn labelled() -> source::Program {
+    syn::parse_quote! {
+        struct Heaps;
+        relation Alloc(h:i32,t:i32) = (alloc);
+        relation Component(a:i32,c:i32) = (component);
+        relation Super(c:i32,t:i32) = (supers);
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Compat(h:i32,b:i32); relation Reach(x:i32,y:i32);
+        output Compat, Reach;
+        Helper: Compat(*h,*b) :- Alloc(h,t), Alloc(b,a), Component(a,c), Super(c,t), where a != 0;
+        Reach(*x,*y) :- Edge(x,y);
+        Step: Reach(*x,*z) :- Edge(x,y), Reach(y,z), Edge(z,x);
+    }
+}
+
+#[test]
+fn labels_round_trip_and_must_be_unique() {
+    let program = labelled();
+    roundtrip(&program);
+    assert_eq!(program.labels.iter().flatten().count(), 2);
+    let duplicate = program
+        .to_token_stream()
+        .to_string()
+        .replace("Step", "Helper");
+    let duplicate: source::Program = syn::parse_str(&duplicate).unwrap();
+    assert!(cq_stage::Language::check(&duplicate).is_err());
+}
+
+#[test]
+fn plan_advice_orders_the_named_version_with_cq_selectors() {
+    let strata = stratify::compile(&labelled()).unwrap();
+    let advice = plans(quote!(
+        (Helper, Super, Component, Alloc@0)
+        (Step, @Reach, Reach, Edge@2)
+    ));
+    let planned =
+        seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::DeltaFirst, &advice)
+            .unwrap();
+    roundtrip(&planned);
+    seminaive::check(&strata, &planned).unwrap();
+    // Named atoms first in advice order, the unnamed Alloc@1 next; the guard stays put.
+    assert_eq!(
+        planned.variants.iter().find(|v| v.rule == 0).unwrap().order,
+        [3, 2, 0, 1, 4]
+    );
+    // Advice replaces delta_first's choice for the selected version only.
+    assert_eq!(
+        planned.variants.iter().find(|v| v.rule == 2).unwrap().order,
+        [1, 2, 0]
+    );
+    let unadvised =
+        seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
+    assert_eq!(
+        unadvised
+            .variants
+            .iter()
+            .find(|v| v.rule == 2)
+            .unwrap()
+            .order,
+        [1, 0, 2]
+    );
+    for invalid in [
+        quote!((Missing, Alloc @ 0)),
+        quote!((Helper, Alloc)),
+        quote!((Helper, Super, Super)),
+        quote!((Helper, Alloc @ 1, Alloc @ 1)),
+        quote!((Step, @Edge@0, Edge@0)),
+        quote!((Helper, @Super, Super)),
+        quote!((Step, @Reach@1(y), Reach@1)),
+        quote!((Helper, Super)(Helper, Component)),
+    ] {
+        assert!(
+            seminaive::compile_with_advice(
+                &strata,
+                seminaive::DriverPolicy::DeltaFirst,
+                &plans(invalid)
+            )
+            .is_err()
+        );
+    }
 }
 #[test]
 fn stages_reject_wrong_input_and_target_shapes() {
@@ -180,7 +319,7 @@ fn negative_dependencies_force_completed_lower_components() {
         relation E(x:i32) = (edges); relation A(x:i32); relation B(x:i32);
         output B;
         B(*x) :- E(x), !A(x);
-        A(*x) :- E(x), if *x == 1;
+        A(*x) :- E(x), where x == 1;
     };
     let strata = stratify::compile(&source).unwrap();
     let expected: Vec<Vec<syn::Ident>> =
@@ -199,7 +338,7 @@ fn multioutput_and_constant_negation_survive_both_schedules() {
     let source: source::Program = syn::parse_quote! {
         struct Constants;
         relation E(x:i32) = (edges);
-        relation Modifier(kind:String,x:i32) = (modifiers);
+        relation Modifier(kind:cq_load::StringCode in (kinds),x:i32) = (modifiers);
         relation A(x:i32); relation B(x:i32);
         output B, A;
         A(*x) :- E(x), !Modifier("abstract",x);
@@ -310,4 +449,62 @@ fn authored_coarser_cover_with_redundancy_is_admitted_independently() {
     assert_eq!(default.variants.len(), 2);
     assert_eq!(default.variants[0].delta, None);
     assert_eq!(default.variants[1].delta, Some(0));
+}
+
+#[test]
+fn known_only_advice_keeps_driver_order_and_round_trips() {
+    let strata = stratify::compile(&labelled()).unwrap();
+    let known = |rule: syn::Ident, delta, known| seminaive::RulePlan {
+        rule,
+        delta,
+        order: Vec::new(),
+        smallest: Vec::new(),
+        known: Some(known),
+    };
+    let plans = vec![
+        known(syn::parse_quote!(Step), None, incremental::Known::Admit),
+        known(
+            syn::parse_quote!(Step),
+            Some(syn::parse_quote!(Reach)),
+            incremental::Known::At(2),
+        ),
+        known(syn::parse_quote!(Helper), None, incremental::Known::At(1)),
+    ];
+    let written = seminaive::compile(&strata).unwrap();
+    let advised =
+        seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::WrittenOrder, &plans)
+            .unwrap();
+    roundtrip(&advised);
+    for (advised, written) in advised.variants.iter().zip(&written.variants) {
+        // Known-only advice never authors an order.
+        assert_eq!(advised.order, written.order);
+        assert!(!advised.authored);
+        let expected = match (advised.rule, advised.delta) {
+            (0, None) => Some(incremental::Known::At(1)),
+            // The version-specific plan overrides the rule-wide one.
+            (2, Some(1)) => Some(incremental::Known::At(2)),
+            (2, _) => Some(incremental::Known::Admit),
+            _ => None,
+        };
+        assert_eq!(advised.known, expected, "{advised:?}");
+    }
+    // A level beyond the rule's positive reads is rejected by the contract.
+    let beyond = vec![known(
+        syn::parse_quote!(Step),
+        None,
+        incremental::Known::At(4),
+    )];
+    assert!(
+        seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::WrittenOrder, &beyond)
+            .is_err()
+    );
+    // One version accepts one plan, so duplicate known advice is rejected.
+    let duplicate = vec![
+        known(syn::parse_quote!(Step), None, incremental::Known::Admit),
+        known(syn::parse_quote!(Step), None, incremental::Known::At(1)),
+    ];
+    assert!(
+        seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::WrittenOrder, &duplicate)
+            .is_err()
+    );
 }

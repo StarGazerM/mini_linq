@@ -1,0 +1,25 @@
+sequence
+{
+    r0 = store rows r0;
+    r1 = rows r1;
+    r2 = store map r2 r1;
+    r3 = store compact r3 lookup r2 [region_key] flatten tile 64 r0;
+    r4 = store rows r4;
+    r5 = store compact r5 lookup r3 [nation_key] flatten tile 64 r4;
+    r6 = rows r6;
+    r7 = map r7 r6;
+    r8 = flatten lookup r5 [supplier_key] r7;
+    r9 = flatten lookup r3 [nation_key] r8;
+    r10 = flatten lookup r2 [region_key] r9;
+    r11 = map r11 r10;
+    __cq_key_input_r12 = store r11;
+    r12 = store flatten group r12 canon partition_k [part_key] (64) __cq_key_input_r12;
+    __sequence_output = store flatten tile 64 r12;
+    output count;
+} graded tasks {
+    r0 at host; r1 at host; r2 at host; r3 at host.pool;
+    r4 at host; r5 at host.pool; r6 at host; r7 at host;
+    r8 at host; r9 at host; r10 at host; r11 at host;
+    r12 at host.pool; __sequence_output at host.pool;
+    __cq_key_input_r12 at host;
+}

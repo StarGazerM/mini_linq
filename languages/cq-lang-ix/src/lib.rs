@@ -2,9 +2,9 @@
 //!
 //! The complete relational plan is retained unchanged. Index descriptors use
 //! sorted logical headings of named RA results and explicitly record whether
-//! key values come from a stream or a compile-time literal tuple. The denotation
-//! is `bottom + Set`: opaque Rust binds and guards retain their ancestry chain;
-//! index analysis preserves that plan and introduces no evaluation freedom.
+//! key values come from a stream or a closed host expression. Rust expressions
+//! are opaque and total; index analysis preserves their recorded placement
+//! without deriving relational demands from their syntax.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -20,10 +20,8 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only fallback construction proves union arms disjoint; literal values prove nothing.
 //!
 pub use cq_lang_ra as ra;
 
@@ -103,7 +101,6 @@ pub type Signature = (String, Vec<usize>, SupplyKind);
 /// One first-use demand of a checked RA program, in definition order.
 #[derive(Clone, Debug)]
 pub struct Demand<'a> {
-    pub definition: &'a Ident,
     pub relation: &'a Ident,
     pub signature: Signature,
 }
@@ -156,7 +153,6 @@ pub fn demands<'a>(program: &'a ra::Program, info: &ra::Analysis) -> Vec<Demand<
         // IX-Reuse: only the first occurrence contributes a demand.
         if seen.insert(signature.clone()) {
             demands.push(Demand {
-                definition: &definition.result,
                 relation: right,
                 signature,
             });
@@ -175,6 +171,109 @@ pub fn signature(index: &IndexRequirement) -> Signature {
             .collect(),
         index.supply.kind(),
     )
+}
+
+/// Associate each keyed RA read with its recorded IX requirement.
+/// This checks coverage against the read itself, not the producer's first-use
+/// demand traversal. The returned entries borrow the recorded supply and keys.
+/// Missing requirements are an error; non-keyed reads have no entry.
+pub fn read_requirements<'a>(
+    program: &'a Program,
+    info: &ra::Analysis,
+) -> syn::Result<BTreeMap<String, &'a IndexDefinition>> {
+    check_read_requirements(program, info, true)
+}
+
+fn check_read_requirements<'a>(
+    program: &'a Program,
+    info: &ra::Analysis,
+    complete: bool,
+) -> syn::Result<BTreeMap<String, &'a IndexDefinition>> {
+    use std::borrow::Cow;
+    let mut reads = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    for definition in &program.ra.plan.definitions {
+        let (relation, stream_keys, condition) = match &definition.operator {
+            ra::Operator::NaturalJoin(join) => (
+                &join.right,
+                Some(Cow::Borrowed(&info[&symbol_name(&join.left)].heading)),
+                None,
+            ),
+            ra::Operator::Semijoin(join) => (
+                &join.right,
+                Some(Cow::Borrowed(&info[&symbol_name(&join.left)].heading)),
+                None,
+            ),
+            ra::Operator::Anti(anti) => (
+                &anti.right,
+                Some(Cow::Owned(anti.columns.iter().map(symbol_name).collect())),
+                None,
+            ),
+            ra::Operator::Select(selection) => (&selection.input, None, Some(&selection.condition)),
+            _ => continue,
+        };
+        let point_columns = condition.and_then(|condition| condition.point_columns());
+        let range_column = condition
+            .and_then(|condition| condition.range_bounds())
+            .map(|(column, _)| column);
+        if stream_keys.is_none() && point_columns.is_none() && range_column.is_none() {
+            continue;
+        }
+        let heading = &info[&symbol_name(relation)].heading;
+        let requirement = program.indexes.iter().find(|index| {
+            let requirement = &index.requirement;
+            if requirement.relation != *relation {
+                return false;
+            }
+            match requirement.supply.kind() {
+                SupplyKind::Stream => stream_keys.as_ref().is_some_and(|keys| {
+                    requirement
+                        .columns
+                        .iter()
+                        .map(|column| column.index as usize)
+                        .eq(heading.iter().enumerate().filter_map(|(ordinal, column)| {
+                            keys.contains(column).then_some(ordinal)
+                        }))
+                }),
+                SupplyKind::Const => point_columns.as_ref().is_some_and(|keys| {
+                    requirement.columns.iter().all(|column| {
+                        heading
+                            .iter()
+                            .nth(column.index as usize)
+                            .is_some_and(|name| keys.contains(name))
+                    })
+                }),
+                SupplyKind::Range => range_column.as_ref().is_some_and(|column| {
+                    requirement.columns.len() == 1
+                        && heading.iter().nth(requirement.columns[0].index as usize) == Some(column)
+                }),
+            }
+        });
+        if let Some(index) = requirement {
+            used.insert(symbol_name(&index.name));
+            reads.insert(symbol_name(&definition.result), index);
+        } else if complete {
+            return Err(syn::Error::new_spanned(
+                &definition.result,
+                format!(
+                    "definition `{}`: missing legal index requirement for `{relation}`",
+                    definition.result
+                ),
+            ));
+        }
+    }
+    for index in &program.indexes {
+        if !used.contains(&symbol_name(&index.name)) {
+            return Err(syn::Error::new_spanned(
+                &index.name,
+                format!(
+                    "index `{}` is demanded by no join or literal selection with this supply",
+                    index.name
+                ),
+            ));
+        }
+    }
+    Ok(reads)
 }
 
 /// A complete RA program followed by named index demands.
@@ -260,20 +359,7 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
         }
     }
 
-    let expected: BTreeSet<_> = demands(&module.ra, &info)
-        .into_iter()
-        .map(|d| d.signature)
-        .collect();
-    for (name, index) in indexes {
-        if !expected.contains(&signature(&index.requirement)) {
-            return Err(syn::Error::new_spanned(
-                &index.name,
-                format!(
-                    "index `{name}` is demanded by no join or literal selection with this supply"
-                ),
-            ));
-        }
-    }
+    check_read_requirements(module, &info, false)?;
     Ok(())
 }
 

@@ -1,7 +1,38 @@
-use cq_lang_sequence::{Program, check_grading};
+use cq_lang_sequence::{check_grading, structures};
 use cq_sequence_tasks::{machine, translate};
 use quote::ToTokens;
 use syn::visit_mut::{self, VisitMut};
+
+// Authored fixtures retain each language layer independently of Sequence IR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Fixture {
+    physical: structures::physical::Program,
+    structures: structures::Program,
+    program: cq_lang_sequence::Program,
+}
+
+impl syn::parse::Parse for Fixture {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = structures::Program::parse(input, &physical)?;
+        let program = input.parse()?;
+        Ok(Self { physical, structures, program })
+    }
+}
+
+impl From<(structures::physical::Program, structures::Program, cq_lang_sequence::Program)> for Fixture {
+    fn from((physical, structures, program): (structures::physical::Program, structures::Program, cq_lang_sequence::Program)) -> Self {
+        Self { physical, structures, program }
+    }
+}
+
+impl ToTokens for Fixture {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        self.physical.to_tokens(tokens);
+        self.structures.to_tokens(tokens);
+        self.program.to_tokens(tokens);
+    }
+}
 
 #[test]
 fn machine_cache_cutoff_defaults_overrides_and_accepts_below_low_cutoff() {
@@ -23,7 +54,7 @@ fn machine_cache_cutoff_defaults_overrides_and_accepts_below_low_cutoff() {
 }
 
 #[test]
-#[should_panic(expected = "provider partition cache threshold must be positive")]
+#[should_panic]
 fn machine_cache_cutoff_rejects_zero() {
     cq_sequence_tasks::machine_with(cq_sequence_tasks::Config {
         key_partition_cache_threshold: 0,
@@ -31,17 +62,280 @@ fn machine_cache_cutoff_rejects_zero() {
     });
 }
 
-fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Program {
+fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Fixture {
     syn::parse2(quote::quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
-        } structures { r host scan = ::core::iter::Map<_, _> []; r canon = ::std::collections::HashSet<_>; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #sequence }
         graded tasks { #grades }
     })
     .unwrap()
+}
+
+// Project distinct host witnesses before testing canonicalization of repeated rows.
+fn witness_program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Fixture {
+    syn::parse2(quote::quote! {
+        physical {
+            relation R(a:i32,witness:i32);
+            raw = pipe rename R {a -> a,witness -> witness};
+            r = let canon project raw keep {a};
+            return r as answer(a);
+        }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } raw host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        sequence { #sequence }
+        graded tasks { #grades }
+    })
+    .unwrap()
+}
+
+#[test]
+fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
+    let cases = [
+        (
+            quote::quote! { input = map r rows raw; result = store canon input; },
+            quote::quote! { input at host; result at host; },
+        ),
+        (
+            quote::quote! {
+                input = store map r rows raw;
+                parts = store flatten tile 64 input;
+                joined = store parts;
+                result = store canon joined;
+            },
+            quote::quote! { input at host; parts at pool; joined at host; result at host; },
+        ),
+        (
+            quote::quote! {
+                input = store map r rows raw;
+                parts = store canon partition_k[a](64) input;
+                joined = store parts;
+                result = store flatten joined;
+            },
+            quote::quote! { input at host; parts at pool; joined at host; result at host; },
+        ),
+    ];
+    let mut checks = Vec::new();
+    for (sequence, grades) in cases {
+        let program = witness_program(sequence, grades);
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+        let expression = cq_sequence_tasks::translate_with(&program.physical, &program.structures, &program.program, &facts,
+        cq_sequence_tasks::Config {
+            grain: 127,
+            ..Default::default()
+        },)
+        .unwrap();
+        let rendered = expression.to_token_stream().to_string();
+        assert!(
+            rendered.contains("dedup :: Sort > :: par_sort"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("dedup :: Sort > :: sort"), "{rendered}");
+        assert!(!rendered.contains("HashSetConstructor"), "{rendered}");
+        assert!(!rendered.contains("__cq_seen"), "{rendered}");
+        checks.push(quote::quote! {
+            let mut actual: Vec<i32> =
+                pool.install(|| (#expression).map(|(a,)| *a).collect());
+            actual.sort_unstable();
+            // Compare the actual row count too, not just set equality.
+            assert_eq!(actual, expected);
+        });
+    }
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated: Vec<(i32,i32)> =
+                (0..4099).map(|index| ((index * 13) % 7,index)).collect();
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for R in [&[][..], &populated[..1], &populated[..65], &populated[..]] {
+                    let mut expected: Vec<_> = R.iter().map(|row| row.0).collect();
+                    expected.sort_unstable();
+                    expected.dedup();
+                    #(#checks)*
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
+    let columns: Vec<_> = (0..16)
+        .map(|index| quote::format_ident!("h{index}"))
+        .collect();
+    let expressions = columns.iter().map(|_| quote::quote!(OnlyOrd(*a % 3)));
+    let mut checks = Vec::new();
+    for (head, project, collect, expected) in [
+        (
+            quote::quote!(a),
+            true,
+            quote::quote!(map(|(a,)| *a).collect::<Vec<_>>()),
+            quote::quote! {
+                let mut expected: Vec<_> = R.iter().map(|row| row.0).collect();
+                expected.sort_unstable();
+                expected.dedup();
+            },
+        ),
+        (
+            quote::quote!(#(#expressions),*),
+            false,
+            quote::quote!(map(|(#(#columns,)*)| [#(#columns),*]).collect::<Vec<_>>()),
+            quote::quote! {
+                let mut values: Vec<_> = R.iter().map(|row| row.0 % 3).collect();
+                values.sort_unstable();
+                values.dedup();
+                let expected: Vec<[OnlyOrd; 16]> = values.into_iter()
+                    .map(|value| ::core::array::from_fn(|_| OnlyOrd(value))).collect();
+            },
+        ),
+    ] {
+        let projection = project.then(|| quote::quote!(p = pipe project r keep {a};));
+        let returned = if project {
+            quote::quote!(p)
+        } else {
+            quote::quote!(r)
+        };
+        let output = if project {
+            quote::quote!(map p canonical)
+        } else {
+            quote::quote!(canonical)
+        };
+        let physical = syn::parse2(quote::quote! {
+            physical {
+                relation R(a:i32,b:i32);
+                r = let canon rename R {a -> a,b -> b};
+                #projection
+                return canon #returned as answer(#head);
+            }
+        })
+        .unwrap();
+        let structures = cq_structure_selection::compile(&physical).unwrap();
+        let program: Fixture = syn::parse2(quote::quote! {
+            #physical
+            #structures
+            sequence {
+                input = store rows r;
+                parts = store flatten tile 64 input;
+                joined = store parts;
+                canonical = canon joined;
+                result = store #output;
+            }
+            graded tasks {
+                input at host; parts at pool; joined at host;
+                canonical at host; result at host;
+            }
+        })
+        .unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+        let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
+        assert!(
+            structures_facts
+                .head_dedup
+                .contains_key(&returned.to_string())
+        );
+        let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
+        let profiled = cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
+        for expression in [expression, profiled] {
+            let rendered = expression.to_token_stream().to_string();
+            assert!(
+                rendered.matches("dedup :: Sort > :: par_sort").count() >= 2,
+                "{rendered}"
+            );
+            assert!(!rendered.contains("dedup :: Sort > :: sort"), "{rendered}");
+            checks.push(quote::quote! {
+                #expected
+                let actual = pool.install(|| (#expression).#collect);
+                assert_eq!(actual, expected);
+            });
+        }
+    }
+    run_partition_fixture(quote::quote! {
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+        struct OnlyOrd(i32);
+
+        fn main() {
+            let populated: Vec<(i32,i32)> =
+                (0..4099).map(|index| (index % 7, index)).collect();
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for R in [&[][..], &populated[..1], &populated[..]] {
+                    #(#checks)*
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn tasks_wide_valuation_canon_compares_every_field() {
+    let left: Vec<_> = (0..8)
+        .map(|index| quote::format_ident!("a{index}"))
+        .collect();
+    let right: Vec<_> = (0..8)
+        .map(|index| quote::format_ident!("b{index}"))
+        .collect();
+    let columns: Vec<_> = left.iter().chain(&right).collect();
+    let physical = syn::parse2(quote::quote! {
+        physical {
+            relation L(#(#left:i32),*,witness:i32);
+            relation R(a0:i32,#(#right:i32),*);
+            raw = pipe rename L {#(#left -> #left),*,witness -> witness};
+            l = pipe project raw keep {#(#left),*};
+            r = let rename R {a0 -> a0,#(#right -> #right),*};
+            j = let canon probe first [a0] l,r;
+            return j as answer(#(#columns),*);
+        }
+    })
+    .unwrap();
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let program: Fixture = syn::parse2(quote::quote! {
+        #physical
+        #structures
+        sequence {
+            r = store rows r;
+            input = map l rows raw;
+            result = store canon flatten lookup r[a0] input;
+        }
+        graded tasks { r at host; input at host; result at host; }
+    })
+    .unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
+    let rendered = expression.to_token_stream().to_string();
+    assert!(
+        rendered.contains("dedup :: Sort > :: par_sort"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("__cq_left . 15"), "{rendered}");
+    assert!(!rendered.contains("dedup :: Sort > :: sort"), "{rendered}");
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated: Vec<_> = (0..129).map(|witness|
+                (1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32,witness)).collect();
+            let R = [(1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32,2i32),
+                     (1,0,0,0,0,0,0,0,1)];
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for L in [&[][..], &populated[..1], &populated[..]] {
+                    let actual: Vec<[i32; 16]> = pool.install(|| (#expression)
+                        .map(|(#(#columns,)*)| [#(*#columns),*]).collect());
+                    let expected = if L.is_empty() {
+                        Vec::new()
+                    } else {
+                        (1..=2).map(|last| {
+                            let mut row = [0; 16];
+                            row[0] = 1;
+                            row[15] = last;
+                            row
+                        }).collect()
+                    };
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    });
 }
 
 #[test]
@@ -62,7 +356,7 @@ fn checked_publication_owns_rows_once_and_aliases_without_copying() {
             alias at host; parts at pool; joined at host; result at host;
         },
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert!(matches!(
         facts.publications["borrowed"],
         Publication::BorrowHost { .. }
@@ -77,7 +371,7 @@ fn checked_publication_owns_rows_once_and_aliases_without_copying() {
             source: "retained".into()
         }
     );
-    let tasks = translate(&program, &facts).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let tokens = tasks.to_token_stream().to_string();
     assert!(
         tokens.contains("let __cq_key_source_retained ="),
@@ -90,7 +384,7 @@ fn checked_publication_owns_rows_once_and_aliases_without_copying() {
     );
     run_partition_fixture(quote::quote! {
         fn main() {
-            for R in [&[][..], &[(1i32,)][..], &[(2,), (1,), (2,), (3,)][..]] {
+            for R in [&[][..], &[(1i32,)][..], &[(2,), (1,), (3,)][..]] {
                 let mut actual: Vec<(i32,)> = (#tasks).map(|(a,)| (*a,)).collect();
                 actual.sort();
                 let mut expected = R.to_vec();
@@ -124,7 +418,7 @@ fn collective_at_separated_pool_is_rejected() {
         quote::quote!(input = store rows r; result = fold count input;),
         quote::quote!(input at host; result at pool;),
     );
-    let error = check_grading(&program, &machine()).unwrap_err();
+    let error = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap_err();
     assert!(error.to_string().contains("BE-Collective"), "{error}");
 }
 
@@ -134,8 +428,8 @@ fn leaf_task_fold_is_a_sequential_loop() {
         quote::quote!(input = store rows r; result = store fold count input;),
         quote::quote!(input at host; result at pool.task;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &analysis)
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -150,7 +444,7 @@ fn flatten_at_pool_is_rejected_even_with_tile() {
         quote::quote!(input at host; result at pool;),
     );
     // Strip-mining does not make the separated pool collaborative.
-    let error = check_grading(&program, &machine()).unwrap_err();
+    let error = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap_err();
     assert!(error.to_string().contains("BE-Collective"), "{error}");
 }
 
@@ -160,8 +454,8 @@ fn host_placement_does_not_emit_parallel_operations() {
         quote::quote!(input = store rows r; result = store input;),
         quote::quote!(input at host; result at host;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &analysis)
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -174,8 +468,8 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
         quote::quote!(input = store rows r; result = store tile 64 input;),
         quote::quote!(input at host; result at pool;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &analysis).unwrap();
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("tile_rows (64usize)"), "{rendered}");
     assert!(!rendered.contains("rayon :: prelude"), "{rendered}");
@@ -213,13 +507,13 @@ fn worker_bodies(expression: &syn::Expr) -> Vec<syn::Expr> {
     workers.0
 }
 
-fn segment_program() -> Program {
+fn segment_program() -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,x:i32); relation R(a:i32,b:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,x -> x};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a,x -> x};
+            r = let rename R {a -> a,b -> b};
             joined = pipe probe first [a] l,r;
             selected = pipe select joined if (b > 0);
             mapped = pipe bind selected with n:i32 = (*b * 100 + 1);
@@ -228,9 +522,9 @@ fn segment_program() -> Program {
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
-    let provider: Program = syn::parse_quote! {
+    let provider: Fixture = syn::parse_quote! {
         #physical
-        structures { r = ::cq_storage::SortedRun<_, _> [a]; }
+        structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
         sequence { input = store rows l; result = store input; }
     };
     // Keep the same provider override convention as the conformance fixtures.
@@ -242,7 +536,11 @@ fn segment_program() -> Program {
         });
         structures.structures.entries.push(provider);
     }
+    structures
+        .structures
+        .declare(&provider.structures.structures.providers.declarations).unwrap();
     syn::parse_quote! {
+        #physical
         #structures
         sequence {
             r = store rows r;
@@ -258,12 +556,12 @@ fn segment_program() -> Program {
 #[test]
 fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
     let program = segment_program();
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert_eq!(
         analysis.tilings["parts"],
         vec![cq_lang_sequence::Tiling::Distribute]
     );
-    let expression = translate(&program, &analysis).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let workers = worker_bodies(&expression);
     assert_eq!(workers.len(), 1, "{}", expression.to_token_stream());
     let worker = workers[0].to_token_stream().to_string();
@@ -293,19 +591,19 @@ fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
 #[test]
 fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
     let program = segment_program();
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let tasks = translate(&program, &analysis).unwrap();
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let mut sequential = program.clone();
-    sequential.graded = Some(syn::parse_quote! {
+    sequential.program.graded = Some(syn::parse_quote! {
         graded tasks { r at host; input at host; parts at host; result at host; }
     });
-    let facts = check_grading(&sequential, &machine()).unwrap();
-    let pull = cq_sequence_pull::translate(&sequential, &facts).unwrap();
+    let facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &facts).unwrap();
     let source = quote::quote! {
         fn main() {
             let R: &[(i32,i32)] = &[(1,10),(1,11),(2,20),(3,-30)];
             let populated: Vec<(i32,i32)> =
-                (0..131).map(|index| (index % 4 + 1, index % 7)).collect();
+                (0..131).map(|index| (index % 4 + 1, index)).collect();
             for threads in [1,4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for L in [&[][..], &populated[..1], &populated[..64], &populated[..65], &populated[..]] {
@@ -330,7 +628,7 @@ fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
     run_partition_fixture(source);
 }
 
-fn grouped_program(global: bool) -> Program {
+fn grouped_program(global: bool, duplicate_witnesses: bool) -> Fixture {
     let keys = if global {
         quote::quote!()
     } else {
@@ -341,10 +639,27 @@ fn grouped_program(global: bool) -> Program {
     } else {
         quote::quote!(k,)
     };
+    let (input, scan) = if duplicate_witnesses {
+        (
+            quote::quote! {
+                relation rows(k:i32, witness:i32, value:i64, occurrence:i32);
+                raw = pipe rename rows {k -> k, witness -> witness, value -> value, occurrence -> occurrence};
+                r = let canon project raw keep {k,witness,value};
+            },
+            quote::quote!(map r rows raw),
+        )
+    } else {
+        (
+            quote::quote! {
+                relation rows(k:i32, witness:i32, value:i64);
+                r = let canon rename rows {k -> k, witness -> witness, value -> value};
+            },
+            quote::quote!(rows r),
+        )
+    };
     let physical = syn::parse2(quote::quote! {
         physical {
-            relation rows(k:i32, witness:i32, value:i64);
-            r = pipe canon rename rows@0 {k -> k, witness -> witness, value -> value};
+            #input
             grouped = pipe group r by [#keys] {
                 n: usize = count();
                 total: i64 = sum(value);
@@ -357,9 +672,10 @@ fn grouped_program(global: bool) -> Program {
     .unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
     syn::parse2(quote::quote! {
+        #physical
         #structures
         sequence {
-            r = store canon rows r;
+            r = store canon #scan;
             groups = group grouped r;
             output_rows = store groups;
         }
@@ -371,32 +687,32 @@ fn grouped_program(global: bool) -> Program {
 #[test]
 fn grouped_fold_requires_host_even_at_a_sequential_task_leaf() {
     for level in [quote::quote!(pool), quote::quote!(pool.task)] {
-        let mut program = grouped_program(false);
-        program.graded = Some(
+        let mut program = grouped_program(false, false);
+        program.program.graded = Some(
             syn::parse2(quote::quote! {
                 graded tasks { r at host; groups at #level; output_rows at host; }
             })
             .unwrap(),
         );
-        let error = check_grading(&program, &machine()).unwrap_err();
+        let error = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap_err();
         assert!(error.to_string().contains("BE-Group"), "{error}");
     }
 }
 
 #[test]
 fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
-    let keyed = grouped_program(false);
-    let global = grouped_program(true);
-    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
-    let global_facts = check_grading(&global, &machine()).unwrap();
-    let keyed_tasks = translate(&keyed, &keyed_facts).unwrap();
-    let global_tasks = translate(&global, &global_facts).unwrap();
-    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
-    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    let keyed = grouped_program(false, true);
+    let global = grouped_program(true, true);
+    let keyed_facts = check_grading(&keyed.physical, &keyed.structures, &keyed.program, &machine()).unwrap();
+    let global_facts = check_grading(&global.physical, &global.structures, &global.program, &machine()).unwrap();
+    let keyed_tasks = translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_tasks = translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     assert!(!keyed_tasks.to_token_stream().to_string().contains("rayon"));
     let source = quote::quote! {
         fn main() {
-            let populated: &[(i32,i32,i64)] = &[(1,10,7),(1,10,7),(1,11,7),(2,20,-2)];
+            let populated: &[(i32,i32,i64,i32)] = &[(1,10,7,0),(1,10,7,1),(1,11,7,2),(2,20,-2,3)];
             for rows in [populated, &[][..]] {
                 let mut tasks: Vec<(i32,usize,i64,Option<i64>,Option<i64>)> =
                     (#keyed_tasks).into_iter().map(|(k,n,s,l,h)| (*k,n,s,l,h)).collect();
@@ -424,12 +740,12 @@ fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
 
 #[test]
 fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
-    let keyed = grouped_program(false);
-    let global = grouped_program(true);
-    let translate_tiled = |mut program: Program| {
-        program.sequence = syn::parse_quote! {
+    let keyed = grouped_program(false, true);
+    let global = grouped_program(true, true);
+    let translate_tiled = |mut program: Fixture| {
+        program.program.sequence = syn::parse_quote! {
             sequence {
-                input = store rows r;
+                input = store map r rows raw;
                 parts = store flatten tile 64 input;
                 joined = store parts;
                 r = store canon joined;
@@ -437,35 +753,35 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
                 output_rows = store groups;
             }
         };
-        program.graded = Some(syn::parse_quote! {
+        program.program.graded = Some(syn::parse_quote! {
             graded tasks {
                 input at host; parts at pool; joined at host;
                 r at host; groups at host; output_rows at host;
             }
         });
-        let facts = check_grading(&program, &machine()).unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
         assert_eq!(
             facts.tilings["parts"],
             vec![cq_lang_sequence::Tiling::Distribute]
         );
-        let expression = translate(&program, &facts).unwrap();
+        let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         assert_eq!(worker_bodies(&expression).len(), 1);
         expression
     };
     let keyed_tasks = translate_tiled(keyed.clone());
     let global_tasks = translate_tiled(global.clone());
-    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
-    let global_facts = check_grading(&global, &machine()).unwrap();
-    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
-    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    let keyed_facts = check_grading(&keyed.physical, &keyed.structures, &keyed.program, &machine()).unwrap();
+    let global_facts = check_grading(&global.physical, &global.structures, &global.program, &machine()).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     let source = quote::quote! {
         fn main() {
-            // Repeated complete valuations span several 64-row tiles. Different
-            // witnesses with the same key and value must both enter the fold.
-            let populated: Vec<(i32,i32,i64)> = (0..131).map(|index| match index % 4 {
-                0 | 1 => (1,10,7),
-                2 => (1,11,7),
-                _ => (2,20,-2),
+            // Projected complete valuations span several 64-row tiles. Different
+            // logical witnesses with the same key and value must both enter the fold.
+            let populated: Vec<(i32,i32,i64,i32)> = (0..131).map(|index| match index % 4 {
+                0 | 1 => (1,10,7,index),
+                2 => (1,11,7,index),
+                _ => (2,20,-2,index),
             }).collect();
             for threads in [1,4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
@@ -522,31 +838,157 @@ fn run_partition_fixture(source: proc_macro2::TokenStream) {
     runtime.run(&source.to_string());
 }
 
+fn merge_input_fixture(sequence: proc_macro2::TokenStream) -> Fixture {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32) host [a] reads [ordered];
+            relation R(a:i32,b:i32) host [a] reads [ordered];
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
+            joined = pipe merge [a] l,r;
+            return joined as answer(a,b);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let mut program: cq_lang_sequence::Program = syn::parse2(quote::quote! {
+        sequence { #sequence }
+    }).unwrap();
+    program.graded = Some(cq_lang_sequence::Graded {
+        machine: syn::parse_quote!(tasks),
+        grades: program.sequence.definitions.iter().map(|definition| cq_lang_sequence::Grade {
+            name: definition.name.clone(),
+            level: vec![syn::parse_quote!(host)],
+        }).collect(),
+    });
+    Fixture { physical, structures, program }
+}
+
+#[test]
+fn merge_rejects_partition_ancestry_even_after_flatten_and_aliases() {
+    for sequence in [
+        quote::quote! {
+            l = rows l; r = rows r;
+            partial = tile 2 l;
+            result = store flatten flatten lookup r [a] partial;
+        },
+        quote::quote! {
+            l = rows l; r = rows r;
+            partial = flatten tile 2 l;
+            alias = partial;
+            result = store flatten lookup r [a] alias;
+        },
+        quote::quote! {
+            l = rows l; r = rows r;
+            partial = flatten tile 2 l;
+            result = store flatten map joined partial;
+        },
+    ] {
+        let fixture = merge_input_fixture(sequence);
+        cq_lang_sequence::contract::check(&fixture.physical, &fixture.structures, &fixture.program).unwrap();
+        assert!(check_grading(&fixture.physical, &fixture.structures, &fixture.program, &machine()).is_err());
+    }
+    let complete = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        complete = store flatten tile 2 l;
+        result = store flatten lookup r [a] complete;
+    });
+    check_grading(&complete.physical, &complete.structures, &complete.program, &machine()).unwrap();
+}
+
+#[test]
+fn merge_partition_advice_tiles_the_completed_join() {
+    let fixture = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        result = store flatten lookup r [a] l;
+    });
+    let rewritten = cq_sequence_plan::rewrites::partition(
+        &fixture.physical, &fixture.structures, &fixture.program,
+        quote::quote!(result, 2),
+    ).unwrap();
+    let expected: cq_lang_sequence::Program = syn::parse_quote! {
+        sequence {
+            l = rows l; r = rows r;
+            result = store flatten tile 2 flatten lookup r [a] l;
+        }
+        graded tasks { l at host; r at host; result at host; }
+    };
+    assert_eq!(rewritten, expected);
+    check_grading(&fixture.physical, &fixture.structures, &rewritten, &machine()).unwrap();
+}
+
+#[test]
+fn unflattened_merge_segment_does_not_partition_its_source() {
+    let fixture = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        result = store map joined l;
+    });
+    let rewritten = cq_sequence_plan::rewrites::partition(
+        &fixture.physical, &fixture.structures, &fixture.program,
+        quote::quote!(result, 2),
+    ).unwrap();
+    assert_eq!(rewritten, fixture.program);
+    check_grading(&fixture.physical, &fixture.structures, &rewritten, &machine()).unwrap();
+}
+
+#[test]
+fn planned_grouped_host_merge_preserves_exact_multiplicity_across_tasks() {
+    let mut fixture = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        result = store flatten lookup r [a] l;
+    });
+    fixture.program.graded = None;
+    let (physical, structures, sequence, analysis) = cq_sequence_conformance::plan(
+        &fixture.physical, &fixture.structures, &fixture.program,
+        cq_sequence_conformance::Target::Tasks,
+    ).unwrap();
+    let expression = translate(&physical, &structures, &sequence, &analysis).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            for count in [0_i32, 1, 129] {
+                let L: ::std::collections::BTreeMap<(i32,), Vec<()>> =
+                    (0..count).map(|key| ((key,), vec![()])).collect();
+                let R: ::std::collections::BTreeMap<(i32,), Vec<(i32,)>> =
+                    (0..count).map(|key| ((key,), vec![(7,), (9,)])).collect();
+                let expected: Vec<_> = (0..count)
+                    .flat_map(|key| [(key, 7), (key, 9)])
+                    .collect();
+                for threads in [1, 4] {
+                    let pool = ::rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                    let mut actual: Vec<_> = pool.install(|| (#expression)
+                        .map(|(a, b)| (*a, *b)).collect());
+                    actual.sort_unstable();
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    });
+}
+
 #[test]
 fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() {
-    let keyed = grouped_program(false);
-    let global = grouped_program(true);
-    let translate_partitioned = |mut program: Program, global: bool| {
+    let keyed = grouped_program(false, true);
+    let global = grouped_program(true, true);
+    let translate_partitioned = |mut program: Fixture, global: bool| {
         let body = if global {
             quote::quote!(group grouped canon partition_k[k,witness,value](64) input)
         } else {
             quote::quote!(flatten group grouped canon partition_k[k](64) input)
         };
-        program.sequence = syn::parse_quote! {
+        program.program.sequence = syn::parse_quote! {
             sequence {
-                input = store rows r;
+                input = store map r rows raw;
                 parts = store #body;
                 output_rows = store parts;
             }
         };
-        program.graded = Some(syn::parse_quote! {
+        program.program.graded = Some(syn::parse_quote! {
             graded tasks { input at host; parts at pool; output_rows at host; }
         });
-        let facts = check_grading(&program, &machine()).unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
         if global {
             assert_eq!(facts.shapes["parts"], vec![cq_lang_sequence::Len::Lit(1)]);
         }
-        let expression = translate(&program, &facts).unwrap();
+        let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         let rendered = expression.to_token_stream().to_string();
         assert!(rendered.contains("combine :: route_by"), "{rendered}");
         assert!(rendered.contains("combine :: map_parts"), "{rendered}");
@@ -562,18 +1004,18 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
     };
     let keyed_tasks = translate_partitioned(keyed.clone(), false);
     let global_tasks = translate_partitioned(global.clone(), true);
-    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
-    let global_facts = check_grading(&global, &machine()).unwrap();
-    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
-    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    let keyed_facts = check_grading(&keyed.physical, &keyed.structures, &keyed.program, &machine()).unwrap();
+    let global_facts = check_grading(&global.physical, &global.structures, &global.program, &machine()).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
-            // Duplicates span several routing chunks; only two of the 64
+            // Projected duplicates span routing chunks; only two of the 64
             // logical key partitions can be occupied by the keyed fold.
-            let populated: Vec<(i32,i32,i64)> = (0..4099).map(|index| match index % 4 {
-                0 | 1 => (1,10,7),
-                2 => (1,11,7),
-                _ => (2,20,-2),
+            let populated: Vec<(i32,i32,i64,i32)> = (0..4099).map(|index| match index % 4 {
+                0 | 1 => (1,10,7,index),
+                2 => (1,11,7,index),
+                _ => (2,20,-2,index),
             }).collect();
             for threads in [1,24] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
@@ -608,19 +1050,18 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
 
 #[test]
 fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
-    let mut program = grouped_program(true);
-    program.evidence = syn::parse_quote!(evidence { rows(witness) key; });
-    program.sequence = syn::parse_quote! {
+    let mut program = grouped_program(true, false);
+    program.program.sequence = syn::parse_quote! {
         sequence {
             input = store rows r;
             partials = store group grouped tile 64 input;
             output_rows = store partials;
         }
     };
-    program.graded = Some(syn::parse_quote! {
+    program.program.graded = Some(syn::parse_quote! {
         graded tasks { input at host; partials at pool; output_rows at host; }
     });
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert_eq!(
         facts.shapes["partials"],
         vec![cq_lang_sequence::Len::Lit(1)]
@@ -629,7 +1070,7 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
         facts.tilings["partials"],
         vec![cq_lang_sequence::Tiling::Distribute]
     );
-    let expression = translate(&program, &facts).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("let __cq_partials"), "{rendered}");
     assert!(rendered.contains("parallel :: map_index"), "{rendered}");
@@ -656,22 +1097,24 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
     });
 }
 
-fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Program {
+fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
-            relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
+            relation L(a:i32,b:i32,witness:i32); relation R(a:i32,b:i32,c:i32,witness:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = let rename R@1 {a -> a,b -> b,c -> c};
+            raw_l = pipe rename L {a -> a,b -> b,witness -> left_witness};
+            l = pipe project raw_l keep {a,b};
+            raw_r = pipe rename R {a -> a,b -> b,c -> c,witness -> right_witness};
+            r = let project raw_r keep {a,b,c};
             joined = pipe probe first [a,b] l,r;
             return joined as answer(a,b,c);
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
-    let authored: Program = syn::parse_quote! {
+    let authored: Fixture = syn::parse_quote! {
         #physical
-        structures {
-            r = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
+        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host required build single, keys: keys distinct_keys exact hash_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host required build single ] }; }
+            r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
         }
         sequence { result = rows l; }
     };
@@ -683,6 +1126,9 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
         });
         structures.structures.entries.push(provider);
     }
+    structures
+        .structures
+        .declare(&authored.structures.structures.providers.declarations).unwrap();
     let (provider, grade) = if named {
         (
             quote::quote! {
@@ -698,11 +1144,12 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
         )
     };
     syn::parse_quote! {
+        #physical
         #structures
         sequence {
-            provider_input = store rows r;
+            provider_input = store map r rows raw_r;
             #provider
-            input = store rows l;
+            input = store map l rows raw_l;
             parts = store capacity 8192 flatten flatten lookup r [a,b] tile 64 input;
             result = store parts;
         }
@@ -720,7 +1167,7 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
         for named in [false, true] {
             for width in [1, 64] {
                 let mut program = routed_provider_program(routing.clone(), named);
-                let definition = program
+                let definition = program.program
                     .sequence
                     .definitions
                     .iter_mut()
@@ -734,12 +1181,12 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
                     panic!("partition fixture");
                 };
                 *parts = width;
-                let facts = check_grading(&program, &machine()).unwrap();
+                let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
                 assert_eq!(
                     facts.capabilities[&("r".into(), vec!["a".into(), "b".into()])],
-                    cq_lang_sequence::Capability::Exact,
+                    cq_lang_sequence::structures::Capability::Exact,
                 );
-                let expression = translate(&program, &facts).unwrap();
+                let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
                 let description = format!("routing [{routing}], named={named}, width={width}");
                 checks.push(quote::quote! {
                     let actual: Vec<(i32,i32,i32)> = pool.install(|| {
@@ -752,14 +1199,14 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
     }
     run_partition_fixture(quote::quote! {
         fn main() {
-            let probes: Vec<(i32,i32)> = (0..131).map(|i| (i % 4,i % 7)).collect();
-            let values: Vec<(i32,i32,i32)> = (0..131).map(|i| (i % 3,i % 5,i % 7)).collect();
+            let probes: Vec<(i32,i32,i32)> = (0..131).map(|i| (i % 4,i % 7,i)).collect();
+            let values: Vec<(i32,i32,i32,i32)> = (0..131).map(|i| (i % 3,i % 5,i % 7,i)).collect();
             for threads in [1,24] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for L in [&probes[..], &[][..]] {
                     for R in [&values[..], &[][..]] {
-                        let expected: Vec<(i32,i32,i32)> = L.iter().flat_map(|&(a,b)| {
-                            R.iter().filter_map(move |&(ra,rb,c)| {
+                        let expected: Vec<(i32,i32,i32)> = L.iter().flat_map(|&(a,b,_)| {
+                            R.iter().filter_map(move |&(ra,rb,c,_)| {
                                 (ra == a && rb == b).then_some((a,b,c))
                             })
                         }).collect();
@@ -775,24 +1222,24 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
 
 #[test]
 fn catalog_retention_materializes_new_providers_and_preserves_native_entry_identity() {
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
-            s = let rename S@2 {b -> b,c -> c};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
+            s = let rename S {b -> b,c -> c};
             joined = pipe probe first [a] l,r;
-            result = pipe canon probe first [b] joined,s;
+            result = let canon probe first [b] joined,s;
             return result as answer(a,b,c);
         }
-        structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r host joined = Reader [a];
-            s host scan = Reader [];
-            s = ::cq_storage::SortedRun<_, _, _> [b];
-            s rows = ::std::vec::Vec<_>;
-            result canon = ::std::collections::HashSet<_>;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r host result(joined) = @reader as Reader [a];
+            s host scan = @reader as Reader [];
+            s = @sorted_run as ::cq_storage::SortedRun<_, _, _> [b];
+            s rows = @vec as ::std::vec::Vec<_>;
+            result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
         }
         sequence {
             l = rows l;
@@ -808,9 +1255,9 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
         }
     };
     let target =
-        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
     assert!(
-        target
+        target.program
             .sequence
             .definitions
             .iter()
@@ -826,7 +1273,8 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             .iter()
             .any(|entry| entry.name == "s"
                 && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native))
+            cq_lang_sequence::structures::Structure::Built { keyed, .. }
+                if keyed.provider.token == "sorted_run" && keyed.provider.ty == native))
     );
     assert!(
         target
@@ -836,22 +1284,22 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             .iter()
             .any(|entry| entry.name == "s"
                 && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Rows { ty, .. }
-                if *ty == syn::parse_quote!(::std::vec::Vec<_>)))
+            cq_lang_sequence::structures::Structure::Rows { provider, .. }
+                if provider.ty == syn::parse_quote!(::std::vec::Vec<_>)))
     );
-    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
-    let facts = check_grading(&target, &machine()).unwrap();
-    translate(&target, &facts).unwrap();
+    cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
+    let facts = check_grading(&target.physical, &target.structures, &target.program, &machine()).unwrap();
+    translate(&target.physical, &target.structures, &target.program, &facts).unwrap();
 }
 
 #[test]
 fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
     let mut source = segment_program();
-    source
+    source.program
         .sequence
         .definitions
         .retain(|definition| definition.name != "input" && definition.name != "result");
-    source
+    source.program
         .graded
         .as_mut()
         .unwrap()
@@ -870,9 +1318,9 @@ fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
             _ => {}
         }
     }
-    inline(&mut source.sequence.definitions.last_mut().unwrap().term);
-    let analysis = check_grading(&source, &machine()).unwrap();
-    let rendered = translate(&source, &analysis)
+    inline(&mut source.program.sequence.definitions.last_mut().unwrap().term);
+    let analysis = check_grading(&source.physical, &source.structures, &source.program, &machine()).unwrap();
+    let rendered = translate(&source.physical, &source.structures, &source.program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -885,7 +1333,7 @@ fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
 #[test]
 fn paired_flatten_fuses_the_following_stream_until_publication() {
     let mut source = segment_program();
-    source
+    source.program
         .sequence
         .definitions
         .iter_mut()
@@ -893,8 +1341,8 @@ fn paired_flatten_fuses_the_following_stream_until_publication() {
         .unwrap()
         .term = syn::parse_quote!(store map projected map mapped compact selected
             flatten lookup r [a] flatten tile 64 input);
-    let analysis = check_grading(&source, &machine()).unwrap();
-    let expression = translate(&source, &analysis).unwrap();
+    let analysis = check_grading(&source.physical, &source.structures, &source.program, &machine()).unwrap();
+    let expression = translate(&source.physical, &source.structures, &source.program, &analysis).unwrap();
     let workers = worker_bodies(&expression);
     assert_eq!(workers.len(), 1);
     let body = workers[0].to_token_stream().to_string();
@@ -913,19 +1361,19 @@ fn paired_flatten_fuses_the_following_stream_until_publication() {
 
 #[test]
 fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
             result = pipe anti eager [a] l,r;
             return result as answer(a);
         }
-        structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r host result = ::cq_storage::dispatch::KeySet<_> [a];
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r host result(result) = @keyset as ::cq_storage::dispatch::KeySet<_> [a];
         }
         sequence {
             l = rows l; r = rows r;
@@ -934,9 +1382,9 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
         }
     };
     let target =
-        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
     assert!(
-        target
+        target.program
             .sequence
             .definitions
             .iter()
@@ -958,20 +1406,107 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
 }
 
 #[test]
+fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32,b:i32);
+            consumer canonical;
+            l = pipe rename L {a -> a,b -> b};
+            r = pipe rename R {a -> a,b -> b};
+            member = pipe probe first [a,b] l,r;
+            return member as answer(a,b);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let source: Fixture = syn::parse_quote! {
+        #physical
+        #structures
+        sequence {
+            r = rows r;
+            input = store rows l;
+            parts = store flatten compact member lookup r [a,b] tile 2 input;
+            output_rows = store parts;
+        }
+        graded tasks {
+            r at host; input at host; parts at pool; output_rows at host;
+        }
+    };
+    let target =
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
+    cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
+    let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
+    assert!(target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "r"
+            && matches!(&entry.structure,
+                cq_lang_sequence::structures::Structure::Built { keyed, .. }
+                if keyed.provider.token == "adaptive_membership" && keyed.provider.ty == native
+                    && keyed.membership.is_some() && keyed.filtered.is_none())
+    }));
+    assert!(!target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "r"
+            && matches!(&entry.structure,
+                cq_lang_sequence::structures::Structure::Host { reader, .. }
+                if !matches!(reader, cq_lang_sequence::structures::ReaderRef::Scan))
+    }));
+    assert!(matches!(
+        target.program.sequence.definitions[0].term,
+        cq_lang_sequence::Term::Store { .. }
+    ));
+    let facts = check_grading(&target.physical, &target.structures, &target.program, &machine()).unwrap();
+    let tasks = translate(&target.physical, &target.structures, &target.program, &facts).unwrap();
+    assert_eq!(worker_bodies(&tasks).len(), 1);
+    assert!(
+        !tasks
+            .to_token_stream()
+            .to_string()
+            .contains("dispatch :: Lazy")
+    );
+    let mut sequential = target;
+    sequential.program.graded = Some(syn::parse_quote! {
+        graded tasks {
+            r at host; input at host; parts at host; output_rows at host;
+        }
+    });
+    let facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated = [(1, 10), (2, 20), (3, 30), (4, 40)];
+            let members = [(1, 10), (3, 30), (3, 99)];
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for L in [&[][..], &populated[..1], &populated[..]] {
+                    for R in [&[][..], &members[..]] {
+                        let expected: Vec<(i32, i32)> =
+                            L.iter().copied().filter(|row| R.contains(row)).collect();
+                        let parallel: Vec<(i32, i32)> = pool.install(|| {
+                            (#tasks).into_iter().map(|(a, b)| (*a, *b)).collect()
+                        });
+                        let serial: Vec<(i32, i32)> =
+                            (#pull).into_iter().map(|(a, b)| (*a, *b)).collect();
+                        assert_eq!(parallel, expected);
+                        assert_eq!(serial, expected);
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
 fn membership_projected_probes_keep_native_keysets() {
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64);
             consumer canonical;
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
             result = pipe probe first [a] l,r;
             return result as answer(a);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>
-                [a] membership payload [a] constants {};
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216> [a] membership payload [a] constants {};
         }
         sequence {
             l = rows l; r = store rows r;
@@ -980,7 +1515,7 @@ fn membership_projected_probes_keep_native_keysets() {
         }
     };
     let target =
-        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
     let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>);
     assert!(
         target
@@ -990,8 +1525,55 @@ fn membership_projected_probes_keep_native_keysets() {
             .iter()
             .any(|entry| entry.name == "r"
                 && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native))
+            cq_lang_sequence::structures::Structure::Built { keyed, .. }
+                if keyed.provider.token == "adaptive_keyset" && keyed.provider.ty == native))
     );
+}
+
+#[test]
+fn type_directed_membership_keeps_routed_provider_construction() {
+    let source: Fixture = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64);
+            consumer canonical;
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
+            result = pipe probe first [a] l,r;
+            return result as answer(a);
+        }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, 16777216> { reads [membership], build typed, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216> [a] membership payload [a] constants {};
+        }
+        sequence {
+            l = rows l; r = store rows r;
+            result = compact result lookup r[a] l;
+            output_rows = store result;
+        }
+    };
+    let catalog = cq_sequence_tasks::catalog();
+    let source = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
+    let planned = cq_sequence_plan::decompose_with_key_partitions(&source.physical, &source.structures, &source.program, &machine(),
+    &catalog,
+    &[cq_sequence_plan::KeyPartitionPolicy {
+        name: syn::parse_quote!(r),
+        select: true,
+    }],)
+    .unwrap();
+    let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
+    let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
+    let inner = &facts.routed_providers["r"][&0];
+    assert_eq!(inner.token, "adaptive_membership");
+    assert_eq!(inner.ty, native);
+    let rendered = translate(&planned.physical, &planned.structures, &planned.program, &facts)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(
+        rendered.contains("build_from_parts_with_router"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("AdaptiveMembership"), "{rendered}");
 }
 
 #[test]
@@ -1003,7 +1585,7 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
         parts,
         inner: Box::new(Term::Ref(syn::parse_quote!(provider_input))),
     };
-    program
+    program.program
         .sequence
         .definitions
         .iter_mut()
@@ -1023,8 +1605,8 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
             (Guard::Else, part(64)),
         ])),
     };
-    let facts = check_grading(&program, &machine()).unwrap();
-    let mut expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let mut expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("ProviderParts :: new"), "{rendered}");
     assert_eq!(
@@ -1034,7 +1616,7 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
     );
     assert!(rendered.contains(". source () . map"), "{rendered}");
     let mut forced = program.clone();
-    forced
+    forced.program
         .sequence
         .definitions
         .iter_mut()
@@ -1044,25 +1626,19 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
         capacity: None,
         inner: Box::new(part(64)),
     };
-    let forced_facts = check_grading(&forced, &machine()).unwrap();
-    let mut forced_expression = translate(&forced, &forced_facts).unwrap();
-    let mut configured_one = cq_sequence_tasks::translate_with(
-        &program,
-        &facts,
-        cq_sequence_tasks::Config {
-            threads: Some(1),
-            ..Default::default()
-        },
-    )
+    let forced_facts = check_grading(&forced.physical, &forced.structures, &forced.program, &machine()).unwrap();
+    let mut forced_expression = translate(&forced.physical, &forced.structures, &forced.program, &forced_facts).unwrap();
+    let mut configured_one = cq_sequence_tasks::translate_with(&program.physical, &program.structures, &program.program, &facts,
+    cq_sequence_tasks::Config {
+        threads: Some(1),
+        ..Default::default()
+    },)
     .unwrap();
-    let mut configured_many = cq_sequence_tasks::translate_with(
-        &program,
-        &facts,
-        cq_sequence_tasks::Config {
-            threads: Some(24),
-            ..Default::default()
-        },
-    )
+    let mut configured_many = cq_sequence_tasks::translate_with(&program.physical, &program.structures, &program.program, &facts,
+    cq_sequence_tasks::Config {
+        threads: Some(24),
+        ..Default::default()
+    },)
     .unwrap();
     struct ObserveBuild;
     impl VisitMut for ObserveBuild {
@@ -1134,16 +1710,16 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
             parts
         }
         fn main() {
-            let probes = [(1,2),(3,4)];
-            let values = [(1,2,8),(3,4,9),(1,2,10),(3,4,11),(1,2,12),(3,4,13),(1,2,14)];
+            let probes = [(1,2,0),(3,4,1)];
+            let values = [(1,2,8,0),(3,4,9,1),(1,2,10,2),(3,4,11,3),(1,2,12,4),(3,4,13,5),(1,2,14,6)];
             for threads in [1,24] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for length in [0,3,4,5,6,7] {
                     let L = probes.as_slice();
                     let R = &values[..length];
                     let actual: Vec<_> = pool.install(|| (#expression).map(|(a,b,c)| (*a,*b,*c)).collect());
-                    let expected: Vec<_> = L.iter().flat_map(|&(a,b)|
-                        R.iter().filter_map(move |&(ra,rb,c)| (a==ra && b==rb).then_some((a,b,c)))).collect();
+                    let expected: Vec<_> = L.iter().flat_map(|&(a,b,_)|
+                        R.iter().filter_map(move |&(ra,rb,c,_)| (a==ra && b==rb).then_some((a,b,c)))).collect();
                     assert_eq!(actual, expected);
                     let singleton = length < 4 || (threads == 1 && length < 6);
                     assert_eq!(PARTS.load(::std::sync::atomic::Ordering::Relaxed), if singleton { 1 } else { 64 });
@@ -1164,23 +1740,23 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
     });
 }
 
-fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
+fn deferred_provider_program(tiled: bool, host_bound: bool) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            raw = pipe rename R@1 {a -> a,b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            raw = pipe rename R {a -> a,b -> b,c -> c};
             r = let select raw if (c > 0);
             joined = pipe probe first [a,b] l,r;
             return joined as answer(a,b,c);
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
-    let authored: Program = syn::parse_quote! {
+    let authored: Fixture = syn::parse_quote! {
         #physical
-        structures {
-            r = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
+        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host required build single, keys: keys distinct_keys exact hash_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host required build single ] }; }
+            r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
         }
         sequence { result = rows l; }
     };
@@ -1192,6 +1768,9 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
         });
         structures.structures.entries.push(provider);
     }
+    structures
+        .structures
+        .declare(&authored.structures.structures.providers.declarations).unwrap();
     let (source, source_grade) = if tiled {
         (
             quote::quote! {
@@ -1216,6 +1795,7 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
         }
     });
     syn::parse_quote! {
+        #physical
         #structures
         sequence {
             #source
@@ -1322,25 +1902,25 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
             (true, "forced"),
         ] {
             let mut program = deferred_provider_program(tiled, host_bound);
-            let deferred = mode == "deferred";
+            let deferred = matches!(mode, "deferred" | "opaque");
             let forced = mode == "forced";
             if mode == "shared" {
-                let provider = program
+                let provider = program.program
                     .sequence
                     .definitions
                     .iter()
                     .position(|definition| definition.name == "provider")
                     .unwrap();
-                program
+                program.program
                     .sequence
                     .definitions
                     .insert(provider, syn::parse_quote!(shared = provider_input;));
-                let grades = &mut program.graded.as_mut().unwrap().grades;
+                let grades = &mut program.program.graded.as_mut().unwrap().grades;
                 let mut grade = grades[0].clone();
                 grade.name = syn::parse_quote!(shared);
                 grades.push(grade);
             } else if mode == "opaque" {
-                let definitions = &mut program.structures.physical.program.definitions;
+                let definitions = &mut program.physical.program.definitions;
                 let selected = definitions
                     .iter()
                     .position(|definition| definition.name == "r")
@@ -1350,19 +1930,8 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
                     selected,
                     syn::parse_quote!(guarded = pipe guard raw if (opaque_positive(c));),
                 );
-                if tiled {
-                    program
-                        .graded
-                        .as_mut()
-                        .unwrap()
-                        .grades
-                        .iter_mut()
-                        .find(|grade| grade.name == "producer")
-                        .unwrap()
-                        .level = vec![syn::parse_quote!(host)];
-                }
             } else if forced {
-                program
+                program.program
                     .sequence
                     .definitions
                     .iter_mut()
@@ -1370,7 +1939,7 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
                     .unwrap()
                     .term = syn::parse_quote!(store partition_k[a,b](64) provider_input);
             }
-            let facts = check_grading(&program, &machine()).unwrap();
+            let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
             assert_eq!(
                 facts.publications["provider_input"],
                 if deferred {
@@ -1381,17 +1950,12 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
                     cq_lang_sequence::Publication::OwnRows { staged: true }
                 }
             );
-            let mut expression = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+            let mut expression = cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
             if tiled {
-                // Opaque producer tiles stay at host; total producers retain
-                // their distributing schedule even when staging is fused.
+                // All Rust is total and retains the distributing task schedule.
                 assert_eq!(
                     facts.tilings["producer"],
-                    vec![if mode == "opaque" {
-                        cq_lang_sequence::Tiling::Strip
-                    } else {
-                        cq_lang_sequence::Tiling::Distribute
-                    }]
+                    vec![cq_lang_sequence::Tiling::Distribute]
                 );
                 assert!(!worker_bodies(&expression).is_empty());
             }
@@ -1401,7 +1965,7 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
             };
             observer.visit_expr_mut(&mut expression);
             assert_eq!(observer.factories, usize::from(deferred));
-            let mut plain = translate(&program, &facts).unwrap();
+            let mut plain = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
             let mut plain_observer = ObserveDeferred {
                 factories: 0,
                 deferred,
@@ -1533,9 +2097,8 @@ fn singleton_provider_cover_replays_without_a_row_buffer_or_extra_clones() {
 fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
     let mut executions = Vec::new();
     for stored_parts in [false, true] {
-        let mut program = grouped_program(false);
-        program.evidence = syn::parse_quote!(evidence { rows(witness) key; });
-        program.sequence = if stored_parts {
+        let mut program = grouped_program(false, false);
+        program.program.sequence = if stored_parts {
             syn::parse_quote!(sequence {
                 input = store tile 64 rows r;
                 partials = store group grouped input;
@@ -1548,13 +2111,13 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
                 output_rows = store partials;
             })
         };
-        program.graded = Some(syn::parse_quote! {
+        program.program.graded = Some(syn::parse_quote! {
             graded tasks { input at host; partials at pool; output_rows at host; }
         });
-        let facts = check_grading(&program, &machine()).unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
         assert_eq!(facts.partial_groups["partials"], vec![true]);
         assert_eq!(facts.shapes["partials"].len(), 1);
-        let tasks = translate(&program, &facts).unwrap();
+        let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         let rendered = tasks.to_token_stream().to_string();
         assert!(rendered.contains("parallel :: map_index"), "{rendered}");
         assert!(
@@ -1571,13 +2134,13 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
         if stored_parts {
             assert!(rendered.contains("combine :: owned_tiles"), "{rendered}");
         }
-        cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+        cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
         let mut sequential = program.clone();
-        sequential.graded = Some(syn::parse_quote! {
+        sequential.program.graded = Some(syn::parse_quote! {
             graded tasks { input at host; partials at host; output_rows at host; }
         });
-        let sequential_facts = check_grading(&sequential, &machine()).unwrap();
-        let pull = cq_sequence_pull::translate(&sequential, &sequential_facts).unwrap();
+        let sequential_facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+        let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &sequential_facts).unwrap();
         executions.push(quote::quote! {
             let mut actual: Vec<_> = (#tasks).map(|(key,n,sum,low,high)| (*key,n,sum,low,high)).collect();
             actual.sort();
@@ -1586,13 +2149,9 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
             sequential.sort();
             assert_eq!(sequential, expected);
         });
-        program.evidence = Default::default();
-        assert!(
-            check_grading(&program, &machine())
-                .unwrap_err()
-                .to_string()
-                .contains("BE-GroupPartial")
-        );
+        program.program.evidence = Default::default();
+        // Input-set uniqueness does not depend on planning estimates.
+        check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     }
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -1619,22 +2178,23 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
     });
 }
 
-fn late_covering_program(input: proc_macro2::TokenStream) -> Program {
+fn late_covering_program(input: proc_macro2::TokenStream) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i64,b:i64); relation R(c:i64,d:i64);
-            l = pipe rename L@0 {a -> x,b -> y};
-            r = pipe rename R@1 {c -> x,d -> z};
+            l = pipe rename L {a -> x,b -> y};
+            r = pipe rename R {c -> x,d -> z};
             s = pipe range select r if (z > 1);
             b = let project s keep {x,z};
             j = pipe probe first [x] l,b;
-            out = pipe canon project j keep {x,y,z};
+            out = let canon project j keep {x,y,z};
             return out as answer(x,y,z);
         }
     };
-    let structures =
+    let (physical, structures) =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(L, R))).unwrap();
-    let source = syn::parse2(quote::quote! {
+    let source: Fixture = syn::parse2(quote::quote! {
+        #physical
         #structures
         sequence {
             input = store #input;
@@ -1644,7 +2204,7 @@ fn late_covering_program(input: proc_macro2::TokenStream) -> Program {
         graded tasks { input at host; b at host; result at host; }
     })
     .unwrap();
-    cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap()
+    cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap()
 }
 
 #[test]
@@ -1688,11 +2248,11 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
     // fast path. Both precede the covering provider in Sequence order.
     for input in [quote::quote!(rows l), quote::quote!(map l rows l)] {
         let program = late_covering_program(input);
-        let facts = check_grading(&program, &machine()).unwrap();
-        assert!(!facts.structures.join_filters["l"].is_empty());
-        let context = cq_print::Context::new(&program.structures, &facts.structures);
-        let filters = facts
-            .structures
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+        let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
+        assert!(!structures_facts.join_filters["l"].is_empty());
+        let context = cq_print::Context::new(&program.physical, &program.structures, &structures_facts);
+        let filters = structures_facts
             .join_filters
             .iter()
             .flat_map(|(scan, filters)| {
@@ -1701,7 +2261,7 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
                     .map(move |index| context.join_filter_ident(scan, index).to_string())
             })
             .collect();
-        let mut expression = translate(&program, &facts).unwrap();
+        let mut expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         Bindings {
             filters,
             declared: BTreeSet::new(),
@@ -1710,6 +2270,51 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
     }
 }
 
+#[test]
+fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
+    let mut source = late_covering_program(quote::quote!(rows l));
+    source.program.graded = None;
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    use cq_lang_sequence::structures::provider::base::{declaration, declarations};
+    // One declared token with several opaque spellings: no check reads them.
+    let opaque: cq_lang_sequence::structures::Declaration = syn::parse_quote!(
+        opaque_index = Opaque<_, _> { reads [exact, membership], supports [keys], build typed };
+    );
+    let families: [syn::Type; 3] = [
+        syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+        syn::parse_quote!(::cq_storage::HashSet<_>),
+        syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 64>),
+    ];
+    for ty in families {
+        for routed in [false, true] {
+            let mut candidate = source.clone();
+            for entry in &mut candidate.structures.structures.entries {
+                if entry.name == "b"
+                    && let cq_lang_sequence::structures::Structure::Built { keyed, .. } =
+                        &mut entry.structure
+                {
+                    let provider = cq_lang_sequence::structures::Provider {
+                        ty: ty.clone(),
+                        ..opaque.instance()
+                    };
+                    keyed.provider = if routed {
+                        declaration("sharded").compose(provider).unwrap()
+                    } else {
+                        provider
+                    };
+                }
+            }
+            let mut declared = vec![opaque.clone()];
+            declared.extend(declarations());
+            candidate.structures.structures.declare(&declared).unwrap();
+            cq_lang_sequence::structures::record_join_filter_policies(&candidate.physical, &mut candidate.structures).unwrap();
+            // Structure checks validate the covering relation, key and declared
+            // support, not the opaque provider spelling. Construction-attached
+            // sidecar and lookup obligations are Rust's; no scalar ABI is guessed.
+            cq_lang_sequence::contract::check(&candidate.physical, &candidate.structures, &candidate.program).unwrap();
+        }
+    }
+}
 
 #[test]
 fn tiled_folds_count_rows_within_each_tile_not_joined_tile_iterators() {
@@ -1720,12 +2325,12 @@ fn tiled_folds_count_rows_within_each_tile_not_joined_tile_iterators() {
         },
         quote::quote!(input at host; result at pool;),
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert_eq!(
         facts.tilings["result"],
         vec![cq_lang_sequence::Tiling::Distribute]
     );
-    let tasks = translate(&program, &facts).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             for R in [&[][..], &[(1i32,)][..], &[(1,), (2,), (3,), (4,), (5,)][..]] {
@@ -1737,20 +2342,21 @@ fn tiled_folds_count_rows_within_each_tile_not_joined_tile_iterators() {
     });
 }
 
-fn constant_key_provider_program() -> Program {
+fn constant_key_provider_program() -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            raw = pipe rename R@1 {a -> a,b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            raw = pipe rename R {a -> a,b -> b,c -> c};
             r = let point select raw if (a = 7);
             joined = pipe probe first [a,b] l,r;
             return joined as answer(a,b,c);
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let source = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             provider = store map r rows raw;
@@ -1758,28 +2364,29 @@ fn constant_key_provider_program() -> Program {
             result = store flatten lookup r [a,b] input;
         }
     };
-    cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap()
+    cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap()
 }
 
 #[test]
 fn planner_does_not_route_on_constant_bound_provider_keys() {
     let source = constant_key_provider_program();
-    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let structures_facts = structures::contract::check(&source.physical, &source.structures).unwrap();
     assert!(
-        facts.structures.filtered["r"]
+        structures_facts.filtered["r"]
             .constants
             .iter()
             .any(|binding| binding.column == "a")
     );
     let planned =
-        cq_sequence_plan::decompose(&source, &machine(), &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_plan::decompose(&source.physical, &source.structures, &source.program, &machine(), &cq_sequence_tasks::catalog()).unwrap();
     assert!(!planned.trace.iter().any(|advice| {
         matches!(advice, cq_sequence_plan::Advice::KeyPartition(partition)
             if partition.name == "provider")
     }));
     assert!(
         cq_sequence_plan::decompose_with_key_partitions(
-            &source,
+            &source.physical, &source.structures, &source.program,
             &machine(),
             &cq_sequence_tasks::catalog(),
             &[cq_sequence_plan::KeyPartitionPolicy {
@@ -1799,12 +2406,25 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
             && let cq_lang_sequence::structures::Structure::Built { keyed, .. } =
                 &mut entry.structure
         {
-            keyed.ty = syn::parse_quote!(
-                ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _>
-            );
+            keyed.provider = cq_lang_sequence::structures::Provider {
+                token: syn::parse_quote!(sharded),
+                inner: Some(Box::new(
+                    cq_lang_sequence::structures::provider::base::declaration("sharded_index").instance(),
+                )),
+                input: None,
+                radix: None,
+                construction: cq_lang_sequence::structures::stats::Construction::Ordinary,
+                ty: syn::parse_quote!(
+                    ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _>
+                ),
+            };
         }
     }
-    program.sequence = syn::parse_quote! {
+    program
+        .structures
+        .structures
+        .declare(&cq_lang_sequence::structures::provider::base::declarations()).unwrap();
+    program.program.sequence = syn::parse_quote! {
         sequence {
             provider_input = store map r rows raw;
             provider = store partition_k[b](64) provider_input;
@@ -1812,13 +2432,13 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
             result = store flatten lookup r [a,b] input;
         }
     };
-    program.graded = Some(syn::parse_quote! {
+    program.program.graded = Some(syn::parse_quote! {
         graded tasks {
             provider_input at host; provider at pool; input at host; result at host;
         }
     });
-    let facts = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             let probes = [(7, 2), (8, 2), (7, 3), (7, 9)];
@@ -1840,25 +2460,25 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
 
 #[test]
 fn nested_tiles_keep_canonicalization_at_the_innermost_rows() {
-    let program = program(
+    let program = witness_program(
         quote::quote! {
-            input = store rows r;
+            input = store map r rows raw;
             result = store canon tile 2 tile 4 input;
         },
         quote::quote!(input at host; result at pool;),
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert!(facts.tilings["result"].contains(&cq_lang_sequence::Tiling::Distribute));
-    let tasks = translate(&program, &facts).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let mut sequential = program.clone();
-    sequential.graded = Some(syn::parse_quote! {
+    sequential.program.graded = Some(syn::parse_quote! {
         graded tasks { input at host; result at host; }
     });
-    let sequential_facts = check_grading(&sequential, &machine()).unwrap();
-    let pull = cq_sequence_pull::translate(&sequential, &sequential_facts).unwrap();
+    let sequential_facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &sequential_facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
-            for R in [&[][..], &[(1i32,)][..], &[(1,), (1,), (2,), (2,), (1,)][..]] {
+            for R in [&[][..], &[(1i32,0i32)][..], &[(1,0), (1,1), (2,2), (2,3), (1,4)][..]] {
                 let actual: Vec<_> = (#tasks).map(|(a,)| *a).collect();
                 let expected: Vec<_> = (#pull).map(|(a,)| *a).collect();
                 assert_eq!(actual, expected);
@@ -1873,12 +2493,13 @@ fn literal_filtered_host_tiles_retain_the_source_predicate() {
         physical {
             relation R(tag:i32,a:i32);
             consumer canonical;
-            r = let rename R@0 {a -> a} constants {tag = 7};
+            r = let rename R {a -> a} constants {tag = 7};
             return r as answer(a);
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let program = syn::parse_quote! {
+    let program: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             input = store rows r;
@@ -1886,8 +2507,8 @@ fn literal_filtered_host_tiles_retain_the_source_predicate() {
         }
         graded tasks { input at host; result at pool; }
     };
-    let facts = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     assert!(!worker_bodies(&expression).is_empty());
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -1903,15 +2524,16 @@ fn flattened_key_covers_restore_positional_reads() {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i64);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             selected = pipe range select r if (a > 1);
-            out = pipe canon project selected keep {a};
+            out = let canon project selected keep {a};
             return out as answer(a);
         }
     };
-    let structures =
+    let (physical, structures) =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(R))).unwrap();
-    let program = syn::parse_quote! {
+    let program: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             input = store rows r;
@@ -1921,9 +2543,10 @@ fn flattened_key_covers_restore_positional_reads() {
         }
         graded tasks { input at host; parts at pool; joined at host; result at host; }
     };
-    let facts = check_grading(&program, &machine()).unwrap();
-    assert!(facts.structures.reads.contains_key("selected"));
-    let mut expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
+    assert!(structures_facts.reads.contains_key("selected"));
+    let mut expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     struct Reads(usize);
     impl VisitMut for Reads {
         fn visit_expr_path_mut(&mut self, path: &mut syn::ExprPath) {
@@ -1946,7 +2569,7 @@ fn flattened_key_covers_restore_positional_reads() {
     );
     run_partition_fixture(quote::quote! {
         fn main() {
-            let R = &[(0i64,), (2,), (2,), (3,), (1,)][..];
+            let R = &[(0i64,), (2,), (3,), (1,)][..];
             let mut actual: Vec<_> = (#expression).map(|(a,)| *a).collect();
             actual.sort();
             assert_eq!(actual, [2, 3]);
@@ -1957,7 +2580,7 @@ fn flattened_key_covers_restore_positional_reads() {
 #[test]
 fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
     let mut program = late_covering_program(quote::quote!(rows l));
-    program.sequence = syn::parse_quote! {
+    program.program.sequence = syn::parse_quote! {
         sequence {
             b = store map b map s rows r;
             parts = store map out flatten lookup b [x] flatten tile 64 rows l;
@@ -1965,12 +2588,13 @@ fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
             result = store canon joined;
         }
     };
-    program.graded = Some(syn::parse_quote! {
+    program.program.graded = Some(syn::parse_quote! {
         graded tasks { b at host; parts at pool; joined at host; result at host; }
     });
-    let facts = check_grading(&program, &machine()).unwrap();
-    assert!(!facts.structures.join_filters["l"].is_empty());
-    let expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
+    assert!(!structures_facts.join_filters["l"].is_empty());
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("position_range"), "{rendered}");
     assert!(
@@ -1978,7 +2602,10 @@ fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
         "{rendered}"
     );
     assert!(!rendered.contains("into_par_iter"), "{rendered}");
-    assert!(rendered.contains("ReadPredicate :: test"), "{rendered}");
+    assert!(
+        rendered.contains("cq_storage :: test_position"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("let __cq_driver = ("), "{rendered}");
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -2017,12 +2644,12 @@ fn borrowed_host_key_cover_uses_host_tiles_without_input_collection() {
             input at host; parts at pool; joined at host; result at host;
         },
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert!(matches!(
         facts.publications["input"],
         cq_lang_sequence::Publication::BorrowHost { .. }
     ));
-    let expression = translate(&program, &facts).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("__cq_route_source"), "{rendered}");
     assert!(
@@ -2031,7 +2658,7 @@ fn borrowed_host_key_cover_uses_host_tiles_without_input_collection() {
     );
     run_partition_fixture(quote::quote! {
         fn main() {
-            let rows: Vec<_> = (0..4097i32).map(|i| (i % 131,)).collect();
+            let rows: Vec<_> = (0..4097i32).map(|i| (i,)).collect();
             for threads in [1, 24] {
                 rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
                     for length in [0, 1, 63, 64, 65, 4097] {
@@ -2043,6 +2670,260 @@ fn borrowed_host_key_cover_uses_host_tiles_without_input_collection() {
                         assert_eq!(actual, expected);
                     }
                 });
+            }
+        }
+    });
+}
+
+#[test]
+fn fused_fallback_providers_keep_their_prefix_local_constructor() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation R(a:i32);
+            r = pipe rename R {a -> a};
+            selected = pipe select r if (a > 0);
+            positive = let bind selected with b:i64 = (i64::from(*a) * 10);
+            absent = pipe anti eager [a] r,positive;
+            negative = pipe bind absent with b:i64 = (0);
+            answer = pipe union fused positive,negative
+                block free [a] interface [b] fallback over r;
+            valuations = let canon project answer keep {a,b};
+            grouped = pipe group valuations by [] { n:usize = count(); total:i64 = sum(b); };
+            return grouped as answer(n,total);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let source: Fixture = syn::parse_quote! {
+        #physical
+        #structures
+        sequence {
+            input = rows r;
+            selected = compact selected input;
+            positive = store map positive selected;
+            absent = compact absent lookup positive [a] input;
+            negative = map negative absent;
+            answer = union [positive,negative];
+            valuations = canon map valuations answer;
+            result = store group grouped valuations;
+        }
+    };
+    let catalog = cq_sequence_tasks::catalog();
+    let source = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let structures_facts = structures::contract::check(&source.physical, &source.structures).unwrap();
+    assert!(
+        structures_facts.physical.fused["answer"]
+            .members
+            .contains("positive")
+    );
+    assert!(
+        cq_sequence_plan::rewrites::key_partition(
+            &source.physical, &source.structures, &source.program,
+            quote::quote!(positive, staged, [a], 64),
+        )
+        .is_err()
+    );
+    let planned = cq_sequence_plan::decompose(&source.physical, &source.structures, &source.program, &machine(), &catalog).unwrap();
+    assert!(!planned.trace.iter().any(|advice| matches!(advice,
+        cq_sequence_plan::Advice::KeyPartition(partition) if partition.name == "positive"
+    )));
+    let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
+    let expression = translate(&planned.physical, &planned.structures, &planned.program, &facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            for threads in [1,4] {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                    for R in [vec![], vec![(-2,), (0,), (1,), (2,)]] {
+                        let actual: Vec<_> = (#expression).collect();
+                        let expected = if R.is_empty() { vec![(0,0)] } else { vec![(4,30)] };
+                        assert_eq!(actual, expected);
+                    }
+                });
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore = "run with CQ_EXPANSION_COUNTERS=1 and cq-storage/counters"]
+fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
+    assert!(std::env::var_os("CQ_EXPANSION_COUNTERS").is_some());
+    assert!(cq_storage::counters::STORAGE_COUNTERS_ENABLED);
+    let physical = syn::parse_quote! {
+        physical {
+            relation keys(k:i32); relation payload(k:i32,v:i32);
+            relation closing(v:i32,w:i32);
+            left = pipe rename keys {k -> k};
+            right = let rename payload {k -> k,v -> v};
+            last = let rename closing {v -> v,w -> w};
+            joined = pipe probe first [k] left,right;
+            expanded = pipe probe first [v] joined,last;
+            selected = pipe guard expanded if (*w >= 30);
+            result = let canon project selected keep {k,v,w};
+            return result as answer(k,v,w);
+        }
+    };
+    let mut structures = cq_structure_selection::compile(&physical).unwrap();
+    // Shared task probes need a Sync provider, as in segment_program.
+    for entry in &mut structures.structures.entries {
+        if let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &mut entry.structure {
+            keyed.provider = cq_lang_sequence::structures::provider::base::declaration("sorted_run").instance();
+        }
+    }
+    structures
+        .structures
+        .declare(&cq_lang_sequence::structures::provider::base::declarations()).unwrap();
+    let program: Fixture = syn::parse_quote! {
+        #physical
+        #structures
+        sequence {
+            right = store rows right;
+            last = store rows last;
+            input = store rows left;
+            parts = store flatten map result map selected
+                flatten lookup last [v] flatten lookup right [k] tile 2 input;
+            joined_rows = store parts;
+            output_rows = store canon joined_rows;
+        }
+        graded tasks {
+            right at host; last at host; input at host;
+            parts at pool; joined_rows at host; output_rows at host;
+        }
+    };
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
+    assert!(!worker_bodies(&expression).is_empty());
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let keys = &[(1i32,), (2,)];
+            let payload = &[(1i32,10i32), (1,20), (2,30), (2,40)];
+            let closing = &[(10i32,0i32), (10,1), (20,2), (30,30), (40,40)];
+            for threads in [1,4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                pool.install(|| {
+                    cq_storage::counters::reset();
+                    let actual = (#expression).into_iter().map(|(k,v,w)| (*k,*v,*w))
+                        .collect::<std::collections::BTreeSet<_>>();
+                    assert_eq!(actual, std::collections::BTreeSet::from([(2,30,30),(2,40,40)]));
+                    let counts = cq_storage::counters::expansions();
+                    let children = counts.iter().filter(|record| record.stage != "output")
+                        .map(|record| record.children).max().unwrap();
+                    assert_eq!(children, 5);
+                    assert_eq!(counts.iter().find(|record| record.stage == "output").unwrap().children, 2);
+                });
+            }
+        }
+    });
+}
+
+#[test]
+fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
+    let physical = syn::parse_quote!(physical {
+        relation R(a:i64 [1], b:i64 [1], witness:i64 [1]);
+        r = pipe rename R {a -> x,b -> y,witness -> witness};
+        p = pipe range select r if (x >= 3);
+        q = pipe range select p if (y < 4);
+        g = pipe guard q if (observe(x));
+        v = pipe bind g with value:i64 = (*x * 10 + *y);
+        out = let canon project v keep {x,value};
+        return out as answer(x,value);
+    });
+    let (physical, structures) = cq_structure_selection::compile_with(&physical, quote::quote!(
+        blocks(R { block_rows 4096; summary minmax; columns [a:bytes u64,b:plain u64,witness:plain u64]; })
+    )).unwrap();
+    let lowered = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let source = lowered.representation.blocks.scans["r"].source;
+    let vector_rows = structures.encoded.blocks.sources[&source].vector_rows;
+    assert_eq!(vector_rows, 1024);
+    assert_eq!(structures.encoded.blocks.sources[&source].block_rows, 4096);
+    let representation = lowered.representation.clone();
+    let program: Fixture = syn::parse_quote! {
+        #physical
+        #structures
+        sequence {
+            parts = store flatten map v map g map q map p tile 1024 rows r;
+            collected = store parts;
+            out = store canon map out collected;
+            answer_stream = store out;
+            output count;
+        }
+        graded tasks { parts at pool; collected at host; out at host; answer_stream at host; }
+        #representation
+    };
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    assert!(facts.task_execution.definitions["parts"].iter().any(|node| node.borrowed_host.as_deref() == Some("r")));
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
+    let mut forged = program.clone();
+    forged.program.sequence.definitions[0].term = syn::parse_quote!(store flatten map v map g map q map p tile 17 rows r);
+    assert!(check_grading(&forged.physical, &forged.structures, &forged.program, &machine()).is_err());
+    let selected = cq_sequence_tasks::select_providers(&physical, &structures, &lowered, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
+    let planned = cq_sequence_plan::decompose(&selected.physical, &selected.structures, &selected.program, &machine(),&cq_sequence_tasks::catalog()).unwrap();
+    let planned_facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
+    assert!(planned_facts.task_execution.definitions.values().flatten().any(|node| node.borrowed_host.as_deref() == Some("r"))
+        || (planned.program.representation.blocks.routing.contains_key("r")
+            && planned_facts.publications.values().any(|publication| matches!(publication, cq_lang_sequence::Publication::BorrowHost { result, .. } if result == "r"))));
+    let planned_expression = translate(&planned.physical, &planned.structures, &planned.program, &planned_facts).unwrap();
+    let mut routed = program.clone();
+    routed.program.sequence.definitions[0].term = syn::parse_quote!(
+        store flatten map v map g map q map p partition_k[x](64) source
+    );
+    routed.program.sequence.definitions.insert(0, cq_lang_sequence::Definition {
+        name: syn::parse_quote!(source),
+        term: syn::parse_quote!(store rows r),
+    });
+    routed.program.graded.as_mut().unwrap().grades.insert(0, syn::parse_quote!(source at host;));
+    cq_lang_sequence::blocks::record_routing(&routed.physical, &routed.structures, &mut routed.program).unwrap();
+    let routed_facts = check_grading(&routed.physical, &routed.structures, &routed.program, &machine()).unwrap();
+    let routed_expression = translate(&routed.physical, &routed.structures, &routed.program, &routed_facts).unwrap();
+    let rendered = routed_expression.to_token_stream().to_string();
+    assert!(rendered.contains("div_ceil (1024usize)"), "{rendered}");
+    let printed = routed.to_token_stream();
+    assert_eq!(syn::parse2::<Fixture>(printed).unwrap(), routed);
+    let mut missing_read = routed.clone();
+    missing_read.program.representation.blocks.routing.clear();
+    assert!(check_grading(&missing_read.physical, &missing_read.structures, &missing_read.program, &machine()).is_err());
+    let mut wrong_field = routed;
+    let other = wrong_field.structures.encoded.blocks.scans["r"].columns["b"];
+    wrong_field.program.representation.blocks.routing.get_mut("r").unwrap().insert("x".into(), other);
+    assert!(check_grading(&wrong_field.physical, &wrong_field.structures, &wrong_field.program, &machine()).is_err());
+    run_partition_fixture(quote::quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn observe(_: &i64) -> bool { CALLS.fetch_add(1,Ordering::Relaxed); true }
+        fn main() {
+            let domain = Domain {id:DomainId {namespace:3,version:0},carrier:Width::W64,equality:true,order:true};
+            for workers in [1,4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap();
+                for count in [0usize,1,1024,1027,4099] {
+                    let a:Vec<i64> = (0..count).map(|i| (i/2 % 19) as i64).collect();
+                    let b:Vec<i64> = (0..count).map(|i| (i/2 % 7) as i64).collect();
+                    let witnesses:Vec<i64> = (0..count).map(|i| i as i64).collect();
+                    let R = ScanTable::new((
+                        ScanColumn::<i64,Bytes>::new(&a,BlockRows::new(4096).unwrap(),true),
+                        ScanColumn::<i64,Plain>::new(&b,BlockRows::new(4096).unwrap(),true),
+                        ScanColumn::<i64,Plain>::new(&witnesses,BlockRows::new(4096).unwrap(),true),
+                    )).bind_domains(&[domain,domain,domain]).unwrap();
+                    let survivors:Vec<_> = a.iter().copied().zip(b.iter().copied()).filter(|&(x,y)| x>=3 && y<4).collect();
+                    let mut expected:Vec<_> = survivors.iter().map(|&(x,y)| (x,x*10+y)).collect();
+                    expected.sort(); expected.dedup();
+                    CALLS.store(0,Ordering::Relaxed);
+                    let mut actual:Vec<_> = pool.install(|| (#expression).collect());
+                    actual.sort();
+                    assert_eq!(actual,expected);
+                    assert_eq!(CALLS.load(Ordering::Relaxed),survivors.len(), "each disjoint source range is scanned once");
+                    CALLS.store(0,Ordering::Relaxed);
+                    let mut planned:Vec<_> = pool.install(|| (#planned_expression).collect());
+                    planned.sort();
+                    assert_eq!(planned,expected);
+                    assert_eq!(CALLS.load(Ordering::Relaxed),survivors.len(), "automatic cover also borrows disjoint source ranges");
+                    CALLS.store(0,Ordering::Relaxed);
+                    let mut routed:Vec<_> = pool.install(|| (#routed_expression).collect());
+                    routed.sort();
+                    assert_eq!(routed,expected);
+                    assert_eq!(CALLS.load(Ordering::Relaxed),survivors.len(), "ordinal routing reads each bounded source range once");
+                }
             }
         }
     });

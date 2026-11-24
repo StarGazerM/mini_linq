@@ -112,15 +112,8 @@ fn adaptive_extremes_budget_edges_and_borrowed_tpc_keys() {
     let borrowed32 =
         AdaptiveKeySet::<_, _, 65>::from_keys([(&-32i32,), (&32i32,)], BorrowedI64TupleCodec);
     assert!(borrowed32.any_in(&(&32,), &(&32,)));
-    #[derive(Clone, Copy)]
-    struct Partial;
-    impl KeyCodec<i64> for Partial {
-        fn ordinal(self, key: &i64) -> Option<u128> {
-            (*key >= 0).then_some(*key as u128)
-        }
-    }
-    let partial = AdaptiveKeySet::<_, _, 128>::from_keys([1, 3], Partial);
-    assert!(partial.any_in(&-1, &2));
+    let disabled = AdaptiveKeySet::<_, _, 128>::from_keys([1i64, 3], NoDense);
+    assert!(disabled.any_in(&-1, &2));
 }
 
 #[test]
@@ -186,17 +179,7 @@ fn codec_full_width_overflow_and_nonclone_keys_are_exact() {
         NoDense,
     );
     assert!(!set.any_in(&NonClone("b".into()), &NonClone("b".into())));
-    #[derive(Clone, Copy)]
-    struct Full;
-    impl KeyCodec<u128> for Full {
-        fn ordinal(self, key: &u128) -> Option<u128> {
-            Some(*key)
-        }
-        fn total(self) -> bool {
-            true
-        }
-    }
-    let full = AdaptiveKeySet::<_, _, 64>::from_keys([0, u128::MAX], Full);
+    let full = AdaptiveKeySet::<_, _, 64>::from_keys([0, u128::MAX], I64Codec);
     assert!(!full.any_in(&1, &(u128::MAX - 1)));
     assert!(full.any_in(&u128::MAX, &u128::MAX));
     assert_eq!(I64Codec.ordinal(&i64::MIN), Some(0));
@@ -223,4 +206,57 @@ fn immutable_adaptive_forms_support_shared_task_reads() {
             assert_eq!(worker.join().unwrap(), (expected, expected));
         }
     });
+}
+
+#[test]
+fn predicate_value_is_identity_for_cloneable_values() {
+    use cq_storage::PredicateValue;
+    let scalar: i32 = 7i32.predicate_value();
+    assert_eq!(scalar, 7);
+    let owned = vec![1i64, 2];
+    let encoded: Vec<i64> = owned.predicate_value();
+    assert_eq!(encoded, owned);
+}
+
+/// Sorted test domain: code = rank, absent exact = `u32::MAX`.
+struct Sorted(Vec<&'static str>);
+
+impl cq_storage::CodeDomain for Sorted {
+    type Value = str;
+    type Code = u32;
+    fn exact(&self, value: &str) -> u32 {
+        self.0
+            .binary_search(&value)
+            .map_or(u32::MAX, |rank| rank as u32)
+    }
+}
+
+impl cq_storage::OrderedCodeDomain for Sorted {
+    fn lower(&self, value: &str) -> u32 {
+        self.0.partition_point(|v| *v < value) as u32
+    }
+    fn upper(&self, value: &str) -> u32 {
+        self.0.partition_point(|v| *v <= value) as u32
+    }
+}
+
+#[test]
+fn domain_functions_encode_through_code_domains() {
+    use cq_storage::domain::{exact, lower, upper};
+    let domain = Sorted(vec!["apple", "cherry", "plum"]);
+    assert_eq!(exact(&domain, "cherry"), 1);
+    assert_eq!(exact(&domain, &String::from("plum")), 2);
+    assert_eq!(exact(&domain, "banana"), u32::MAX);
+    assert_eq!(exact(&&domain, "apple"), 0);
+    // `v < x` ⇔ `code < lower(x)`; `v <= x` ⇔ `code < upper(x)`.
+    assert_eq!((lower(&domain, "cherry"), upper(&domain, "cherry")), (1, 2));
+    assert_eq!((lower(&domain, "banana"), upper(&domain, "banana")), (1, 1));
+    assert_eq!((lower(&domain, "a"), upper(&domain, "zzz")), (0, 3));
+    for (code, value) in domain.0.iter().enumerate() {
+        let code = code as u32;
+        for probe in ["a", "apple", "banana", "cherry", "plum", "zzz"] {
+            assert_eq!(code < lower(&domain, probe), *value < probe);
+            assert_eq!(code < upper(&domain, probe), *value <= probe);
+        }
+    }
 }

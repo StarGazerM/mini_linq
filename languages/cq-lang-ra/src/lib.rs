@@ -1,17 +1,8 @@
-//! RA prime: named relational operators with an ordered Rust ancestry chain.
+//! RA prime: named relational operators and unchanged opaque Rust expressions.
 //!
-//! The denotation is Kleisli over `T X = bottom + Set X`: one panic aborts
-//! evaluation. Rust binds and guards are opaque partial functions of their free
-//! variables. I/O, mutation and evaluation counts are outside this meaning.
-//! Relational laws apply only to relational operators. Moving a relational step
-//! earlier across Rust may shrink its evaluation domain; moving it later is not
-//! allowed. Preserving the Rust chain and every source-before relational step is
-//! a sufficient refinement condition, checked by [`check_rewrite`] for RA′
-//! rewrites and by cq-elaborate for VO elaboration.
-//! These are structural contracts for occurrence-preserving passes, not CQ
-//! equivalence deciders. Declared inputs carry a unique source occurrence:
-//! `rename R@2 { a -> x }`. Checks compare fixed column bindings, equality
-//! closure, relational constraints and their first observing Rust region.
+//! Rust expressions are pure and total by premise and depend only on their free
+//! variables. Structural contracts preserve source renames, relational
+//! predicates and Rust payloads without imposing written-order barriers.
 //! They visit the DAG and its derived headings without unfolding shared rows
 //! or searching for atom mappings. Split-witness wiring admits local set
 //! identities: redundant projections/selections, a join projected to its left
@@ -21,7 +12,7 @@
 //!
 //! This language separates logical query planning from index selection and
 //! Rust execution. Declared relation names are atomic input expressions;
-//! [`Rename`] turns one occurrence into a query-variable heading. Result IDs
+//! [`Rename`] turns one relation into a query-variable heading. Result IDs
 //! such as `r0` are serialized DAG references, not algebra operators or an
 //! assumed prerequisite for relational algebra.
 //!
@@ -31,7 +22,7 @@
 //! data; each independent traversal needs its own cursor state.
 //!
 //! `contract::check` derives headings, types and source identifier bindings
-//! entirely from this program. VO correspondence belongs to cq-elaborate.
+//! entirely from this program. VO correspondence belongs to cq-relational-lowering.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -47,12 +38,10 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only fallback construction proves union arms disjoint; literal values prove nothing.
 //!
-//! `scope[names] @c.j.k` records a Rust step's lexical inputs and source path.
+//! `scope[names]` records a Rust step's lexical inputs.
 //! Prefix Rust reached through a positive semijoin remains outside the arm;
 //! no such context reduction may modify a negated original branch.
 //! Group consumes a set of complete named valuations projected by the frontend,
@@ -97,15 +86,19 @@ pub struct Program {
 /// A named relational-algebra dataflow ending in output metadata.
 ///
 /// ```text
-/// Plan       ::= RelationDecl* Definition* Output
+/// Plan       ::= RelationDecl* Captures Definition* Output
 /// Definition ::= RelationId "=" Operator ";"
 /// Output     ::= "output" RelationId "as" Atom ";"
 /// ```
+///
+/// Captures are the CQ's host-once values (A-Capture), carried unchanged:
+/// never a heading column; the output head and group keys/arguments may name them.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Plan {
     #[parse(cq_syntax::parse_declarations)]
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<cq_syntax::RelationDecl>,
+    pub captures: cq_syntax::Captures,
     #[syn(repeat, until = kw::output)]
     pub definitions: Vec<Definition>,
     pub output: Output,
@@ -153,7 +146,7 @@ pub enum Operator {
     #[parse(peek = kw::select)]
     Select(Box<Select>),
     /// Formal rule RA-For: Generator binds extend rows with fresh iterator
-    /// bindings and retain the opaque Rust ancestry chain.
+    /// bindings wherever their free variables are bound.
     #[parse(peek = kw::bind)]
     Bind(Box<Bind>),
     #[parse(peek = kw::guard)]
@@ -202,23 +195,7 @@ pub struct Output {
 /// Checked headings and column types of all named results.
 pub type Analysis = BTreeMap<String, RelationInfo>;
 pub mod contract {
-    /// Structural facts of a checked relational schedule. DAG nodes refer to
-    /// earlier nodes; VO states its obligations here without running elaboration.
-    #[derive(Default, Clone)]
-    pub struct Schedule {
-        pub(super) nodes: Vec<super::structural::Node>,
-        pub(super) atoms: std::collections::HashMap<usize, super::structural::Atom>,
-        pub(super) chain: Vec<super::structural::Rust>,
-        pub(super) reductions: Vec<super::structural::Reduction>,
-        pub(super) output: Option<usize>,
-        pub(super) head: String,
-        pub(super) split_nodes: Vec<(usize, usize)>,
-        pub(super) full_reads: Vec<(usize, usize)>,
-        pub(super) row_views: Vec<super::structural::RowView>,
-        pub(super) view_requests: Vec<(usize, usize, bool)>,
-        pub(super) paths: std::collections::BTreeMap<cq_syntax::Occurrence, usize>,
-    }
-
+    /// Formal rule RA-H-Heading: Combine local operator typing with the standalone heading contract.
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
         super::check_in(&program.plan.declarations, &program.plan)
     }
@@ -231,12 +208,11 @@ pub struct RelationInfo {
     pub bindings: BTreeMap<String, Ident>,
     pub heading: Heading,
     pub types: BTreeMap<String, syn::Type>,
+    pub logical_type_ids: BTreeMap<String, cq_syntax::LogicalTypeId>,
     /// Columns introduced by Bind or Group. This records provenance, not the ownership
     /// mode chosen by a realization when subsequent expressions read the column.
     pub computed: BTreeSet<String>,
     operands: Vec<String>,
-    /// Rust nodes on this result's single ancestry chain, in written order.
-    pub chain: Vec<String>,
 }
 
 /// Formal rule WF-RA: Check declarations, local operators, output heading and definition reachability.
@@ -266,6 +242,7 @@ fn check_in<'a>(
             _ => Vec::new(),
         })
         .collect();
+    // Formal rule RA-H-Payloads: Check implicit lexical uses or explicit available scope names.
     let check_uses = |expr: &syn::Expr, heading: &Heading| -> syn::Result<()> {
         if let Some(name) = cq_syntax::rust::known_uses(expr, &logical)
             .difference(heading)
@@ -278,9 +255,10 @@ fn check_in<'a>(
         }
         Ok(())
     };
+    // Formal rule WF-Capture: carried captures bind host names outside every heading.
+    plan.captures.check(&logical)?;
+    let captures = plan.captures.names();
 
-    let mut chain = Vec::<String>::new();
-    let mut occurrences = BTreeSet::new();
     for definition in &plan.definitions {
         let result_name = symbol_name(&definition.result);
         if relations.contains_key(&result_name) {
@@ -295,17 +273,20 @@ fn check_in<'a>(
         // tests/hw4_optional.rs in the root course package requires.
         let (heading, operands) = match &definition.operator {
             // Formal rule RA-Group: Fold the same set of complete named valuations for every aggregate.
+            // Capture keys group by one shared host value; they are not output columns.
             Operator::Group(group) => {
                 let (name, input) = earlier_relation(&group.input, &relations)?;
-                group.check(&input.types)?;
+                group.check(&input.types, &captures)?;
                 let heading = group
                     .keys
                     .iter()
                     .chain(group.aggregates.iter().map(|aggregate| &aggregate.name))
                     .map(symbol_name)
+                    .filter(|name| !captures.contains(name))
                     .collect();
                 (heading, vec![name])
             }
+            // Formal rule RA-H-Unions: Require matching union schemas and valid block context headings.
             Operator::Union(union) => {
                 if union.operands.len() < 2 {
                     return Err(syn::Error::new_spanned(
@@ -319,13 +300,12 @@ fn check_in<'a>(
                 for operand in &union.operands {
                     let (name, info) = earlier_relation(operand, &relations)?;
                     schema
-                        .include(&info.heading, &info.types, &info.computed)
+                        .include(&info.heading, &info.logical_type_ids, &info.computed)
                         .map_err(|message| syn::Error::new_spanned(operand, message))?;
                     heading = Some(info.heading.clone());
                     operands.push(name);
                 }
                 if let Some(origin) = &union.origin {
-                    origin.occurrence.check()?;
                     let free: BTreeSet<_> = origin.free.iter().map(symbol_name).collect();
                     let interface: BTreeSet<_> = origin.interface.iter().map(symbol_name).collect();
                     if free.len() != origin.free.len()
@@ -387,21 +367,11 @@ fn check_in<'a>(
                             "anti key must list distinct columns available in both operands",
                         ));
                     }
-                    check_leibniz(&left.types[&name], column)?;
-                    check_leibniz(&right.types[&name], column)?;
                 }
                 (left.heading.clone(), vec![left_name, right_name])
             }
             Operator::Unit(_) => (Heading::new(), Vec::new()),
             Operator::Rename(rename) => {
-                rename.occurrence.check()?;
-                let occurrence = &rename.occurrence;
-                if !occurrences.insert(occurrence.clone()) {
-                    return Err(syn::Error::new_spanned(
-                        &rename.occurrence,
-                        format!("atom occurrence @{occurrence} is realized more than once"),
-                    ));
-                }
                 let Some(declaration) = declarations.get(&symbol_name(&rename.relation)) else {
                     return Err(syn::Error::new_spanned(
                         &rename.relation,
@@ -453,32 +423,28 @@ fn check_in<'a>(
                         "selection requires a relational constraint",
                     ));
                 }
-                // Formal rule RA-Constraint: Central theta has available columns and checked Eq/Ord premises.
+                // Formal rule RA-Constraint: Central theta has available columns and closed host operands.
                 select.condition.check()?;
                 for c in &select.condition.constraints {
                     for p in c.parameters() {
-                        if input.heading.contains(&symbol_name(p)) {
+                        if !cq_syntax::rust::free_variables(p)
+                            .dependencies(&input.heading)
+                            .is_empty()
+                        {
                             return Err(syn::Error::new_spanned(
                                 p,
-                                "relational parameter names an input column",
+                                "closed relational operand reads an input column",
                             ));
                         }
                     }
                     for column in c.variables() {
                         let n = symbol_name(column);
-                        let Some(ty) = input.types.get(&n) else {
+                        if !input.types.contains_key(&n) {
                             return Err(syn::Error::new_spanned(
                                 column,
                                 format!("selection uses unavailable column `{n}`"),
                             ));
-                        };
-                        check_leibniz(ty, column)?;
-                    }
-                    for column in c.ordered_variables() {
-                        cq_syntax::algebra::check_ord_type(
-                            &input.types[&symbol_name(column)],
-                            column,
-                        )?;
+                        }
                     }
                 }
                 for equality in &select.condition.equalities {
@@ -491,13 +457,17 @@ fn check_in<'a>(
                                 format!("selection uses unavailable column `{name}`"),
                             ));
                         }
-                        check_leibniz(&input.types[&name], column)?;
                     }
                 }
                 (input.heading.clone(), vec![name])
             }
             Operator::Guard(guard) => {
                 let (name, input) = earlier_relation(&guard.input, &relations)?;
+                cq_syntax::capture::check_reference(
+                    guard.capture.as_ref(),
+                    &guard.condition,
+                    &plan.captures,
+                )?;
                 if guard.environment.is_none() {
                     check_uses(&guard.condition, &input.heading)?;
                 }
@@ -508,6 +478,11 @@ fn check_in<'a>(
             }
             Operator::Bind(bind) => {
                 let (name, input) = earlier_relation(&bind.input, &relations)?;
+                cq_syntax::capture::check_reference(
+                    bind.capture.as_ref(),
+                    &bind.expression,
+                    &plan.captures,
+                )?;
                 if bind.environment.is_none() {
                     check_uses(&bind.expression, &input.heading)?;
                 }
@@ -528,6 +503,7 @@ fn check_in<'a>(
         };
 
         let mut types = BTreeMap::new();
+        let mut logical_type_ids = BTreeMap::new();
         if let Operator::Rename(rename) = &definition.operator {
             let declaration = declarations[&symbol_name(&rename.relation)];
             for mapping in &rename.mapping {
@@ -537,6 +513,9 @@ fn check_in<'a>(
                     .find(|c| symbol_name(&c.name) == symbol_name(&mapping.source))
                     .unwrap();
                 types.insert(symbol_name(&mapping.target), column.ty.clone());
+                if let Some(id) = column.logical_type_id {
+                    logical_type_ids.insert(symbol_name(&mapping.target), id);
+                }
             }
         } else {
             for operand in &operands {
@@ -545,8 +524,19 @@ fn check_in<'a>(
                         types.entry(name.clone()).or_insert_with(|| ty.clone());
                     }
                 }
+                for (name, id) in &relations[operand].logical_type_ids {
+                    if heading.contains(name) {
+                        logical_type_ids.entry(name.clone()).or_insert(*id);
+                    }
+                }
             }
         }
+        logical_type_ids.retain(|column, id| {
+            operands.iter().all(|operand| {
+                let input = &relations[operand];
+                !input.heading.contains(column) || input.logical_type_ids.get(column) == Some(id)
+            })
+        });
         let mut computed: BTreeSet<_> = operands
             .iter()
             .flat_map(|r| {
@@ -560,12 +550,14 @@ fn check_in<'a>(
         if let Operator::Bind(bind) = &definition.operator {
             for (name, ty) in bind.binding_types() {
                 types.insert(symbol_name(&name), ty);
+                logical_type_ids.remove(&symbol_name(&name));
                 computed.insert(symbol_name(&name));
             }
         }
         if let Operator::Group(group) = &definition.operator {
             for aggregate in &group.aggregates {
                 types.insert(symbol_name(&aggregate.name), aggregate.ty.clone());
+                logical_type_ids.remove(&symbol_name(&aggregate.name));
                 computed.insert(symbol_name(&aggregate.name));
             }
         }
@@ -595,70 +587,15 @@ fn check_in<'a>(
             }
             _ => (),
         }
-        let mut ancestry = Vec::new();
-        for operand in &operands {
-            let branch = &relations[operand].chain;
-            if ancestry.starts_with(branch) {
-                continue;
-            }
-            if branch.starts_with(&ancestry) {
-                ancestry = branch.clone();
-                continue;
-            }
-            if matches!(definition.operator, Operator::Union(_)) {
-                for name in branch {
-                    if !ancestry.contains(name) {
-                        ancestry.push(name.clone());
-                    }
-                }
-            } else {
-                return Err(syn::Error::new_spanned(
-                    &definition.operator,
-                    "Rust chain nodes must form one ancestry chain",
-                ));
-            }
-        }
-        if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
-            if ancestry != chain
-                && !plan
-                    .definitions
-                    .iter()
-                    .any(|d| matches!(d.operator, Operator::Union(_)))
-            {
-                return Err(syn::Error::new_spanned(
-                    &definition.operator,
-                    "Rust chain nodes must form one ancestry chain in written order",
-                ));
-            }
-            chain.push(result_name.clone());
-            ancestry.push(result_name.clone());
-        }
-        match &definition.operator {
-            Operator::NaturalJoin(_) | Operator::Semijoin(_) => {
-                for name in relations[&operands[0]]
-                    .heading
-                    .intersection(&relations[&operands[1]].heading)
-                {
-                    check_leibniz(&relations[&operands[0]].types[name], &bindings[name])?;
-                    check_leibniz(&relations[&operands[1]].types[name], &bindings[name])?;
-                }
-            }
-            Operator::Project(project) => {
-                for column in &project.attributes {
-                    check_leibniz(&types[&symbol_name(column)], column)?;
-                }
-            }
-            _ => {}
-        }
         relations.insert(
             result_name,
             RelationInfo {
                 bindings,
                 heading,
                 types,
+                logical_type_ids,
                 computed,
                 operands,
-                chain: ancestry,
             },
         );
     }
@@ -671,26 +608,26 @@ fn check_in<'a>(
         ));
     };
 
+    // Formal rule RA-H-Output: Require variable-only output arguments covering exactly the noncapture input heading.
     if plan.output.head.variables().count() != plan.output.head.args.len() {
         return Err(syn::Error::new_spanned(
             &plan.output.head,
             "RA output arguments must be variables; computations belong in final bind nodes",
         ));
     }
+    // Capture arguments read the host value; every other variable is a column.
     let output_attributes = plan
         .output
         .head
         .variables()
         .map(symbol_name)
+        .filter(|name| !captures.contains(name))
         .collect::<BTreeSet<_>>();
     if output_attributes != output.heading {
         return Err(syn::Error::new_spanned(
             &plan.output,
             format!("output `{output_name}` tuple attributes must exactly match its input heading"),
         ));
-    }
-    for column in plan.output.head.variables() {
-        check_leibniz(&output.types[&symbol_name(column)], column)?;
     }
 
     check_all_reachable(plan, &relations, &output_name)?;
@@ -736,7 +673,7 @@ fn check_rename(rename: &Rename, declaration: &cq_syntax::RelationDecl) -> syn::
         constants.check()?;
         for equality in &constants.equalities {
             let source = symbol_name(&equality.left);
-            let Some(column) = declaration
+            let Some(_) = declaration
                 .columns
                 .iter()
                 .find(|c| symbol_name(&c.name) == source)
@@ -752,7 +689,6 @@ fn check_rename(rename: &Rename, declaration: &cq_syntax::RelationDecl) -> syn::
                     "occurrence constant source attribute must not also be mapped",
                 ));
             }
-            check_leibniz(&column.ty, &column.name)?;
             constant_sources.insert(source);
         }
     }
@@ -784,6 +720,7 @@ fn earlier_relation<'a>(
     Ok((name, info))
 }
 
+/// Formal rule RA-H-Declarations: Require declaration validity, earlier unique definitions and full output reachability.
 fn check_all_reachable(
     plan: &Plan,
     relations: &BTreeMap<String, RelationInfo>,
@@ -818,41 +755,43 @@ fn check_all_reachable(
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
-/// Reject known failures of Leibniz admissibility. Generated Rust checks the
-/// necessary trait bounds; admissibility of user implementations is a premise.
-fn check_leibniz(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
-    cq_syntax::algebra::check_leibniz_type(ty, column)
-}
-
-mod constants;
 mod structural;
-pub use constants::disjoint_unions;
+
 
 /// Check local contracts and fixed structural obligations of an RA rewrite.
 ///
-/// A localized identity certificate also accepts absorption of a reduced
-/// operand when exact named-result lineage supplies all shared columns.
-/// It checks the RHS substitution first, then the LHS against the surviving RHS.
-/// It preserves the remaining definitions, Rust payloads and negative ancestry;
-/// independent projected witnesses are never merged to establish containment.
+/// A named identity certificate accepts absorption along a single-consumer,
+/// noncanonicalizing, key-retaining pipe to a later join with the exact support
+/// in its other operand's lineage. It checks successive substitutions from the
+/// current source DAG, preserving remaining definitions and payloads by name.
+/// Shared reductions may also be bypassed when every use is a direct absorbing
+/// join; all uses are replaced together, never only some shared consumers.
+/// Neither earlier VO positions nor topological serialization order are evidence.
 /// For entirely Rust-free, block-free positive programs, a separate certificate
 /// replays dead expansion to a semijoin and bypass of a support
 /// already witnessed by exact named lineage. Source-side demand preserves
 /// downstream implicit join keys as well as projections, selections and output.
 /// These are set (under-canonicalization) laws, not bag or Rust execution laws.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    let source_schedule = contract::Schedule::from_program(source)?;
-    let target_schedule = contract::Schedule::from_program(target)?;
+    let mut atoms = structural::Atoms::default();
+    let source_schedule = structural::Structure::from_program(source, &mut atoms)?;
+    let target_schedule = structural::Structure::from_program(target, &mut atoms)?;
     if source.plan.declarations != target.plan.declarations {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             "RA rewrite changes declarations",
         ));
     }
+    if source.plan.captures != target.plan.captures {
+        return Err(syn::Error::new_spanned(
+            &target.plan.output,
+            "RA rewrite changes captures",
+        ));
+    }
     source_schedule
-        .check(&target_schedule, &[])
+        .check(&target_schedule)
         .or_else(|message| {
-            if structural::check_reduction_rewrite(source, target, &source_schedule) {
+            if structural::check_reduction_rewrite(source, target, &source_schedule, &mut atoms) {
                 Ok(())
             } else {
                 Err(message)

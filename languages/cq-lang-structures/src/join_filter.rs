@@ -7,7 +7,7 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct JoinFilter {
-    pub ty: syn::Type,
+    pub provider: Provider,
     pub build_token: kw::build,
     pub build: Ident,
     pub key: Level,
@@ -15,6 +15,209 @@ pub struct JoinFilter {
     pub covering: Ident,
     pub marker_token: kw::marker,
     pub marker: syn::Type,
+    pub policy: Policy,
+}
+
+/// The one recorded activation decision of a join filter (STR-FilterPolicy).
+/// `policy always` builds the conservative filter unconditionally;
+/// `policy abandon P of B keys S` activates it only while the covering build's
+/// exact key count S is at most P% of the positional base B. `keys key_count`
+/// reads `cq_storage::Keys::key_count` (constant cost; it completes a deferred
+/// build); `keys ACCESSOR` reads a declared optional exact statistic whose
+/// absence selects identity. Representation stays a provider-token fact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Policy {
+    pub policy_token: kw::policy,
+    pub activation: Activation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Activation {
+    Always(kw::always),
+    Abandon(Abandon),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Abandon {
+    pub abandon_token: kw::abandon,
+    pub percent: syn::LitInt,
+    pub of_token: kw::of,
+    pub base: Ident,
+    pub keys_token: kw::keys,
+    pub keys: KeySource,
+}
+
+/// The exact build key count an abandon policy compares.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeySource {
+    KeyCount(kw::key_count),
+    Statistic(Ident),
+}
+
+impl Policy {
+    pub fn always() -> Self {
+        syn::parse_quote!(policy always)
+    }
+
+    pub fn abandon(&self) -> Option<&Abandon> {
+        match &self.activation {
+            Activation::Abandon(abandon) => Some(abandon),
+            Activation::Always(_) => None,
+        }
+    }
+
+    /// The optional statistic accessor this policy reads, if any.
+    pub fn statistic(&self) -> Option<&Ident> {
+        match self.abandon().map(|abandon| &abandon.keys) {
+            Some(KeySource::Statistic(accessor)) => Some(accessor),
+            _ => None,
+        }
+    }
+}
+
+impl Abandon {
+    pub fn percent(&self) -> usize {
+        self.percent.base10_parse().expect("checked percent")
+    }
+}
+
+impl syn::parse::Parse for Policy {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let policy_token = input.parse()?;
+        let activation = if input.peek(kw::always) {
+            Activation::Always(input.parse()?)
+        } else {
+            Activation::Abandon(input.parse()?)
+        };
+        Ok(Self { policy_token, activation })
+    }
+}
+
+impl ToTokens for Policy {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        self.policy_token.to_tokens(tokens);
+        match &self.activation {
+            Activation::Always(always) => always.to_tokens(tokens),
+            Activation::Abandon(abandon) => abandon.to_tokens(tokens),
+        }
+    }
+}
+
+impl syn::parse::Parse for KeySource {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::key_count) {
+            input.parse().map(Self::KeyCount)
+        } else {
+            input.parse().map(Self::Statistic)
+        }
+    }
+}
+
+impl ToTokens for KeySource {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            Self::KeyCount(key_count) => key_count.to_tokens(tokens),
+            Self::Statistic(accessor) => accessor.to_tokens(tokens),
+        }
+    }
+}
+
+/// The abandon threshold join-filter selection records (RPT+'s creation
+/// threshold): a build keeping more than this percent of its population
+/// rarely rejects probe-side rows.
+pub const JOIN_FILTER_ABANDON_PERCENT: usize = 35;
+
+/// Formal rule SEL-FilterPolicy: record every join filter's one policy from
+/// the final positional bases. A filter whose build has a positional lineage
+/// base abandons above [`JOIN_FILTER_ABANDON_PERCENT`] of that base's rows,
+/// comparing `Keys::key_count`, or the provider's declared exact Keys statistic
+/// when authored advice selected a borrowed or attached realization; otherwise
+/// its population is unknown and the policy is `always`. This measured
+/// incumbent is the only automatic policy: P7.3's cost rule may only veto it,
+/// and recorded evidence supports no veto (`doc/PLANNING-REDESIGN.md` P7).
+/// Selecting passes call this after their last join-filter or positional
+/// decision.
+pub fn record_join_filter_policies(physical: &crate::physical::Program, program: &mut Program) -> syn::Result<()> {
+    for entry in &mut program.structures.entries {
+        if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+            filter.policy = Policy::always();
+        }
+    }
+    let facts = contract::check(physical, program)?;
+    let positional = positional_bases(&facts);
+    let percent = proc_macro2::Literal::usize_unsuffixed(JOIN_FILTER_ABANDON_PERCENT);
+    for entry in &mut program.structures.entries {
+        let Structure::JoinFilter { filter, .. } = &mut entry.structure else {
+            continue;
+        };
+        let Some(origin) = facts.lineage.get(&symbol_name(&filter.build)) else {
+            continue;
+        };
+        if !positional.contains(&origin.base) {
+            continue;
+        }
+        let base = Ident::new(&origin.base, proc_macro2::Span::call_site());
+        let realization = facts.facts(&filter.provider);
+        let statistic = (realization.borrowed_filter || realization.attached_filter)
+            .then(|| {
+                let definition = physical.program.definitions.iter()
+                    .find(|definition| definition.name == filter.covering)?;
+                let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &definition.operator else {
+                    return None;
+                };
+                let (provider, _) = facts.built_on(&symbol_name(&filter.build), &names(&keyed.columns))?;
+                facts.facts(provider).statistics.iter().find(|statistic|
+                    statistic.field == stats::Field::Keys
+                        && statistic.precision == stats::Precision::Exact
+                        && statistic.placement == stats::Placement::Host
+                        && statistic.computation == stats::Computation::Build)
+                    .map(|statistic| statistic.accessor.clone())
+            })
+            .flatten();
+        filter.policy = match statistic {
+            Some(accessor) => syn::parse_quote!(policy abandon #percent of #base keys #accessor),
+            None => syn::parse_quote!(policy abandon #percent of #base keys key_count),
+        };
+    }
+    Ok(())
+}
+
+/// Bases read positionally: the bases of recorded reads, selections, key
+/// sets, join-filtered scans and position representations.
+pub fn positional_bases(analysis: &Analysis) -> BTreeSet<String> {
+    analysis
+        .reads
+        .values()
+        .map(|r| symbol_name(&r.origin.base))
+        .chain(
+            analysis
+                .selections
+                .values()
+                .map(|s| symbol_name(&s.origin.base)),
+        )
+        .chain(
+            analysis
+                .keysets
+                .values()
+                .map(|s| symbol_name(&s.origin.base)),
+        )
+        .chain(
+            analysis
+                .join_filters
+                .keys()
+                .map(|scan| analysis.lineage[scan].base.clone()),
+        )
+        .chain(
+            analysis
+                .repr
+                .values()
+                .filter_map(|repr| match repr {
+                    Repr::Positions { bases, .. } => Some(bases),
+                    Repr::Tuples(_) => None,
+                })
+                .flat_map(|bases| bases.iter().map(|base| symbol_name(&base.base))),
+        )
+        .collect()
 }
 
 /// One admissible filter of a covering operator. `filtered` reports a
@@ -28,19 +231,23 @@ pub struct JoinFilterCandidate {
     pub filtered: bool,
 }
 
-/// Every admissible filter of `covering`, one per scalar `i64` key column:
+/// Every admissible filter of `covering`, one per scalar key column:
 /// an eager probe or semijoin into a total single-level exact provider with
-/// declared distinct-key enumeration, whose keys supply the conservative
-/// filter, and whose left operand reaches a scan through an exclusive pipe spine of declarative
-/// selections, projections and the left operands of eager probes/semijoins,
+/// declared distinct-key enumeration. Key enumeration is the provider's
+/// `cq_storage::Keys` obligation, checked by rustc. The default projects these
+/// keys only after activation; explicit attached advice observes exact construction,
+/// and explicit borrowed advice requires a complete scalar run layout without
+/// key allocation. These recorded facts, never provider names, select realization.
+/// The left operand reaches a scan through an
+/// exclusive pipe spine of selections, projections and eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
 pub fn join_filter_candidates(
-    program: &Program,
+    physical: &crate::physical::Program,
+    _program: &Program,
     facts: &Analysis,
     covering: &str,
 ) -> Vec<JoinFilterCandidate> {
-    let defs: BTreeMap<_, _> = program
-        .physical
+    let defs: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -106,11 +313,10 @@ pub fn join_filter_candidates(
     };
     let mut result = Vec::new();
     for key in columns {
-        if ungroup_type(&facts.physical.rows[&build].types[&key]) != &syn::parse_quote!(i64)
-            || facts
-                .filtered
-                .get(&build)
-                .is_some_and(|f| f.constants.iter().any(|c| symbol_name(&c.column) == key))
+        if facts
+            .filtered
+            .get(&build)
+            .is_some_and(|f| f.constants.iter().any(|c| symbol_name(&c.column) == key))
         {
             continue;
         }
@@ -168,8 +374,8 @@ pub fn join_filter_candidates(
     result
 }
 
-/// Formal rule STR-JoinFilter: A conservative scan filter is covered by an exact probe or semijoin on a key containing it, along an exclusive pipe spine.
-pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Result<()> {
+/// Formal rule STR-JoinFilter: A conservative scan filter is covered by an exact probe or semijoin on a key containing it, along an exclusive pipe spine; projected construction is the default, while explicit borrowed and attached realizations are mutually exclusive and borrowing requires a complete scalar run key.
+pub(crate) fn check_join_filters(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<()> {
     for (scan, filters) in &facts.join_filters {
         for filter in filters {
             let covering = symbol_name(&filter.covering);
@@ -182,7 +388,7 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                 key: key.clone(),
                 filtered: false,
             };
-            if !join_filter_candidates(program, facts, &covering)
+            if !join_filter_candidates(physical, program, facts, &covering)
                 .iter()
                 .any(|c| {
                     JoinFilterCandidate {
@@ -196,9 +402,61 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                     "join filter requires an exact covering probe or semijoin on its key, a total build and an exclusive pipe spine to its scan",
                 );
             }
-            concrete_type(&filter.ty)?;
             concrete_type(&filter.marker)?;
+            if facts.facts(&filter.provider).borrowed_filter {
+                let build = symbol_name(&filter.build);
+                let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &physical.program.definitions.iter()
+                    .find(|definition| symbol_name(&definition.name) == covering)
+                    .expect("checked covering operator").operator else { unreachable!() };
+                let columns = names(&keyed.columns);
+                let Some((provider, _)) = facts.built_on(&build, &columns) else {
+                    return error(filter, "STR-JoinFilter: borrowed filter requires its selected run");
+                };
+                if columns != [key.clone()] || !facts.facts(provider).run_filter {
+                    return error(filter, "STR-JoinFilter: borrowed filter requires a declared run view on its complete scalar key");
+                }
+            }
+            check_policy(physical, program, facts, filter)?;
         }
+    }
+    Ok(())
+}
+
+/// Formal rule STR-FilterPolicy: every join filter records exactly one policy;
+/// `abandon P of B` needs 1 ≤ P ≤ 100 and B the build's positional lineage base,
+/// and an optional statistic accessor must be the covering build provider's
+/// declared exact host Keys statistic. Legality only: no selection is rerun.
+fn check_policy(physical: &crate::physical::Program, _program: &Program, facts: &Analysis, filter: &JoinFilter) -> syn::Result<()> {
+    let Some(abandon) = filter.policy.abandon() else {
+        return Ok(());
+    };
+    let percent: usize = abandon.percent.base10_parse()?;
+    let build = symbol_name(&filter.build);
+    let definition = physical.program.definitions.iter()
+        .find(|definition| definition.name == filter.covering).expect("checked cover");
+    let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &definition.operator else { unreachable!() };
+    let Some((provider, _)) = facts.built_on(&build, &names(&keyed.columns)) else {
+        return error(abandon, "STR-FilterPolicy: activation requires selected build");
+    };
+    if let Some(accessor) = filter.policy.statistic()
+        && !facts.facts(provider).statistics.iter().any(|statistic|
+            statistic.field == stats::Field::Keys
+                && statistic.precision == stats::Precision::Exact
+                && statistic.placement == stats::Placement::Host
+                && statistic.computation == stats::Computation::Build
+                && statistic.accessor == *accessor)
+    {
+        return error(abandon, "STR-FilterPolicy: activation requires declared exact optional key statistic");
+    }
+    let population = facts.lineage.get(&build).map(|origin| &origin.base);
+    if !(1..=100).contains(&percent)
+        || population != Some(&symbol_name(&abandon.base))
+        || !positional_bases(facts).contains(&symbol_name(&abandon.base))
+    {
+        return error(
+            abandon,
+            "STR-FilterPolicy: a join filter abandons at a percent of its build's positional lineage base",
+        );
     }
     Ok(())
 }
@@ -207,12 +465,11 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
 /// Validate every recorded witness before sharing its runtime work. A build
 /// name identifies one Physical version; its complete covering key identifies
 /// the source index layout (and therefore the projected key component).
-pub(crate) fn coalesce_join_filters(program: &Program, facts: &mut Analysis) {
+pub(crate) fn coalesce_join_filters(physical: &crate::physical::Program, _program: &Program, facts: &mut Analysis) {
     if facts.join_filters.is_empty() {
         return;
     }
-    let layouts: BTreeMap<_, _> = program
-        .physical
+    let layouts: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -229,8 +486,10 @@ pub(crate) fn coalesce_join_filters(program: &Program, facts: &mut Analysis) {
             if filters.iter().any(|previous| {
                 symbol_name(&previous.build) == symbol_name(&filter.build)
                     && names(&previous.key.columns) == names(&filter.key.columns)
-                    && ungroup_type(&previous.ty) == ungroup_type(&filter.ty)
+                    && previous.provider.same_token(&filter.provider)
+                    && ungroup_type(&previous.provider.ty) == ungroup_type(&filter.provider.ty)
                     && ungroup_type(&previous.marker) == ungroup_type(&filter.marker)
+                    && previous.policy == filter.policy
                     && layouts[&symbol_name(&previous.covering)]
                         == layouts[&symbol_name(&filter.covering)]
             }) {

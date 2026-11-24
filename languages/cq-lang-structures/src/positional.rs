@@ -55,13 +55,13 @@ pub enum MembershipSummary {
 }
 #[derive(Clone, Debug)]
 pub struct Selection {
-    pub ty: syn::Type,
+    pub provider: Provider,
     pub origin: Origin,
     pub summary: Summary,
 }
 #[derive(Clone, Debug)]
 pub struct KeySet {
-    pub ty: syn::Type,
+    pub provider: Provider,
     pub key: Vec<String>,
     pub ownership: KeyOwnership,
     pub origin: Origin,
@@ -77,6 +77,7 @@ pub struct Read {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lineage {
     pub base: String,
+    /// Physical rename definition name, not a CQ/VO occurrence path.
     pub occurrence: String,
     pub columns: BTreeMap<String, String>,
 }
@@ -114,10 +115,7 @@ pub fn lineages(
                 l.columns.retain(|c, _| facts.headings[&name].contains(c));
                 l
             }),
-            Operator::Semi(_, k)
-                if !matches!(k.choice, Some(physical::Choice::Lazy(_)))
-                    && result.contains_key(&symbol_name(&k.right)) =>
-            {
+            Operator::Semi(_, k) if !matches!(k.choice, Some(physical::Choice::Lazy(_))) => {
                 result.get(&symbol_name(&k.left)).cloned()
             }
             _ => None,
@@ -133,6 +131,7 @@ pub fn lineages(
     result
 }
 
+/// Formal rule STR-E-Lineage: Compare each recorded origin with total injective independently derived lineage.
 fn check_origin(
     origin: &Origin,
     name: &str,
@@ -162,6 +161,7 @@ fn check_origin(
     Ok(())
 }
 
+/// Formal rule STR-E-Keysets: Record distinct let keys with scalar owned layout and concrete provider ownership.
 pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> syn::Result<bool> {
     let name = symbol_name(&entry.name);
     match &entry.structure {
@@ -176,12 +176,11 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             filters.push(filter.clone());
         }
         Structure::Selection {
-            ty,
+            provider,
             origin,
             summary,
             ..
         } => {
-            concrete_type(ty)?;
             check_origin(origin, &name, program, facts)?;
             if facts.physical.modes[&name] != ModeKind::Let {
                 return error(entry, "selection requires a let occurrence bag");
@@ -191,7 +190,7 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
                 .insert(
                     name,
                     Selection {
-                        ty: ty.clone(),
+                        provider: provider.clone(),
                         origin: origin.clone(),
                         summary: summary.clone(),
                     },
@@ -202,13 +201,12 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             }
         }
         Structure::KeySet {
-            ty,
+            provider,
             key,
             ownership,
             origin,
             ..
         } => {
-            concrete_type(ty)?;
             check_origin(origin, &name, program, facts)?;
             let columns = names(&key.columns);
             if facts.physical.modes[&name] != ModeKind::Let
@@ -220,20 +218,10 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             {
                 return error(entry, "keyset requires distinct columns of an earlier let");
             }
-            for column in &key.columns {
-                cq_syntax::algebra::check_leibniz_type(
-                    &facts.physical.rows[&name].types[&symbol_name(column)],
-                    column,
-                )?;
-            }
-            if matches!(ownership, KeyOwnership::Owned(_))
-                && (columns.len() != 1
-                    || ungroup_type(&facts.physical.rows[&name].types[&columns[0]])
-                        != &syn::parse_quote!(i64))
-            {
+            if matches!(ownership, KeyOwnership::Owned(_)) && columns.len() != 1 {
                 return error(
                     entry,
-                    "owned keyset layout is one i64 scalar; other keys use borrowed tuples",
+                    "owned keyset layout is one scalar; other keys use borrowed tuples",
                 );
             }
             if facts
@@ -241,7 +229,7 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
                 .insert(
                     (name, columns.clone()),
                     KeySet {
-                        ty: ty.clone(),
+                        provider: provider.clone(),
                         key: columns,
                         ownership: ownership.clone(),
                         origin: origin.clone(),
@@ -297,28 +285,28 @@ pub fn condition_column(op: &Operator) -> Option<String> {
     }
 }
 
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
-    let defs: BTreeMap<_, _> = program
-        .physical
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<()> {
+    let defs: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
         .enumerate()
         .map(|(i, d)| (symbol_name(&d.name), (i, d)))
         .collect();
+    // Formal rule STR-E-Selection: Require exact reads throughout each retained positional selection spine.
     for (name, s) in &facts.selections {
         if !matches!(
             defs[name].1.operator,
             Operator::Point(..) | Operator::Range(..) | Operator::Semi(..)
         ) {
             return error(
-                &s.ty,
+                &s.provider,
                 "selection constructor requires a physical condition or semi reduction",
             );
         }
         if facts.retained.contains_key(name) || facts.filtered.contains_key(name) {
             return error(
-                &s.ty,
+                &s.provider,
                 "selection cannot coexist with a tuple buffer or filtered projection",
             );
         }
@@ -375,7 +363,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             });
         if !demanded || !facts.selections.contains_key(name) && !facts.retained.contains_key(name) {
             return error(
-                &set.ty,
+                &set.provider,
                 "keyset requires a membership demand and recorded reusable source rows",
             );
         }
@@ -383,9 +371,14 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
         // of the recorded provider, identical for aliases and builtin spellings.
     }
     // Formal rule STR-Read: A summary names only the existing right build of this reader, earlier in Physical.
+    // Formal rule STR-E-Read: Restrict reads to their Physical predicate or eager semi's earlier scalar owned keyset.
     for (name, read) in &facts.reads {
         let (position, d) = defs[name];
-        if facts.fallbacks.keys().any(|(_, reader, _)| reader == name) {
+        if facts
+            .fallbacks
+            .keys()
+            .any(|(_, reader, _)| reader.result() == Some(name))
+        {
             return error(
                 &d.name,
                 "positional read replaces its native-reader fallback; record only one adapter",
@@ -461,7 +454,10 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                         return error(&d.name, "exact summary requires a recorded earlier keyset");
                     };
                     if !matches!(set.ownership, KeyOwnership::Owned(_)) {
-                        return error(&set.ty, "scalar marker summary requires owned scalar keys");
+                        return error(
+                            &set.provider,
+                            "scalar marker summary requires owned scalar keys",
+                        );
                     }
                 } else if !facts
                     .keysets
@@ -482,7 +478,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             }
         }
     }
-    check_join_filters(program, facts)?;
+    check_join_filters(physical, program, facts)?;
     Ok(())
 }
 

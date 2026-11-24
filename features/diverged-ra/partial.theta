@@ -1,4 +1,0 @@
-relation L(key: i32, value: i32);
-relation R(key: i32, value: i32);
-theta_join L { key -> k, value -> x } with R { key -> k, value -> y } if partial(x, y);
-output answer(x, y);

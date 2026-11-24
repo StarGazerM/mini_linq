@@ -1,0 +1,997 @@
+{
+  "baseline": "c1b75718",
+  "issues": [
+    9,
+    10
+  ],
+  "tests": {
+    "extensions": {
+      "passed": 50,
+      "compile_fail_cases": 12
+    },
+    "datalog": {
+      "passed": 292
+    },
+    "datalog_parallel": {
+      "passed": 105
+    },
+    "workload_extended": {
+      "passed": 33
+    },
+    "workload_typed": {
+      "passed": 5
+    }
+  },
+  "formal": {
+    "rules": 357,
+    "conformance_rows": 389,
+    "design_anchors": 27
+  },
+  "doop_xalan_checks": {
+    "default": {
+      "mini": "full_tuple_sets_equal_to_ascent",
+      "mini-keyed": "full_tuple_sets_equal_to_ascent",
+      "relations": 26
+    },
+    "hoist_invariants": {
+      "mini": "full_tuple_sets_equal_to_ascent",
+      "mini-keyed": "full_tuple_sets_equal_to_ascent",
+      "relations": 26
+    }
+  },
+  "gate_counter_exactness": {
+    "instrumented": true,
+    "baseline": {
+      "aggregate_stats": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "aggregate_two_keys": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "correlated_exists": {
+        "hash_computations": 8,
+        "index_builds": 5,
+        "lookups": 5,
+        "cursor_steps": 19,
+        "rows_enumerated": 11,
+        "distinct_insertions": 0
+      },
+      "correlated_parameter": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "correlated_scalar": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "recursion_closure": {
+        "hash_computations": 37,
+        "index_builds": 3,
+        "lookups": 10,
+        "cursor_steps": 53,
+        "rows_enumerated": 37,
+        "distinct_insertions": 0
+      },
+      "surface_boolean_guard": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 10,
+        "rows_enumerated": 7,
+        "distinct_insertions": 0
+      },
+      "surface_compare": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "surface_computed_head": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "surface_disconnected": {
+        "hash_computations": 10,
+        "index_builds": 2,
+        "lookups": 5,
+        "cursor_steps": 37,
+        "rows_enumerated": 27,
+        "distinct_insertions": 0
+      },
+      "surface_let_chain": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "surface_let_sum": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "surface_self_join": {
+        "hash_computations": 15,
+        "index_builds": 2,
+        "lookups": 6,
+        "cursor_steps": 30,
+        "rows_enumerated": 19,
+        "distinct_insertions": 0
+      },
+      "surface_wildcards": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "union_project": {
+        "hash_computations": 11,
+        "index_builds": 6,
+        "lookups": 6,
+        "cursor_steps": 11,
+        "rows_enumerated": 8,
+        "distinct_insertions": 0
+      },
+      "union_two": {
+        "hash_computations": 12,
+        "index_builds": 6,
+        "lookups": 6,
+        "cursor_steps": 12,
+        "rows_enumerated": 9,
+        "distinct_insertions": 0
+      },
+      "typed_line_filter": {
+        "hash_computations": 8,
+        "index_builds": 1,
+        "lookups": 7,
+        "cursor_steps": 16,
+        "rows_enumerated": 8,
+        "distinct_insertions": 0
+      }
+    },
+    "working": {
+      "aggregate_stats": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "aggregate_two_keys": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "correlated_exists": {
+        "hash_computations": 8,
+        "index_builds": 5,
+        "lookups": 5,
+        "cursor_steps": 19,
+        "rows_enumerated": 11,
+        "distinct_insertions": 0
+      },
+      "correlated_parameter": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "correlated_scalar": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "recursion_closure": {
+        "hash_computations": 37,
+        "index_builds": 3,
+        "lookups": 10,
+        "cursor_steps": 53,
+        "rows_enumerated": 37,
+        "distinct_insertions": 0
+      },
+      "surface_boolean_guard": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 10,
+        "rows_enumerated": 7,
+        "distinct_insertions": 0
+      },
+      "surface_compare": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "surface_computed_head": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "surface_disconnected": {
+        "hash_computations": 10,
+        "index_builds": 2,
+        "lookups": 5,
+        "cursor_steps": 37,
+        "rows_enumerated": 27,
+        "distinct_insertions": 0
+      },
+      "surface_let_chain": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "surface_let_sum": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 9,
+        "rows_enumerated": 6,
+        "distinct_insertions": 0
+      },
+      "surface_self_join": {
+        "hash_computations": 15,
+        "index_builds": 2,
+        "lookups": 6,
+        "cursor_steps": 30,
+        "rows_enumerated": 19,
+        "distinct_insertions": 0
+      },
+      "surface_wildcards": {
+        "hash_computations": 0,
+        "index_builds": 0,
+        "lookups": 0,
+        "cursor_steps": 0,
+        "rows_enumerated": 0,
+        "distinct_insertions": 0
+      },
+      "union_project": {
+        "hash_computations": 11,
+        "index_builds": 6,
+        "lookups": 6,
+        "cursor_steps": 11,
+        "rows_enumerated": 8,
+        "distinct_insertions": 0
+      },
+      "union_two": {
+        "hash_computations": 12,
+        "index_builds": 6,
+        "lookups": 6,
+        "cursor_steps": 12,
+        "rows_enumerated": 9,
+        "distinct_insertions": 0
+      },
+      "typed_line_filter": {
+        "hash_computations": 8,
+        "index_builds": 1,
+        "lookups": 7,
+        "cursor_steps": 16,
+        "rows_enumerated": 8,
+        "distinct_insertions": 0
+      }
+    },
+    "all_counters_equal": true,
+    "scope": "All 16 extended library targets on coverage, empty-input and no-match; typed_line_filter on CSV. Each query executes its golden exactness assertion; storage counters are reset per target."
+  },
+  "paired_timing": {
+    "baseline": "c1b75718",
+    "lock": "/tmp/mini_linq-timing.lock",
+    "series": {
+      "recursion-path-4096": {
+        "commands": {
+          "baseline": [
+            "/data/mini_linq-wt/c7-open-issues/target/c7-evidence/bench-baseline/target/release/c7-recursion-bench-baseline",
+            "4096"
+          ],
+          "working": [
+            "/data/mini_linq-wt/c7-open-issues/target/c7-evidence/bench-working/target/release/c7-recursion-bench-working",
+            "4096"
+          ]
+        },
+        "warmups": {
+          "baseline": {
+            "seconds": 0.554430404,
+            "wall_seconds": 0.555640049977228,
+            "minor_faults": 123157,
+            "major_faults": 0,
+            "stdout": "recursion_ns=554430404 rounds=4096 delta_rows=4096\n",
+            "stderr": ""
+          },
+          "working": {
+            "seconds": 0.552779322,
+            "wall_seconds": 0.5538448530132882,
+            "minor_faults": 123160,
+            "major_faults": 0,
+            "stdout": "recursion_ns=552779322 rounds=4096 delta_rows=4096\n",
+            "stderr": ""
+          }
+        },
+        "pairs": [
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 0.550837242,
+              "wall_seconds": 0.5520918049733154,
+              "minor_faults": 123157,
+              "major_faults": 0,
+              "stdout": "recursion_ns=550837242 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 0.552842113,
+              "wall_seconds": 0.5540699750417843,
+              "minor_faults": 123158,
+              "major_faults": 0,
+              "stdout": "recursion_ns=552842113 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 0.552237936,
+              "wall_seconds": 0.5534833510173485,
+              "minor_faults": 123158,
+              "major_faults": 0,
+              "stdout": "recursion_ns=552237936 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 0.555959324,
+              "wall_seconds": 0.5576354749500751,
+              "minor_faults": 123155,
+              "major_faults": 0,
+              "stdout": "recursion_ns=555959324 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 0.553305021,
+              "wall_seconds": 0.5545583110069856,
+              "minor_faults": 123158,
+              "major_faults": 0,
+              "stdout": "recursion_ns=553305021 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 0.554967025,
+              "wall_seconds": 0.5560419939574786,
+              "minor_faults": 123159,
+              "major_faults": 0,
+              "stdout": "recursion_ns=554967025 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 0.553113766,
+              "wall_seconds": 0.5545430530328304,
+              "minor_faults": 123159,
+              "major_faults": 0,
+              "stdout": "recursion_ns=553113766 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 0.553890203,
+              "wall_seconds": 0.5551823879941367,
+              "minor_faults": 123157,
+              "major_faults": 0,
+              "stdout": "recursion_ns=553890203 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 0.555260799,
+              "wall_seconds": 0.5563582709874026,
+              "minor_faults": 123155,
+              "major_faults": 0,
+              "stdout": "recursion_ns=555260799 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 0.551863121,
+              "wall_seconds": 0.5531346360221505,
+              "minor_faults": 123159,
+              "major_faults": 0,
+              "stdout": "recursion_ns=551863121 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          }
+        ],
+        "working_over_baseline": [
+          1.0036396794681504,
+          0.9933063664204326,
+          1.0030037753805237,
+          0.9985982113498403,
+          0.9938809330568282
+        ],
+        "mean_ratio": 0.9984857931351551,
+        "bootstrap_95_ci": [
+          0.9945945620608724,
+          1.0023770242094376
+        ]
+      },
+      "doop-xalan-invariants": {
+        "commands": {
+          "baseline": [
+            "/data/mini_linq-wt/c7-open-issues/target/c7-evidence/baseline/features/datalog/target/release/doop",
+            "/tmp/doop-data/xalan",
+            "--engine",
+            "mini"
+          ],
+          "working": [
+            "/data/mini_linq-wt/c7-open-issues/features/datalog/target/release/doop",
+            "/tmp/doop-data/xalan",
+            "--engine",
+            "mini"
+          ]
+        },
+        "warmups": {
+          "baseline": {
+            "seconds": 9.272652,
+            "wall_seconds": 12.502299974032212,
+            "minor_faults": 674536,
+            "major_faults": 0,
+            "stdout": "engine=mini threads=1 load_seconds=3.127579 compute_seconds=9.272652 peak_rss_bytes=1700130816\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+            "stderr": ""
+          },
+          "working": {
+            "seconds": 9.326266,
+            "wall_seconds": 12.460662088007666,
+            "minor_faults": 687225,
+            "major_faults": 0,
+            "stdout": "engine=mini threads=1 load_seconds=3.030981 compute_seconds=9.326266 peak_rss_bytes=1700032512\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+            "stderr": ""
+          }
+        },
+        "pairs": [
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 9.31141,
+              "wall_seconds": 12.448029272025451,
+              "minor_faults": 684708,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.031326 compute_seconds=9.311410 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 9.320782,
+              "wall_seconds": 12.432390062022023,
+              "minor_faults": 686350,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.004434 compute_seconds=9.320782 peak_rss_bytes=1700130816\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 9.29693,
+              "wall_seconds": 12.408498689008411,
+              "minor_faults": 686618,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.006320 compute_seconds=9.296930 peak_rss_bytes=1700130816\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 9.253646,
+              "wall_seconds": 12.37060746300267,
+              "minor_faults": 671912,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.011952 compute_seconds=9.253646 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 9.325938,
+              "wall_seconds": 12.463052467035595,
+              "minor_faults": 684695,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.031997 compute_seconds=9.325938 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 9.276789,
+              "wall_seconds": 12.404201284050941,
+              "minor_faults": 682648,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.021349 compute_seconds=9.276789 peak_rss_bytes=1700044800\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 9.300812,
+              "wall_seconds": 12.413043371052481,
+              "minor_faults": 669971,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.005653 compute_seconds=9.300812 peak_rss_bytes=1700143104\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 9.241033,
+              "wall_seconds": 12.347500727046281,
+              "minor_faults": 681078,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.999871 compute_seconds=9.241033 peak_rss_bytes=1700179968\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 9.266053,
+              "wall_seconds": 12.390150435036048,
+              "minor_faults": 682051,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.018053 compute_seconds=9.266053 peak_rss_bytes=1699954688\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 9.26933,
+              "wall_seconds": 12.378504970984068,
+              "minor_faults": 680355,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=3.008659 compute_seconds=9.269330 peak_rss_bytes=1700057088\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          }
+        ],
+        "working_over_baseline": [
+          1.0010065070703578,
+          1.0046775076548207,
+          0.9947298598811187,
+          1.0064688655478236,
+          1.000353656513728
+        ],
+        "mean_ratio": 1.0014472793335698,
+        "bootstrap_95_ci": [
+          0.997844148762381,
+          1.0048875521624039
+        ]
+      }
+    }
+  },
+  "rejected_late_copy_experiment": {
+    "baseline": "c1b75718",
+    "lock": "/tmp/mini_linq-timing.lock",
+    "series": {
+      "recursion-path-4096": {
+        "commands": {
+          "baseline": [
+            "/data/mini_linq-wt/c7-open-issues/target/c7-evidence/bench-baseline/target/release/c7-recursion-bench-baseline",
+            "4096"
+          ],
+          "working": [
+            "/data/mini_linq-wt/c7-open-issues/target/c7-evidence/bench-working/target/release/c7-recursion-bench-working",
+            "4096"
+          ]
+        },
+        "warmups": {
+          "baseline": {
+            "seconds": 0.556234402,
+            "wall_seconds": 0.557464788958896,
+            "minor_faults": 123158,
+            "major_faults": 0,
+            "stdout": "recursion_ns=556234402 rounds=4096 delta_rows=4096\n",
+            "stderr": ""
+          },
+          "working": {
+            "seconds": 0.569509711,
+            "wall_seconds": 0.5706903840182349,
+            "minor_faults": 123158,
+            "major_faults": 0,
+            "stdout": "recursion_ns=569509711 rounds=4096 delta_rows=4096\n",
+            "stderr": ""
+          }
+        },
+        "pairs": [
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 0.557251691,
+              "wall_seconds": 0.5587649809895083,
+              "minor_faults": 123157,
+              "major_faults": 0,
+              "stdout": "recursion_ns=557251691 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 0.565548991,
+              "wall_seconds": 0.5668734000064433,
+              "minor_faults": 123157,
+              "major_faults": 0,
+              "stdout": "recursion_ns=565548991 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 0.568973604,
+              "wall_seconds": 0.5703119589597918,
+              "minor_faults": 123158,
+              "major_faults": 0,
+              "stdout": "recursion_ns=568973604 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 0.554906978,
+              "wall_seconds": 0.5563578280271031,
+              "minor_faults": 123156,
+              "major_faults": 0,
+              "stdout": "recursion_ns=554906978 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 0.550411993,
+              "wall_seconds": 0.5517985710175708,
+              "minor_faults": 123157,
+              "major_faults": 0,
+              "stdout": "recursion_ns=550411993 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 0.570447669,
+              "wall_seconds": 0.5718482029624283,
+              "minor_faults": 123157,
+              "major_faults": 0,
+              "stdout": "recursion_ns=570447669 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 0.569315209,
+              "wall_seconds": 0.5706736120046116,
+              "minor_faults": 123157,
+              "major_faults": 0,
+              "stdout": "recursion_ns=569315209 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 0.553138638,
+              "wall_seconds": 0.5545380400144495,
+              "minor_faults": 123159,
+              "major_faults": 0,
+              "stdout": "recursion_ns=553138638 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 0.552613192,
+              "wall_seconds": 0.5540053090080619,
+              "minor_faults": 123158,
+              "major_faults": 0,
+              "stdout": "recursion_ns=552613192 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 0.571975146,
+              "wall_seconds": 0.5734334400040098,
+              "minor_faults": 123159,
+              "major_faults": 0,
+              "stdout": "recursion_ns=571975146 rounds=4096 delta_rows=4096\n",
+              "stderr": ""
+            }
+          }
+        ],
+        "working_over_baseline": [
+          1.014889681151277,
+          1.0253495208344632,
+          1.0364012344476659,
+          1.0292450570050398,
+          1.0350370825023663
+        ],
+        "mean_ratio": 1.0281845151881623,
+        "bootstrap_95_ci": [
+          1.0211655849611887,
+          1.0344243381810208
+        ]
+      },
+      "doop-xalan-invariants": {
+        "commands": {
+          "baseline": [
+            "/data/mini_linq-wt/c7-open-issues/target/c7-evidence/baseline/features/datalog/target/release/doop",
+            "/tmp/doop-data/xalan",
+            "--engine",
+            "mini"
+          ],
+          "working": [
+            "/data/mini_linq-wt/c7-open-issues/features/datalog/target/release/doop",
+            "/tmp/doop-data/xalan",
+            "--engine",
+            "mini"
+          ]
+        },
+        "warmups": {
+          "baseline": {
+            "seconds": 8.984573,
+            "wall_seconds": 11.993248121987563,
+            "minor_faults": 458302,
+            "major_faults": 0,
+            "stdout": "engine=mini threads=1 load_seconds=2.924643 compute_seconds=8.984573 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+            "stderr": ""
+          },
+          "working": {
+            "seconds": 8.949727,
+            "wall_seconds": 11.920722012000624,
+            "minor_faults": 458277,
+            "major_faults": 0,
+            "stdout": "engine=mini threads=1 load_seconds=2.888424 compute_seconds=8.949727 peak_rss_bytes=1700130816\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+            "stderr": ""
+          }
+        },
+        "pairs": [
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 8.963922,
+              "wall_seconds": 11.928547612973489,
+              "minor_faults": 458476,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.879850 compute_seconds=8.963922 peak_rss_bytes=1700220928\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 9.038833,
+              "wall_seconds": 12.061052402015775,
+              "minor_faults": 458278,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.935990 compute_seconds=9.038833 peak_rss_bytes=1700130816\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 8.931443,
+              "wall_seconds": 11.946140548039693,
+              "minor_faults": 458279,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.928541 compute_seconds=8.931443 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 9.256575,
+              "wall_seconds": 12.272176309023052,
+              "minor_faults": 458308,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.927102 compute_seconds=9.256575 peak_rss_bytes=1700143104\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 8.934612,
+              "wall_seconds": 11.938577817985788,
+              "minor_faults": 458279,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.915228 compute_seconds=8.934612 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 8.936454,
+              "wall_seconds": 11.948444523965009,
+              "minor_faults": 458277,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.925506 compute_seconds=8.936454 peak_rss_bytes=1700130816\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "working",
+              "baseline"
+            ],
+            "working": {
+              "seconds": 9.024239,
+              "wall_seconds": 12.063961189996917,
+              "minor_faults": 458407,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.950801 compute_seconds=9.024239 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "baseline": {
+              "seconds": 8.88458,
+              "wall_seconds": 11.89763242698973,
+              "minor_faults": 458278,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.925673 compute_seconds=8.884580 peak_rss_bytes=1700139008\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          },
+          {
+            "order": [
+              "baseline",
+              "working"
+            ],
+            "baseline": {
+              "seconds": 8.979156,
+              "wall_seconds": 11.98979852697812,
+              "minor_faults": 458277,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.924227 compute_seconds=8.979156 peak_rss_bytes=1700134912\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            },
+            "working": {
+              "seconds": 8.97589,
+              "wall_seconds": 12.002955468022265,
+              "minor_faults": 474235,
+              "major_faults": 0,
+              "stdout": "engine=mini threads=1 load_seconds=2.934822 compute_seconds=8.975890 peak_rss_bytes=1700081664\nMainClass\t1\nMethod_SimpleName\t101877\nMethod_DeclaringType\t101877\nMethod_Modifier\t131778\nMethod_ParamTypes\t101877\nMethod_ReturnType\t101877\nMethod_Descriptor\t101877\nMethodLookup\t433153\nMethodImplemented\t93196\nDirectSubclass\t9693\nSubclass\t19732\nSuperclass\t19732\nSuperinterface\t16524\nSubtypeOf\t53066\nSupertypeOf\t53066\nSubtypeOfDifferent\t41419\nMainMethodDeclaration\t1\nClassInitializer\t2101\nInitializedClass\t974\nAssign\t44536\nVarPointsTo\t2741586\nInstanceFieldPointsTo\t1435800\nStaticFieldPointsTo\t2296\nCallGraphEdge\t20370\nArrayIndexPointsTo\t24852\nReachable\t4425\n",
+              "stderr": ""
+            }
+          }
+        ],
+        "working_over_baseline": [
+          1.0083569446498977,
+          0.9648755614252572,
+          1.0002061645206306,
+          1.0157192574100296,
+          0.9996362687094422
+        ],
+        "mean_ratio": 0.9977588393430514,
+        "bootstrap_95_ci": [
+          0.9805239795270223,
+          1.009829407201924
+        ]
+      }
+    }
+  },
+  "timing_fixture_note": "The original extended_costs::run also executes unrelated negation whose baseline guard-count assertion fails (2048 vs4096); the timing harness reproduces only its recursion-path subcase, retaining reachable-set and rounds/delta assertions.",
+  "reproduction": {
+    "timing_harness_baseline": "use std::{cell::Cell, collections::BTreeSet, time::Instant};\nfn main() {\n    let scale = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();\n    let seed = [(0, )];\n    let edges: Vec<_> = (0..scale as i32).map(|i| (i, i + 1)).collect();\n    let reachable: BTreeSet<_> = (1..=scale as i32).map(|i| (i,)).collect();\n    let rounds = Cell::new(0);\n    let delta_rows = Cell::new(0);\n    let start = Instant::now();\n    let actual: BTreeSet<_> = mini_linq::compile! {\n        pipeline { surface = [cq_ext_recursion::recursion]; }\n        recursion! {\n            observe = |_:usize, rows:usize| { rounds.set(rounds.get()+1); delta_rows.set(delta_rows.get()+rows); };\n            struct Path;\n            relation seed(x:i32);\n            relation edges(x:i32,y:i32);\n            relation reach(x:i32);\n            reach(*y) :- seed(x), edges(x,y); reach(*z) :- reach(y), edges(y,z);\n        }\n    }.collect();\n    let elapsed = start.elapsed();\n    assert_eq!(actual, reachable);\n    assert_eq!(rounds.get(), scale);\n    assert_eq!(delta_rows.get(), scale);\n    println!(\"recursion_ns={} rounds={} delta_rows={}\", elapsed.as_nanos(), rounds.get(), delta_rows.get());\n}\n",
+    "timing_harness_working": "use std::{cell::Cell, collections::BTreeSet, time::Instant};\nfn main() {\n    let scale = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();\n    let seed = [(0, )];\n    let edges: Vec<_> = (0..scale as i32).map(|i| (i, i + 1)).collect();\n    let reachable: BTreeSet<_> = (1..=scale as i32).map(|i| (i,)).collect();\n    let rounds = Cell::new(0);\n    let delta_rows = Cell::new(0);\n    let start = Instant::now();\n    let actual: BTreeSet<_> = mini_linq::compile! {\n        pipeline { surface = [cq_ext_recursion::recursion]; }\n        recursion! {\n            observe = |_:usize, rows:usize| { rounds.set(rounds.get()+1); delta_rows.set(delta_rows.get()+rows); };\n            struct Path;\n            relation seed(x:i32);\n            relation edges(x:i32,y:i32);\n            relation reach(x:i32);\n            reach(y) :- seed(x), edges(x,y); reach(z) :- reach(y), edges(y,z);\n        }\n    }.collect();\n    let elapsed = start.elapsed();\n    assert_eq!(actual, reachable);\n    assert_eq!(rounds.get(), scale);\n    assert_eq!(delta_rows.get(), scale);\n    println!(\"recursion_ns={} rounds={} delta_rows={}\", elapsed.as_nanos(), rounds.get(), delta_rows.get());\n}\n",
+    "counter_verifier": "fn emit(name: &str) {\n    let c = cq_workloads::measurement::snapshot();\n    println!(\"target={} hash_computations={} index_builds={} lookups={} cursor_steps={} rows_enumerated={} distinct_insertions={}\", name, c.hash_computations, c.index_builds, c.lookups, c.cursor_steps, c.rows_enumerated, c.distinct_insertions);\n}\nfn main() {\n    assert!(cq_workloads::measurement::INSTRUMENTED);\n    let checks: &[(&str, fn(cq_workloads::Scenario))] = &[\n        (\"aggregate_stats\", cq_workloads::queries::extended::aggregate_stats::check),\n        (\"aggregate_two_keys\", cq_workloads::queries::extended::aggregate_two_keys::check),\n        (\"correlated_exists\", cq_workloads::queries::extended::correlated_exists::check),\n        (\"correlated_parameter\", cq_workloads::queries::extended::correlated_parameter::check),\n        (\"correlated_scalar\", cq_workloads::queries::extended::correlated_scalar::check),\n        (\"recursion_closure\", cq_workloads::queries::extended::recursion_closure::check),\n        (\"surface_boolean_guard\", cq_workloads::queries::extended::surface_boolean_guard::check),\n        (\"surface_compare\", cq_workloads::queries::extended::surface_compare::check),\n        (\"surface_computed_head\", cq_workloads::queries::extended::surface_computed_head::check),\n        (\"surface_disconnected\", cq_workloads::queries::extended::surface_disconnected::check),\n        (\"surface_let_chain\", cq_workloads::queries::extended::surface_let_chain::check),\n        (\"surface_let_sum\", cq_workloads::queries::extended::surface_let_sum::check),\n        (\"surface_self_join\", cq_workloads::queries::extended::surface_self_join::check),\n        (\"surface_wildcards\", cq_workloads::queries::extended::surface_wildcards::check),\n        (\"union_project\", cq_workloads::queries::extended::union_project::check),\n        (\"union_two\", cq_workloads::queries::extended::union_two::check)\n    ];\n    for (name, check) in checks {\n        cq_workloads::measurement::reset();\n        for scenario in cq_workloads::Scenario::ALL { check(scenario); }\n        emit(name);\n    }\n    cq_workloads::measurement::reset();\n    cq_workloads::queries::typed::typed_line_filter::run(cq_workloads::typed::Source::Csv);\n    emit(\"typed_line_filter\");\n}\n",
+    "pairs_collector": "import fcntl\nimport json\nfrom pathlib import Path\nimport random\nimport re\nimport resource\nimport statistics\nimport subprocess\nimport time\n\nROOT = Path('/data/mini_linq-wt/c7-open-issues')\nEVIDENCE = ROOT / 'target/c7-evidence'\ncommands = {\n    'recursion-path-4096': {\n        label: [str(EVIDENCE / ('bench-' + label) / 'target/release' / ('c7-recursion-bench-' + label)), '4096']\n        for label in ['baseline', 'working']\n    },\n    'doop-xalan-invariants': {\n        'baseline': [str(EVIDENCE / 'baseline/features/datalog/target/release/doop'), '/tmp/doop-data/xalan', '--engine', 'mini'],\n        'working': [str(ROOT / 'features/datalog/target/release/doop'), '/tmp/doop-data/xalan', '--engine', 'mini'],\n    },\n}\n\ndef execute(command):\n    before = resource.getrusage(resource.RUSAGE_CHILDREN)\n    start = time.monotonic()\n    run = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=True)\n    wall = time.monotonic() - start\n    after = resource.getrusage(resource.RUSAGE_CHILDREN)\n    if 'recursion_ns=' in run.stdout:\n        seconds = int(re.search(r'recursion_ns=(\\d+)', run.stdout)[1]) / 1e9\n    else:\n        seconds = float(re.search(r'compute_seconds=([0-9.]+)', run.stdout)[1])\n    return {'seconds': seconds, 'wall_seconds': wall, 'minor_faults': after.ru_minflt-before.ru_minflt, 'major_faults': after.ru_majflt-before.ru_majflt, 'stdout': run.stdout, 'stderr': run.stderr}\n\nresults = {'baseline': 'c1b75718', 'lock': '/tmp/mini_linq-timing.lock', 'series': {}}\nwith open(results['lock'], 'w') as lock:\n    fcntl.flock(lock, fcntl.LOCK_EX)\n    for name, variants in commands.items():\n        warmups = {label: execute(command) for label, command in variants.items()}\n        pairs = []\n        for index in range(5):\n            order = ['baseline', 'working'] if index % 2 == 0 else ['working', 'baseline']\n            pair = {'order': order}\n            for label in order:\n                pair[label] = execute(variants[label])\n            pairs.append(pair)\n        ratios = [pair['working']['seconds'] / pair['baseline']['seconds'] for pair in pairs]\n        rng = random.Random(2119)\n        samples = sorted(statistics.mean(rng.choices(ratios, k=len(ratios))) for _ in range(10000))\n        results['series'][name] = {'commands': variants, 'warmups': warmups, 'pairs': pairs, 'working_over_baseline': ratios, 'mean_ratio': statistics.mean(ratios), 'bootstrap_95_ci': [samples[250], samples[9749]]}\n        print(name, results['series'][name]['mean_ratio'], results['series'][name]['bootstrap_95_ci'], flush=True)\n(EVIDENCE / 'pairs.json').write_text(json.dumps(results, indent=2) + '\\n')\n",
+    "baseline_provisioning": "Read-only git archive c1b75718. Gate baseline git ls-files is supplied by git ls-tree -r --name-only -z of the same commit; all gate hashing, normalization and evidence code is unmodified."
+  },
+  "gate_snapshot": {
+    "targets": 46,
+    "identical": 45,
+    "changed": [
+      {
+        "target": "recursion_closure",
+        "key": "f08024894415afac12cec970f04e2fa25e0c6e8124954e469de47638d1e829e0",
+        "hunk_hashes": [
+          "4591af22497411feb1cd2dbbd57b6b1d3616139c611a6e75d56f7e86865d096f",
+          "ce59b1114d08bb6331b76c9f765ae58c8021c645f8f9e321bae27dc05e921322",
+          "fc538b73500f8682bf88bbbd648c91897027869ed452c570b2e86fefdfa0a80a",
+          "60fbe7586459b48d3f18cc44ff93c94bb086fc0e44e0bd12a862deeeacde8c82"
+        ],
+        "reviewed_class": "c7-relational-projection"
+      }
+    ]
+  },
+  "migrated_recursion_callers": [
+    "features/extensions/cq-ext-recursion/src/expansion.rs (raw-result fixture, shared source fixture, nonlinear/infinite diagnostic fixtures)",
+    "features/extensions/cq-ext-recursion/src/lib.rs (public syntax example)",
+    "features/extensions/conformance/tests/behavior.rs (raw identifiers; multi-seed/multi-step cycles; String ownership, plus alias coverage)",
+    "features/extensions/conformance/tests/oracles.rs (graph-search differential oracle)",
+    "features/extensions/conformance/tests/pipeline.rs (caller-selected printer)",
+    "features/extensions/conformance/tests/ui.py (nonlinear and infinite diagnostics; new old-copy-syntax diagnostic)",
+    "features/workloads/src/extended_costs.rs (recursion-path)",
+    "features/workloads/src/queries/extended/recursion_closure.rs",
+    "features/workloads/src/queries/extended/recursion_reach.rs",
+    "features/workloads/src/queries/extended/recursion_reverse.rs"
+  ],
+  "ownership_confirmation": "Invariant String/alias pull and push executions use existing DL-AnswerOwnership without Datalog printer changes. Recursion records the same source-binder ownership law locally (no dependency on Datalog) and checks uniform owned-head realizations before CQ planning; printers make no ownership decisions."
+}

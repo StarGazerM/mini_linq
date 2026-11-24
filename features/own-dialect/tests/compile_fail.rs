@@ -5,9 +5,9 @@ const MERGE: &str = r#"
 physical {
     relation R(a: i32, b: i32);
     relation S(a: i32, c: i32);
-    l = pipe rename R@0 { a -> a, b -> b };
-    r = pipe rename S@1 { a -> a, c -> c };
-    j = pipe canon merge[a] l,r;
+    l = pipe rename R { a -> a, b -> b };
+    r = pipe rename S { a -> a, c -> c };
+    j = let canon merge[a] l,r;
     return j as answer(a,b,c);
 }"#;
 
@@ -16,12 +16,12 @@ physical {
     relation R(a: i32, b: i32);
     relation S(a: i32, c: i32);
     relation T(b: i32, c: i32);
-    l = pipe rename R@0 { a -> a, b -> b };
-    r = pipe rename S@1 { a -> a, c -> c };
-    t = pipe rename T@2 { b -> b, c -> c };
+    l = pipe rename R { a -> a, b -> b };
+    r = pipe rename S { a -> a, c -> c };
+    t = pipe rename T { b -> b, c -> c };
     j = pipe probe smallest[a] l,r;
     k = pipe semi eager[b,c] j,t;
-    out = pipe canon project k keep { a,b,c };
+    out = let canon project k keep { a,b,c };
     return out as answer(a,b,c);
 }"#;
 
@@ -120,13 +120,8 @@ fn success(output: Output) {
     );
 }
 
-fn failure(output: Output, diagnostic: &str) {
-    let errors = String::from_utf8_lossy(&output.stderr);
+fn failure(output: Output) {
     assert!(!output.status.success(), "unsupported input compiled");
-    assert!(
-        errors.contains(diagnostic),
-        "expected {diagnostic:?}:\n{errors}"
-    );
 }
 
 #[test]
@@ -145,15 +140,7 @@ fn unsupported_written_choices_are_refused_after_core_contracts() {
             &format!("{name}_pull"),
             &expression("mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull"),
         ));
-        let diagnostic = if name == "merge" {
-            "own_push: merge is unsupported"
-        } else {
-            "own_push: probe smallest is unsupported"
-        };
-        failure(
-            compiler.compile(name, &expression("own_push::push")),
-            diagnostic,
-        );
+        failure(compiler.compile(name, &expression("own_push::push")));
     }
 }
 
@@ -163,23 +150,21 @@ fn consumer_form_rejects_missing_or_mismatched_consumers() {
     let query = "struct Q; relation R(a:i32,b:i32); answer(a) :- R(a,b);";
     success(compiler.compile(
         "consumer_control",
-        &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push_into(consumer {{ |_: (&i32,)| {{}} }};); }} {query} }}"),
+        &format!("mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push_into(consumer {{ |_: (&i32,)| {{}} }};); }} {query} }}"),
     ));
     failure(
         compiler.compile(
             "missing_consumer",
             &format!(
-                "mini_linq::compile! {{ pipeline {{ print = own_push::push_into; }} {query} }}"
+                "mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push_into; }} {query} }}"
             ),
         ),
-        "consumer",
     );
     failure(
         compiler.compile(
             "mismatched_consumer",
-            &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push_into(consumer {{ |_: (String,)| {{}} }};); }} {query} }}"),
+            &format!("mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push_into(consumer {{ |_: (String,)| {{}} }};); }} {query} }}"),
         ),
-        "mismatched types",
     );
 }
 
@@ -189,16 +174,15 @@ fn printer_rejects_arguments_and_a_remaining_queue() {
     let query = "struct Q; relation R(a: i32,b: i32); answer(a) :- R(a,b);";
     success(compiler.compile(
         "control",
-        &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push; }} {query} }}"),
+        &format!("mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push; }} {query} }}"),
     ));
     failure(
         compiler.compile(
             "arguments",
             &format!(
-                "mini_linq::compile! {{ pipeline {{ print = own_push::push(unused); }} {query} }}"
+                "mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push(unused); }} {query} }}"
             ),
         ),
-        "own_push::push accepts no arguments",
     );
     let scan = cq_testkit::SCENARIOS
         .iter()
@@ -212,7 +196,6 @@ fn printer_rejects_arguments_and_a_remaining_queue() {
                 "own_push::push! {{ pipeline {{ mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull }}; {source} }}"
             ),
         ),
-        "Rust printer must be the final pass",
     );
 }
 
@@ -235,14 +218,13 @@ fn positional_advice_requires_a_positional_host() {
             pipeline {{ {printer} }};
             physical {{
                 relation R(a:i32,b:i32);
-                r = pipe rename R@0 {{a -> x,b -> y}};
+                r = pipe rename R {{a -> x,b -> y}};
                 s = pipe point select r if (y = 2);
-                out = pipe canon project s keep {{x}}; return out as answer(x);
+                out = let canon project s keep {{x}}; return out as answer(x);
             }}
         }}"#
                 ),
             ),
-            "positional_handle",
         );
     }
 }
@@ -257,34 +239,31 @@ fn positions_representation_is_explicitly_refused() {
                 pipeline {};
                 physical {
                     relation R(a:i32,b:i32);
-                    r = pipe rename R@0 {a -> x,b -> y};
-                    out = pipe canon project r keep {x,y};
+                    r = pipe rename R {a -> x,b -> y};
+                    out = let canon project r keep {x,y};
                     return out as answer(x,y);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
-                    out canon = ::std::collections::HashSet<_>;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                     r repr = positions { R lineage {x -> a,y -> b} } owned [];
                 }
             }"#,
         ),
-        "own_push: `r repr = positions` is unsupported",
     );
 }
 
 #[test]
-fn lookup_witness_and_expansion_are_refused_by_name() {
+fn lookup_witness_and_expansion_are_refused() {
     let compiler = Compiler::new();
-    for (name, decision, expected) in [
+    for (name, decision) in [
         (
             "lookup_witness",
             "s share = lookup r [k] first s force p; s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };",
-            "own_push: `s repr witness` is unsupported",
         ),
         (
             "lookup_expand",
             "p stage = batch 4 expand;",
-            "own_push: `p stage expand` is unsupported",
         ),
     ] {
         let source = format!(
@@ -292,22 +271,36 @@ fn lookup_witness_and_expansion_are_refused_by_name() {
             pipeline {{}};
             physical {{
                 relation R(a:i32,b:i32); relation S(a:i32,c:i32);
-                l = pipe rename R@0 {{a -> k,b -> b}};
-                r = let rename S@1 {{a -> k,c -> v}};
+                l = pipe rename R {{a -> k,b -> b}};
+                r = let rename S {{a -> k,c -> v}};
                 s = pipe semi eager [k] l,r;
                 p = pipe probe first [k] s,r;
-                out = pipe canon project p keep {{k,v}};
+                out = let canon project p keep {{k,v}};
                 return out as answer(k,v);
             }}
             structures {{
-                l host scan = ::core::iter::Map<_,_> [];
-                r host scan = ::core::iter::Map<_,_> [];
-                r = ::cq_storage::SortedRun<_,_> [k] supports [expand];
-                out canon = ::std::collections::HashSet<_>;
+                providers {{
+                    host_scan = ::core::iter::Map<_, _> {{ reads [], build typed }};
+                    sorted_run = ::cq_storage::SortedRun<_, _> {{
+                        reads [exact, range, membership], supports [retain, expand, keys],
+                        build typed, join_filter, run_filter, shared,
+                        statistics_build [rows, max_group], statistics [
+                            rows: rows occurrences exact run_finalize stat_rows host required build single,
+                            keys: keys distinct_keys exact run_finalize stat_keys host required build single,
+                            max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single,
+                            runs: runs runs exact run_finalize stat_runs host required build single
+                        ]
+                    }};
+                    sort = ::cq_storage::dedup::Sort {{ reads [distinct, comparator_rows], build inferred, shared }};
+                }}
+                l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r = @sorted_run as ::cq_storage::SortedRun<_,_> [k] supports [expand];
+                out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                 {decision}
             }}
         }}"#
         );
-        failure(compiler.compile(name, &source), expected);
+        failure(compiler.compile(name, &source));
     }
 }

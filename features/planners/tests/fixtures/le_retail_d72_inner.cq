@@ -8,6 +8,6 @@ relation Customer(c_custkey:i64,c_nationkey:i32);
 relation Nation(n_nationkey:i32);
 answer(order_key,part_key,supplier_key,nation_key) :-
 Orders(order_key,customer_key), Lineitem(order_key,part_key,supplier_key,ship_date,quantity),
-if *ship_date >= start && *ship_date < end, if *quantity > minimum,
-PartSupp(part_key,supplier_key,available), if *available > 0,
+where ship_date >= start, where ship_date < end, where quantity > minimum,
+PartSupp(part_key,supplier_key,available), where available > 0,
 Supplier(supplier_key,nation_key), Part(part_key), Customer(customer_key,nation_key), Nation(nation_key);

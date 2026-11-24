@@ -4,9 +4,24 @@ use cq_datalog_storage::compile as schedule;
 use cq_lang_cq::BodyItem;
 use cq_lang_datalog_round::Program as Fork;
 use cq_lang_datalog_round::cq as cq_lang_cq;
-use cq_lang_datalog_storage::Program;
+use cq_lang_datalog_storage::{self as storage, Program};
 
 use quote::{ToTokens, quote};
+
+/// Planning arguments other than the serialized `ordering(...)` inputs.
+fn without_ordering(arguments: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let mut items = vec![Vec::new()];
+    for token in arguments {
+        match &token {
+            proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ',' => items.push(Vec::new()),
+            _ => items.last_mut().unwrap().push(token),
+        }
+    }
+    let kept = items.into_iter().filter(|item| {
+        !matches!(item.first(), Some(proc_macro2::TokenTree::Ident(name)) if name == "ordering")
+    }).map(|item| item.into_iter().collect::<proc_macro2::TokenStream>());
+    quote!(#(#kept),*)
+}
 
 fn authored() -> Program {
     schedule(&syn::parse_quote! {
@@ -32,6 +47,53 @@ fn authored() -> Program {
 }
 
 #[test]
+fn hole_declarations_preserve_source_domain_ids_in_subsets() {
+    let source = schedule(&syn::parse_quote! {
+        struct Domains;
+        relation Unused(x:u32 in (other)) = (unused);
+        relation Edge(x:u32 in (names),y:u32 in (names)) = (edges);
+        relation Blocked(x:u32 in (names)) = (blocked);
+        relation Reach(x:u32 in (names),y:u32 in (names));
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y), !Blocked(y);
+        strata { component [Reach]; }
+        incremental { scheme seminaive_covering;
+            delta Reach = Recent;
+            variant 0 seed { Reach(*x,*y) :- Edge(x,y), !Blocked(y); }
+        }
+    })
+    .unwrap();
+    let target = compile(&source).unwrap();
+    let domain = source.incremental.strata.source.declarations[1].columns[0]
+        .domain
+        .as_ref()
+        .unwrap()
+        .id;
+    assert_eq!(domain, Some(cq_syntax::DomainId(1)));
+    for hole in &target.holes {
+        let domains: Vec<_> = hole
+            .cq
+            .declarations
+            .iter()
+            .flat_map(|declaration| &declaration.columns)
+            .filter_map(|column| column.domain.as_ref())
+            .collect();
+        assert!(!domains.is_empty());
+        assert!(domains.iter().all(|recorded| recorded.id == domain));
+    }
+    let parsed: Fork = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(parsed, target);
+    check(&source, &parsed).unwrap();
+    let mut changed = target.clone();
+    changed.holes[0].cq.declarations[0].columns[0]
+        .domain
+        .as_mut()
+        .unwrap()
+        .id = Some(cq_syntax::DomainId(0));
+    assert!(check(&source, &changed).is_err());
+}
+
+#[test]
 fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     let source = authored();
     let target = compile(&source).unwrap();
@@ -41,7 +103,9 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     assert_eq!(stratum.keys.len(), 1);
     assert_eq!(stratum.keys[0].columns, [0]);
     assert_eq!(target.holes.len(), 3);
-    assert_eq!(context.layouts.len(), 2);
+    // Two read layouts plus identity canonical layouts for negated Blocked and
+    // derived Reach; read-only Edge names its read layout.
+    assert_eq!(context.layouts.len(), 4);
     for entry in &target.holes {
         let hole = &entry.cq;
         cq_lang_cq::contract::check(hole).unwrap();
@@ -54,16 +118,27 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     let lookup_host = &context.layouts[1].host;
     let keys = &stratum.keys[0].name;
     let binding = &stratum.steps[0].scan.as_ref().unwrap().binding;
+    assert_eq!(context.layouts[1].key, 1);
+    // The grouped `hash_map` lookup and the `hash_set` key set declare their
+    // tokens' host reads on their recorded keys; the pull key hole collects
+    // borrowed key columns, so the key set answers borrowed membership only.
+    // The scan declares none.
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
-        relation #lookup(x:i32,y:i32) = (&#lookup_host);
-        relation #keys(x:i32) = (#keys);
+        relation #lookup(x:i32,y:i32) = (&#lookup_host)
+            host [x] reads [exact, membership, candidates];
+        relation #keys(x:i32) = (#keys) host [x] borrowed reads [membership];
         relation #binding(x:i32,y:i32) = (#binding);
         relation #name(x:i32,y:i32);
         #name(*x,*z) :- #binding(x,y), #lookup(y,z), !#keys(z);
     })
     .unwrap();
     assert_eq!(hole, &expected);
+    // Dropping a declared host read is a misbound input.
+    let mut changed = target.clone();
+    let hole = stratum.steps[0].hole;
+    changed.holes[hole].cq.declarations[0].hosts.clear();
+    assert!(cq_lang_datalog_round::check_storage(&source, &changed).is_err());
 }
 
 #[test]
@@ -141,7 +216,7 @@ fn checker_rejects_schedule_and_layout_mutations() {
     rejected(|t| t.context.observer = Some(syn::parse_quote!(observer)));
     rejected(|t| t.context.relations[2].delta_host = None);
     rejected(|t| t.context.relations[2].delta_host = Some(syn::parse_quote!(Recent)));
-    rejected(|t| t.context.relations[0].all = t.context.relations[1].all.clone());
+    rejected(|t| t.context.relations[0].next_canonical = t.context.relations[1].next.clone());
     rejected(|t| t.context.strata[0].members.clear());
     rejected(|t| t.context.strata[0].steps[0].head = 0);
     rejected(|t| t.context.strata[0].steps[0].variant = 0);
@@ -154,7 +229,7 @@ fn checker_rejects_schedule_and_layout_mutations() {
     rejected(|t| t.context.layouts[0].key = 2);
     rejected(|t| t.context.layouts[1].columns.swap(0, 1));
     rejected(|t| t.context.layouts[0].relation = usize::MAX);
-    rejected(|t| t.context.layouts[0].host = t.context.relations[0].all.clone());
+    rejected(|t| t.context.layouts[0].host = t.context.relations[0].next.clone());
     rejected(|t| t.context.layouts[0].name = syn::parse_quote!(Edge));
     rejected(|t| {
         let hole = t.context.strata[0].steps[0].hole;
@@ -463,7 +538,7 @@ fn owned_negative_constants_are_post_scan_filters_not_owned_prefixes() {
     };
     assert_eq!(atom.variables().count(), 2);
     let variable = &atom.args[0];
-    let expected: BodyItem = syn::parse_quote!(if *#variable == (String::from("static")));
+    let expected: BodyItem = syn::parse_quote!(where #variable == (String::from("static")));
     assert_eq!(hole.query.body[1], expected);
     assert!(
         !hole
@@ -480,55 +555,61 @@ fn owned_negative_constants_are_post_scan_filters_not_owned_prefixes() {
 }
 
 #[test]
-fn literal_key_filter_correspondence_preserves_atom_literals() {
+fn literal_key_filters_are_post_scan_filters() {
     let source = constant_schedule();
     let target = compile(&source).unwrap();
     let key = &target.context.strata[0].keys[0];
     let hole = &target.holes[key.hole].cq;
-    assert_eq!(hole.query.body.len(), 1);
+    assert_eq!(hole.query.body.len(), 2);
     let BodyItem::Positive { atom } = &hole.query.body[0] else {
         unreachable!()
     };
-    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
-    assert_eq!(atom.variables().count(), 1);
+    assert_eq!(atom.variables().count(), 2);
+    let variable = atom.args[0].clone();
+    let expected: BodyItem = syn::parse_quote!(where #variable == ("abstract"));
+    assert_eq!(hole.query.body[1], expected);
     check(&source, &target).unwrap();
     let restored: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
     assert_eq!(&restored, hole);
-    let normal = cq_lang_cq::normal::normalize(hole).unwrap();
-    assert_eq!(normal.query.body.len(), 1);
-    let BodyItem::Positive { atom } = &normal.query.body[0] else {
-        unreachable!()
-    };
-    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
 
     let all_constants = &target.holes[target.context.strata[1].keys[1].hole].cq;
-    assert_eq!(all_constants.query.body.len(), 1);
+    assert_eq!(all_constants.query.body.len(), 3);
     let BodyItem::Positive { atom } = &all_constants.query.body[0] else {
         unreachable!()
     };
-    assert_eq!(atom.variables().count(), 0);
-    assert_eq!(atom.args[1], syn::parse_quote!(7));
+    assert_eq!(atom.variables().count(), 2);
+    let constant = &atom.args[1];
+    let expected: BodyItem = syn::parse_quote!(where #constant == (7));
+    assert!(
+        all_constants
+            .query
+            .body
+            .iter()
+            .skip(1)
+            .any(|item| item == &expected)
+    );
 
-    // A changed literal is still valid CQ, but changes the recorded selection.
+    // A changed filter is still valid CQ, but changes the recorded selection.
     let hole_index = key.hole;
     let mut changed = target;
-    let BodyItem::Positive { atom } = &mut changed.holes[hole_index].cq.query.body[0] else {
-        unreachable!()
-    };
-    atom.args[0] = syn::parse_quote!("changed");
+    changed.holes[hole_index].cq.query.body[1] = syn::parse_quote!(where #variable == ("changed"));
     cq_lang_cq::contract::check(&changed.holes[hole_index].cq).unwrap();
     assert!(check(&source, &changed).is_err());
 }
 
 #[test]
 fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
-    let source =
-        schedule(&syn::parse_str(include_str!("fixtures/written_order.datalog")).unwrap()).unwrap();
+    // This test fixes the admit-hole shape; in-plan holes are covered below.
+    let mut incremental: cq_lang_datalog_round::incremental::Program =
+        syn::parse_str(include_str!("fixtures/written_order.datalog")).unwrap();
+    incremental.variants[4].known = Some(cq_lang_datalog_round::incremental::Known::Admit);
+    let source = schedule(&incremental).unwrap();
     let target = compile(&source).unwrap();
     let context = &target.context;
     let probe = &context.layouts[1];
     assert_eq!(probe.columns, [1, 0]);
     assert_eq!(probe.key, 1);
+    // Read-only Alloc and Assign add no layout; VarPointsTo reuses its lookup.
     assert_eq!(context.layouts.len(), 6);
     assert_eq!(context.delta_layouts.len(), 2);
     let delta_probe = &context.delta_layouts[0];
@@ -563,7 +644,7 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
         struct #name;
         #(#declarations)*
         #name(*heap,*to) :- #assign_scan(to,from),
-            if *to != 0, if 10 / *to > 0,
+            where to != 0, if 10 / *to > 0,
             #probe_name(from,heap), #all_delta(heap,to);
     })
     .unwrap();
@@ -595,7 +676,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
         relation R(x:i32);
         output R;
         R(*x) :- E(x,x,7), E(_,x,(1 + 2));
-        R(*y) :- E(y,7,_), if *y != 0, R(x), E(x,x,7);
+        R(*y) :- E(y,7,_), where y != 0, R(x), E(x,x,7);
         strata { component [R]; }
         incremental { scheme seminaive_covering;
 
@@ -606,8 +687,8 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
 
 
 
-            variant 0 seed { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
-            variant 1 delta 2 { R(*y) :- E(y,7,_), if *y != 0, D(x), E(x,x,7); }
+            variant 0 seed known(admit) { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
+            variant 1 delta 2 known(admit) { R(*y) :- E(y,7,_), where y != 0, D(x), E(x,x,7); }
         }
     })
     .unwrap();
@@ -621,16 +702,20 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
     let stratum = &target.context.strata[0];
     assert!(stratum.seeds[0].scan.is_none());
     assert!(stratum.steps[0].scan.is_none());
-    for (index, body) in [
+    for (index, (delta, permutation), body) in [
         (
             stratum.seeds[0].hole,
+            (None, vec![0, 1]),
             quote!(#first(7,x,x), #second(x,(1 + 2),_)),
         ),
         (
             stratum.steps[0].hole,
-            quote!(#third(7,y,_), if *y != 0, #delta(x), #fourth(x,x,7)),
+            (Some(2), vec![0, 1, 2, 3]),
+            quote!(#third(7,y,_), where y != 0, #delta(x), #fourth(x,x,7)),
         ),
     ] {
+        let planning = target.holes[index].planning.as_ref().unwrap();
+        assert_eq!((planning.delta, &planning.permutation), (delta, &permutation));
         let hole = &target.holes[index].cq;
         let name = &hole.name;
         let declarations = &hole.declarations;
@@ -655,7 +740,8 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
     let target = compile(&source).unwrap();
     let context = &target.context;
     assert_eq!(context.delta_layouts.len(), 4);
-    assert_eq!(context.layouts.len(), 1);
+    // Read-only E keeps its scan layout; R adds its identity canonical layout.
+    assert_eq!(context.layouts.len(), 2);
     let constant = &context.delta_layouts[0].name;
     let keyed = &context.delta_layouts[1].name;
     let zero = &context.delta_layouts[2].name;
@@ -674,12 +760,21 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
         quote!(#recent(x, y, z)),
         quote!(#constant(7,x,y)),
         quote!(#scan2(_,y,_), #keyed(y,x,z)),
-        quote!(#scan3(_,y,_), if *y != 0, if 10 / *y > 0, #keyed(y,x,z)),
+        quote!(#scan3(_,y,_), where y != 0, if 10 / *y > 0, #keyed(y,x,z)),
         quote!(#scan4(a,b,c), #zero(x,y,z)),
         quote!(#scan5(x,y,_), #pair(x,y,z)),
         quote!(#constant(7,x,x)),
     ];
-    for (step, body) in context.strata[0].steps.iter().zip(expected_bodies) {
+    let expected_occurrences = [(0, 1), (0, 1), (1, 2), (3, 4), (1, 2), (1, 2), (0, 1)];
+    for ((step, body), (delta, clauses)) in context.strata[0]
+        .steps
+        .iter()
+        .zip(expected_bodies)
+        .zip(expected_occurrences)
+    {
+        let planning = target.holes[step.hole].planning.as_ref().unwrap();
+        assert_eq!(planning.delta, Some(delta));
+        assert_eq!(planning.permutation, (0..clauses).collect::<Vec<_>>());
         let hole = &target.holes[step.hole].cq;
         let name = &hole.name;
         let declarations = &hole.declarations;
@@ -781,7 +876,7 @@ fn fork_preserves_generators_and_generated_join_values() {
         relation Reach(x:i32);
         output Reach;
         Reach(y) :- Seed(x), for y in [*x, *x];
-        Reach(*z) :- Reach(x), if *x < 3, for y in [*x + 1], Link(y,z);
+        Reach(*z) :- Reach(x), where x < 3, for y in [*x + 1], Link(y,z);
         strata { component [Reach]; }
         incremental { scheme seminaive_covering;
 
@@ -791,7 +886,7 @@ fn fork_preserves_generators_and_generated_join_values() {
 
             variant 0 seed { Reach(y) :- Seed(x), for y in [*x, *x]; }
             variant 1 delta 0 {
-                Reach(*z) :- Recent(x), if *x < 3, for y in [*x + 1], Link(y,z);
+                Reach(*z) :- Recent(x), where x < 3, for y in [*x + 1], Link(y,z);
             }
         }
     })
@@ -822,11 +917,39 @@ fn fork_preserves_generators_and_generated_join_values() {
 }
 
 #[test]
-fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
+fn providers_are_copied_and_key_providers_are_storage_premises() {
     let mut source = authored();
-    source.providers[2].all = syn::parse_quote!(custom::Rows<(i32, i32)>);
-    source.providers[2].all_init = syn::parse_quote!(custom::Rows::new());
-    source.layouts[0].provider = syn::parse_quote!(custom::Index);
+    // Authored providers are declared verbatim tokens; a key-set token
+    // declares membership, so hole inputs are unchanged by the key swap.
+    let custom = |name: &str, protocol, hashed, reads: &[storage::provider::HostRead]| {
+        storage::provider::declared(
+            name,
+            storage::provider::Spelling::Verbatim,
+            protocol,
+            storage::provider::Admission::None,
+            hashed,
+            storage::provider::TaskHasher::Fx,
+            reads,
+            &[],
+        )
+    };
+    let protocol = source.layouts[0].protocol;
+    source.tokens.extend([
+        custom("custom_rows", None, false, &[]),
+        custom("custom_index", Some(protocol), true, &[]),
+        custom(
+            "custom_keys",
+            Some(storage::LayoutProtocol::Set),
+            true,
+            &[storage::provider::HostRead::Membership],
+        ),
+    ]);
+    source.providers[2].delta = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);
+    source.providers[2].next = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);
+    source.layouts[0].provider = syn::parse_quote!(@custom_index as custom::Index);
+    for negative in &mut source.negations {
+        negative.provider = syn::parse_quote!(@custom_keys as custom::BorrowedKeys<_>);
+    }
     let target = compile(&source).unwrap();
     assert_eq!(target.context.relations[2].providers, source.providers[2]);
     assert_eq!(
@@ -837,12 +960,13 @@ fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
         target.context.layouts[0].maintenance,
         source.layouts[0].maintenance
     );
-    let mut alternative = target.clone();
-    alternative.context.strata[0].keys[0].provider = syn::parse_quote!(custom::BorrowedKeys<_>);
-    cq_lang_datalog_round::check_rewrite(&target, &alternative).unwrap();
-    let replay: Fork = syn::parse2(alternative.to_token_stream()).unwrap();
-    assert_eq!(alternative, replay);
+    let replay: Fork = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(target, replay);
     check(&source, &replay).unwrap();
+    let mut invalid = target.clone();
+    invalid.context.strata[0].keys[0].provider = storage::default_key_set().0;
+    assert!(cq_lang_datalog_round::check_rewrite(&target, &invalid).is_err());
+    assert!(check(&source, &invalid).is_err());
 }
 
 #[test]
@@ -882,11 +1006,13 @@ fn repeated_negative_columns_are_filtered_once_before_distinct_key_projection() 
     let BodyItem::Positive { atom } = &hole.query.body[0] else {
         panic!("completed relation scan")
     };
-    assert_eq!(atom.args[0], syn::parse_quote!("blocked"));
+    let blocked = &atom.args[0];
+    let filter: BodyItem = syn::parse_quote!(where #blocked == ("blocked"));
+    assert_eq!(hole.query.body[1], filter);
     let left = &atom.args[1];
     let right = &atom.args[2];
     let expected = BodyItem::Equality(syn::parse_quote!(#left = #right));
-    assert_eq!(hole.query.body[1], expected);
+    assert_eq!(hole.query.body[2], expected);
     let name = &key.name;
     let expected_x: BodyItem = syn::parse_quote!(!#name(x));
     let expected_y: BodyItem = syn::parse_quote!(!#name(y));
@@ -911,4 +1037,409 @@ fn repeated_negative_columns_are_filtered_once_before_distinct_key_projection() 
     let mut changed_source = source.clone();
     changed_source.negations[0].equalities.clear();
     assert!(cq_lang_datalog_storage::contract::check(&changed_source).is_err());
+}
+
+#[test]
+fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
+    let source: cq_lang_datalog_storage::incremental::strata::source::Program = syn::parse_quote! {
+        struct Heaps;
+        relation Alloc(h:i32,t:i32) = (alloc);
+        relation Component(a:i32,c:i32) = (component);
+        relation Super(c:i32,t:i32) = (supers);
+        relation Compat(h:i32,b:i32); relation Reach(x:i32,y:i32);
+        output Compat, Reach;
+        Helper: Compat(*h,*b) :- Alloc(h,t), Alloc(b,a), Component(a,c), Super(c,t);
+        Reach(*x,*y) :- Alloc(x,y);
+        Step: Reach(*x,*z) :- Alloc(x,y), Reach(y,z), Alloc(z,x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let plans = vec![
+        cq_datalog_incremental::RulePlan {
+            rule: syn::parse_quote!(Helper),
+            delta: None,
+            smallest: Vec::new(),
+            known: None,
+            order: vec![
+                syn::parse_quote!(Super),
+                syn::parse_quote!(Component),
+                syn::parse_quote!(Alloc@1),
+            ],
+        },
+        cq_datalog_incremental::RulePlan {
+            rule: syn::parse_quote!(Step),
+            delta: Some(syn::parse_quote!(Reach)),
+            smallest: Vec::new(),
+            known: None,
+            order: vec![syn::parse_quote!(Reach), syn::parse_quote!(Alloc@2)],
+        },
+    ];
+    let incremental = cq_datalog_incremental::compile_with_advice(
+        &strata,
+        cq_datalog_incremental::DriverPolicy::DeltaFirst,
+        &plans,
+    )
+    .unwrap();
+    assert_eq!(
+        incremental
+            .variants
+            .iter()
+            .map(|v| v.authored)
+            .collect::<Vec<_>>(),
+        [true, false, true]
+    );
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let advice = |variant: usize| {
+        let rule = fork
+            .context
+            .strata
+            .iter()
+            .flat_map(|s| s.seeds.iter().chain(&s.steps))
+            .find(|rule| rule.variant == variant)
+            .unwrap();
+        let hole = &fork.holes[rule.hole];
+        let pipeline = hole.invocation_pipeline().unwrap();
+        let plan = &pipeline.passes[hole.plan.unwrap()];
+        without_ordering(plan.arguments.clone()).to_string().replace(' ', "")
+    };
+    // The hole body already follows the authored order (Super is the scan),
+    // so the advice names the hole's inputs by normalized clause position.
+    let helper = fork
+        .context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+        .find(|rule| rule.variant == 0)
+        .unwrap();
+    let Some(cq_lang_datalog_round::ScanBinding {
+        source: cq_lang_datalog_round::InputSource::Layout(layout),
+        ..
+    }) = &helper.scan
+    else {
+        panic!("seed scans a layout");
+    };
+    let scanned = fork.context.layouts[*layout].relation;
+    assert_eq!(fork.context.relations[scanned].declaration.name, "Super");
+    assert_eq!(
+        advice(0),
+        "order(__cq_datalog_scan_0@0,__cq_datalog_layout_1@1,__cq_datalog_layout_2@2,__cq_datalog_layout_2@3)"
+    );
+    assert_eq!(advice(1), "");
+    assert!(
+        advice(2).starts_with("order(__cq_datalog_scan_"),
+        "{}",
+        advice(2)
+    );
+    // Every hole still compiles through its checked pipeline.
+    check(&schedule(&incremental).unwrap(), &fork).unwrap();
+    let storage = schedule(&incremental).unwrap();
+    let queue = cq_datalog_fork::default_pipeline();
+    assert!(cq_datalog_fork::compile_with(&storage, quote!(cq = #queue; lower = 2;)).is_err());
+    let mut conflicting = queue;
+    conflicting.passes[0].arguments = quote!(no_reduce);
+    assert!(
+        cq_datalog_fork::compile_with(&storage, quote!(cq = #conflicting; lower = 2; plan = 0;))
+            .is_err()
+    );
+}
+
+#[test]
+fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
+    use cq_datalog_incremental::{DriverPolicy, RulePlan};
+    let source = syn::parse_quote! {
+        struct Advice;
+        relation E(x:i32,y:i32) = (edges);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*y) :- E(x,y);
+        Step: R(*x,*z) :- R(x,y), R(y,z), E(x,z);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let generic = RulePlan {
+        rule: syn::parse_quote!(Step),
+        delta: None,
+        order: vec![
+            syn::parse_quote!(R@0),
+            syn::parse_quote!(R@1(y)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(E),
+        ],
+        smallest: Vec::new(),
+        known: None,
+    };
+    let specific = RulePlan {
+        delta: Some(syn::parse_quote!(R@1)),
+        order: vec![
+            syn::parse_quote!(R@0),
+            syn::parse_quote!(E(x)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(E),
+        ],
+        ..generic.clone()
+    };
+    let incremental = cq_datalog_incremental::compile_with_advice(
+        &strata,
+        DriverPolicy::DeltaFirst,
+        &[generic, specific],
+    )
+    .unwrap();
+    assert_eq!(incremental.variants[1].steps[1].occurrence, 1);
+    assert_eq!(incremental.variants[2].steps[1].occurrence, 2);
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
+    assert_eq!(restored, fork);
+    for hole in fork.holes.iter().filter(|hole| {
+        !without_ordering(hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
+            .arguments
+            .clone())
+            .is_empty()
+    }) {
+        use syn::parse::{Parse, Parser};
+        let parser = |input: syn::parse::ParseStream<'_>| {
+            let no_reduce: syn::Ident = input.parse()?;
+            assert_eq!(no_reduce, "no_reduce");
+            input.parse::<syn::Token![,]>()?;
+            let _: syn::Ident = input.parse()?;
+            let entries;
+            syn::parenthesized!(entries in input);
+            entries.parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])
+        };
+        let args = without_ordering(hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
+            .arguments
+            .clone());
+        let selectors = parser.parse2(args).unwrap().into_iter().collect::<Vec<_>>();
+        let normal = cq_lang_datalog_round::cq::normal::normalize(&hole.cq).unwrap();
+        // compile_explicit resolves the advice; check_advice runs WF-VO,
+        // VO-Order and the selected CK-Le phases on the produced schedule.
+        let planned = cq_order::compile_explicit(&normal, &selectors).unwrap();
+        cq_order::check_advice(&normal, &planned, &selectors).unwrap();
+        let mut incomplete = selectors.clone();
+        incomplete.remove(if incomplete[1].occurrence == Some(1) {
+            2
+        } else {
+            3
+        });
+        let planned = cq_order::compile_explicit(&normal, &incomplete).unwrap();
+        assert!(cq_order::check_advice(&normal, &planned, &incomplete).is_err());
+        let mut invalid = selectors.clone();
+        invalid[1].columns = Some(vec![syn::parse_quote!(not_a_column)]);
+        assert!(cq_order::compile_explicit(&normal, &invalid).is_err());
+    }
+    let mut invalid = incremental.clone();
+    invalid.variants[1].steps[0].occurrence = 99;
+    assert!(cq_datalog_incremental::check(&strata, &invalid).is_err());
+}
+
+#[test]
+fn smallest_rule_sites_preserve_recorded_pipeline_ordinals() {
+    use cq_datalog_incremental::{DriverPolicy, RulePlan};
+    let source = syn::parse_quote! {
+        struct Intersection;
+        relation Seed(a:i32) = (seed);
+        relation R(a:i32,x:i32) = (r);
+        relation S(a:i32,x:i32) = (s);
+        relation Out(x:i32);
+        output Out;
+        Join: Out(*x) :- Seed(a), R(a,x), S(a,x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let baseline = cq_datalog_incremental::compile(&strata).unwrap();
+    let baseline = compile(&schedule(&baseline).unwrap()).unwrap();
+    let advice = RulePlan {
+        rule: syn::parse_quote!(Join),
+        delta: None,
+        order: vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R(a, x)),
+            syn::parse_quote!(S),
+        ],
+        smallest: vec![vec![syn::parse_quote!(R), syn::parse_quote!(S)]],
+        known: None,
+    };
+    let incremental =
+        cq_datalog_incremental::compile_with_advice(&strata, DriverPolicy::WrittenOrder, &[advice])
+            .unwrap();
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let (before, after) = (&baseline.holes[0], &fork.holes[0]);
+    assert_eq!(before.lower, after.lower);
+    assert_eq!(before.plan, after.plan);
+    assert_eq!(before.pipeline.passes.len(), after.pipeline.passes.len());
+    let invocation = after.invocation_pipeline().unwrap();
+    let wrapper = &invocation.passes[after.lower + 1];
+    assert_eq!(
+        wrapper.path.segments.last().unwrap().ident,
+        "smallest_before"
+    );
+    let arguments = wrapper.arguments.to_string();
+    assert!(arguments.contains("smallest"));
+    assert!(
+        arguments.contains(
+            &before.pipeline.passes[before.lower + 1]
+                .path
+                .to_token_stream()
+                .to_string()
+        )
+    );
+    let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
+    assert_eq!(restored, fork);
+    let mut invalid = incremental.clone();
+    invalid.variants[0].smallest = vec![vec![1, 1]];
+    assert!(cq_datalog_incremental::check(&strata, &invalid).is_err());
+}
+
+/// The hole's planning invocation receives the recorded ordering inputs as
+/// `PlanOptions` and the checked VO records them unchanged.
+fn planned(hole: &cq_lang_datalog_round::Hole) -> cq_lang_vo::Program {
+    let pipeline = hole.invocation_pipeline().unwrap();
+    let options: cq_planning::PlanOptions =
+        syn::parse2(pipeline.passes[hole.plan.unwrap()].arguments.clone()).unwrap();
+    cq_planning::prefix_valuation(&hole.cq, &options).unwrap().1
+}
+
+#[test]
+fn upstream_ordering_facts_survive_both_driver_policies_and_cq_planning() {
+    use cq_datalog_incremental::DriverPolicy;
+    let source = syn::parse_quote! {
+        struct Paths;
+        relation E(x:i32,y:i32) = (edges);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*y) :- E(x,y);
+        R(*x,*z) :- R(x,y), R(y,z);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    for driver in [DriverPolicy::WrittenOrder, DriverPolicy::DeltaFirst] {
+        let incremental = cq_datalog_incremental::compile_with_driver(&strata, driver).unwrap();
+        assert_eq!(incremental.driver, driver);
+        let parsed: cq_lang_datalog_round::incremental::Program =
+            syn::parse2(incremental.to_token_stream()).unwrap();
+        assert_eq!(incremental, parsed);
+        assert_eq!(
+            incremental.variants[2].order,
+            if driver == DriverPolicy::DeltaFirst { vec![1, 0] } else { vec![0, 1] }
+        );
+        let storage = schedule(&incremental).unwrap();
+        let fork = compile(&storage).unwrap();
+        let parsed: Fork = syn::parse2(fork.to_token_stream()).unwrap();
+        assert_eq!(parsed, fork);
+        for stratum in &fork.context.strata {
+            for rule in stratum.seeds.iter().chain(&stratum.steps) {
+                let variant = &incremental.variants[rule.variant];
+                let hole = &fork.holes[rule.hole];
+                let facts = hole.planning.as_ref().unwrap();
+                assert_eq!(facts.delta, variant.delta);
+                assert_eq!(facts.driver, driver);
+                assert_eq!(facts.permutation, variant.order);
+                assert_eq!(facts.shared_demand, None);
+                let seed = variant.delta.is_none();
+                let delta = variant.delta.map_or_else(|| quote!(none), |delta| {
+                    let delta = syn::Index::from(delta);
+                    quote!(#delta)
+                });
+                let permutation = variant.order.iter().copied().map(syn::Index::from);
+                let expected = syn::parse2(quote!(ordering(seed = #seed, delta = #delta,
+                    driver = #driver, permutation = [#(#permutation),*], shared_demand = none)))
+                    .unwrap();
+                let vo = planned(hole);
+                assert_eq!(vo.valuation.ordering, Some(expected));
+                let (_, plain) = cq_planning::prefix_valuation(&hole.cq, &Default::default()).unwrap();
+                assert_eq!(plain.valuation.steps, vo.valuation.steps);
+                let changes: &[fn(&mut cq_lang_datalog_round::Planning)] = &[
+                    |f| f.delta = Some(99),
+                    |f| f.permutation.clear(),
+                    |f| {
+                        f.driver = if f.driver == DriverPolicy::WrittenOrder {
+                            DriverPolicy::DeltaFirst
+                        } else {
+                            DriverPolicy::WrittenOrder
+                        };
+                    },
+                ];
+                for change in changes {
+                    let mut changed = fork.clone();
+                    change(changed.holes[rule.hole].planning.as_mut().unwrap());
+                    assert!(check(&storage, &changed).is_err());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn optional_stratum_shared_demand_is_checked_and_recorded_without_ranking() {
+    let storage = authored();
+    let baseline = compile(&storage).unwrap();
+    let layout = &baseline.context.layouts[0];
+    let relation = &baseline.context.relations[layout.relation].declaration.name;
+    let columns = layout.columns[..layout.key].iter().copied().map(syn::Index::from);
+    let supplied = cq_datalog_fork::compile_with(
+        &storage,
+        quote!(shared_demand = [[#relation(#(#columns),*)]];),
+    ).unwrap();
+    let parsed: Fork = syn::parse2(supplied.to_token_stream()).unwrap();
+    assert_eq!(parsed, supplied);
+    check(&storage, &parsed).unwrap();
+    for (before, after) in baseline.holes.iter().zip(&supplied.holes) {
+        assert_eq!(before.cq, after.cq);
+        if let Some(facts) = &after.planning {
+            assert_eq!(facts.shared_demand.as_ref().unwrap().len(), 1);
+            let (before, after) = (planned(before), planned(after));
+            assert_eq!(before.valuation.steps, after.valuation.steps);
+            let recorded = after.valuation.ordering.as_ref().unwrap();
+            assert_eq!(recorded.shared_demand.as_ref().unwrap().len(), 1);
+        } else {
+            assert_eq!(before, after);
+        }
+    }
+    assert!(cq_datalog_fork::compile_with(&storage, quote!(shared_demand = [];)).is_err());
+    assert!(cq_datalog_fork::compile_with(
+        &storage,
+        quote!(shared_demand = [[Missing(0)]];),
+    ).is_err());
+}
+
+#[test]
+fn heapalloc_disconnected_authored_order_is_rejected_at_cq_boundary() {
+    use cq_datalog_incremental::{DriverPolicy, RulePlan};
+    use syn::parse::{Parse, Parser};
+    let source = syn::parse_quote! {
+        struct Heaps;
+        relation Alloc(h:i32,t:i32) = (alloc);
+        relation Component(a:i32,c:i32) = (component);
+        relation Super(c:i32,t:i32) = (supertype);
+        relation Compat(h:i32,b:i32);
+        output Compat;
+        HeapAllocHelper: Compat(*heap,*baseheap) :-
+            Alloc(heap,heaptype), Alloc(baseheap,baseheaptype),
+            Component(baseheaptype,comptype), Super(comptype,heaptype),
+            where baseheaptype != constants.object_array;
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let advice = RulePlan {
+        rule: syn::parse_quote!(HeapAllocHelper),
+        delta: None,
+        order: vec![
+            syn::parse_quote!(Alloc@0),
+            syn::parse_quote!(Alloc@1),
+            syn::parse_quote!(Component),
+            syn::parse_quote!(Super),
+        ],
+        smallest: Vec::new(),
+        known: None,
+    };
+    let incremental = cq_datalog_incremental::compile_with_advice(
+        &strata, DriverPolicy::WrittenOrder, &[advice],
+    ).unwrap();
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let hole = &fork.holes[fork.context.strata[0].seeds[0].hole];
+    let arguments = without_ordering(hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()].arguments.clone());
+    let selectors = (|input: syn::parse::ParseStream<'_>| {
+        let order: syn::Ident = input.parse()?;
+        assert_eq!(order, "order");
+        let entries;
+        syn::parenthesized!(entries in input);
+        entries.parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])
+    }).parse2(arguments).unwrap().into_iter().collect::<Vec<_>>();
+    let normal = cq_lang_cq::normal::normalize(&hole.cq).unwrap();
+    let advised = cq_order::compile_explicit(&normal, &selectors).unwrap();
+    assert!(cq_order::check_advice(&normal, &advised, &selectors).is_err());
 }

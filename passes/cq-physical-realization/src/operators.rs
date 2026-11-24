@@ -9,6 +9,7 @@ impl<'a> Printer<'a> {
         self.group_with_accumulator(name, group, None)
     }
 
+    /// Formal rule P-GroupState: Realize keyed folds with the recorded accumulator provider, without substituting a concrete map.
     pub(super) fn group_with_accumulator(
         &mut self,
         name: &str,
@@ -22,10 +23,15 @@ impl<'a> Printer<'a> {
         let state = format_ident!("__cq_group_state", span = proc_macro2::Span::mixed_site());
         let table = format_ident!("__cq_groups", span = proc_macro2::Span::mixed_site());
         let keys = format_ident!("__cq_group_keys", span = proc_macro2::Span::mixed_site());
+        // A capture key copies its one host value into every group key.
         let key_values: Vec<_> = group
             .keys
             .iter()
-            .map(|key| self.access(&input_name, &symbol_name(key)))
+            .map(|key| {
+                let key = symbol_name(key);
+                self.capture_value(&key)
+                    .unwrap_or_else(|| self.access(&input_name, &key))
+            })
             .collect();
         let types: Vec<_> = group
             .aggregates
@@ -63,8 +69,10 @@ impl<'a> Printer<'a> {
                 );
             };
             let column = symbol_name(path.path.get_ident().expect("checked variable"));
-            let value = self.access(&input_name, &column);
-            let borrowed = !self.infos[&input_name].computed.contains(&column);
+            // A capture argument reads its host reference, like a borrowed column.
+            let capture = self.captures.get(&column).map(|id| quote!(#id));
+            let borrowed = capture.is_some() || !self.infos[&input_name].computed.contains(&column);
+            let value = capture.unwrap_or_else(|| self.access(&input_name, &column));
             let reused = group.keys.iter().any(|key| symbol_name(key) == column)
                 || group.aggregates[i + 1..].iter().any(|later| {
                     later
@@ -146,12 +154,12 @@ impl<'a> Printer<'a> {
                 }
             });
         }
+        let provider = &self.analysis.groups[name].ty;
         Ok(quote!({
-            let mut #table: ::std::collections::HashMap<_, (#(#types,)*)> =
-                ::std::collections::HashMap::new();
+            let mut #table: #provider = ::core::default::Default::default();
             for #pattern in #input {
                 #(#arguments)*
-                let #state = #table.entry((#(#key_values,)*))
+                let #state: &mut (#(#types,)*) = #table.entry((#(#key_values,)*))
                     .or_insert_with(|| (#(#identities,)*));
                 #(#updates)*
             }
@@ -381,6 +389,10 @@ impl<'a> Printer<'a> {
             &definition.operator
         {
             let input_name = symbol_name(&select.input);
+            if self.encoded.blocks.predicates.contains_key(name) {
+                let rows = self.scan(&select.input)?;
+                return Ok(self.blocked_filter_rows(name, rows));
+            }
             if self.carries_positions(&input_name) || self.partitioned {
                 let rows = self.scan(&select.input)?;
                 let columns = cq_print::columns_used(&select.condition)
@@ -405,9 +417,12 @@ impl<'a> Printer<'a> {
                     &guard.condition,
                     guard.environment.as_ref(),
                 );
-                let aliases =
-                    self.rust_aliases(&input_name, &guard.condition, guard.environment.as_ref());
-                let condition = &guard.condition;
+                let aliases = if self.encoded.blocks.reads.contains_key(name) {
+                    self.blocked_rust_aliases(name, &input_name, &guard.condition, guard.environment.as_ref())
+                } else {
+                    self.rust_aliases(&input_name, &guard.condition, guard.environment.as_ref())
+                };
+                let condition = guard.test();
                 let rows = quote!(::core::iter::Iterator::filter(#rows, move |#pattern| {
                     #(#aliases)*
                     ::cq_storage::residual(#condition)
@@ -423,7 +438,7 @@ impl<'a> Printer<'a> {
         }
         let rows = match &definition.operator {
             Operator::Union(union) => self.union(name, union),
-            Operator::Anti(_, keyed) => self.membership(keyed, true),
+            Operator::Anti(_, keyed) => self.membership(name, keyed, true),
             Operator::Unit(_) => Ok(quote!(::core::iter::once(()))),
             Operator::Group(group) => self.group(name, group),
             Operator::Rename(_) => Ok(self.host_scan(name)),
@@ -463,11 +478,7 @@ impl<'a> Printer<'a> {
                     &guard.condition,
                     guard.environment.as_ref(),
                 );
-                let arithmetic = cq::arithmetic::predicate(
-                    &guard.condition,
-                    &self.infos[&symbol_name(&guard.input)].types,
-                );
-                let condition = arithmetic.as_ref().unwrap_or(&guard.condition);
+                let condition = guard.test();
                 Ok(quote! {
                     ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))
                 })
@@ -501,15 +512,17 @@ impl<'a> Printer<'a> {
                 used.extend(self.carried(name).iter().cloned());
                 let pattern =
                     self.bind_columns(&input_name, &used.into_iter().collect::<Vec<_>>(), false);
-                let shadows =
-                    self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref());
+                let shadows = if self.encoded.blocks.reads.contains_key(name) {
+                    self.blocked_rust_aliases(name, &input_name, &bind.expression, bind.environment.as_ref())
+                } else {
+                    self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref())
+                };
                 let binding = &bind.pattern;
                 let annotation = &bind.annotation;
-                let arithmetic = cq::arithmetic::binding(bind, &self.infos[&input_name].types);
-                let value = self
-                    .generator_expressions
-                    .get(name)
-                    .unwrap_or_else(|| arithmetic.as_ref().unwrap_or(&bind.expression));
+                let value = match self.binding_functions.get(name) {
+                    Some((function, arguments)) => quote!(#function(#(#arguments),*)),
+                    None => bind.value().to_token_stream(),
+                };
                 // Fan out each prefix through its finite iterator,
                 // moving generated values and retaining the prefix for subsequent items.
                 let generator = bind.for_token.is_some();
@@ -547,7 +560,7 @@ impl<'a> Printer<'a> {
                 } else {
                     quote! {
                         ::core::iter::Iterator::map(#input, move |#pattern| {
-                            // A dead output still evaluates its potentially partial Rust expression.
+                            // Preserve the recorded binding even when its output is dead.
                             #[allow(unused_variables)]
                             let #binding #annotation = { #(#shadows)* #value };
                             #row
@@ -569,7 +582,7 @@ impl<'a> Printer<'a> {
                 })
             }
             Operator::Probe(_, keyed) => self.probe(name, keyed),
-            Operator::Semi(_, keyed) => self.semi(keyed),
+            Operator::Semi(_, keyed) => self.semi(name, keyed),
             Operator::Merge(_, keyed) => self.merge(name, &definition.name, keyed),
         }?;
         let input = match &definition.operator {
@@ -590,7 +603,7 @@ impl<'a> Printer<'a> {
         self.analysis.stages.get(name).copied().unwrap_or(1)
     }
     /// For every outer row, enter the right side at the join key and append
-    /// the payload of every match.
+    /// the payload of every match, cloning retained owned columns for scalar fan-out.
     pub(super) fn probe(
         &mut self,
         name: &str,
@@ -600,10 +613,33 @@ impl<'a> Printer<'a> {
         let mut outer = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
-        let access = self.keyed(&keyed.right, &columns)?;
+        let access = self.keyed(name, &keyed.right, &columns)?;
         let witness = self.forcing_witness(name, &right, &columns);
         let expand = self.analysis.expands.contains(name);
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
+            Access::Rows => {
+                let inner = self.scan(&keyed.right)?;
+                let left_pattern = self.bind_columns(&left, self.carried(&left), false);
+                let right_pattern = self.bind_columns(&right, self.carried(&right), false);
+                let row = self.carrier(name, |column| {
+                    let source = if self.heading(&right).iter().any(|c| c == column) {
+                        &right
+                    } else {
+                        &left
+                    };
+                    let value = self.access(source, column);
+                    if self.infos[source].computed.contains(column) {
+                        quote!(::core::clone::Clone::clone(&#value))
+                    } else {
+                        quote!(#value)
+                    }
+                });
+                return Ok(quote! {
+                    ::core::iter::Iterator::flat_map(#outer, move |#left_pattern| {
+                        ::core::iter::Iterator::map(#inner, move |#right_pattern| #row)
+                    })
+                });
+            }
             Access::Host(access) => (
                 witness.as_ref().map_or_else(
                     || self.host_lookup(&left, access, false, false),
@@ -701,7 +737,14 @@ impl<'a> Printer<'a> {
                 None => self
                     .constant_value(&right, c)
                     .filter(|_| !columns.iter().any(|key| key == c))
-                    .unwrap_or_else(|| self.access(&left, c)),
+                    .unwrap_or_else(|| {
+                        let value = self.access(&left, c);
+                        if !expand && self.infos[&left].computed.contains(c) {
+                            quote!(::core::clone::Clone::clone(&#value))
+                        } else {
+                            value
+                        }
+                    }),
             }
         });
         if expand {
@@ -792,7 +835,13 @@ impl<'a> Printer<'a> {
         let right = symbol_name(&keyed.right);
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
-        let lookup = match self.keyed(&keyed.right, &columns)? {
+        let lookup = match self.keyed(name, &keyed.right, &columns)? {
+            Access::Rows => {
+                return error(
+                    &keyed.right,
+                    "whole-relation access has no retained keyed cursor",
+                );
+            }
             Access::Built(structure) => {
                 if self.levels_of(&right, &structure).len() != 1 {
                     return error(
@@ -808,7 +857,7 @@ impl<'a> Printer<'a> {
                 quote!(::cq_storage::provider_contract::retain(#structure, &(#(#key,)*)))
             }
             Access::Host(access) => {
-                let read = self.host_retained_read(&left, &access);
+                let read = self.host_retained_read(&access);
                 let key = self.host_key(&left, &access);
                 quote!(::cq_storage::provider_contract::retain(#read, #key))
             }
@@ -843,10 +892,15 @@ impl<'a> Printer<'a> {
     }
 
     /// Keep the rows whose key the right side contains.
-    pub(super) fn semi(&mut self, keyed: &physical::Keyed) -> syn::Result<TokenStream> {
-        self.membership(keyed, false)
+    pub(super) fn semi(&mut self, name: &str, keyed: &physical::Keyed) -> syn::Result<TokenStream> {
+        self.membership(name, keyed, false)
     }
-    fn membership(&mut self, keyed: &physical::Keyed, negative: bool) -> syn::Result<TokenStream> {
+    fn membership(
+        &mut self,
+        name: &str,
+        keyed: &physical::Keyed,
+        negative: bool,
+    ) -> syn::Result<TokenStream> {
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
@@ -856,7 +910,11 @@ impl<'a> Printer<'a> {
         {
             test
         } else {
-            match self.keyed(&keyed.right, &columns)? {
+            match self.keyed(name, &keyed.right, &columns)? {
+                Access::Rows => {
+                    let rows = self.scan(&keyed.right)?;
+                    quote!(::core::iter::Iterator::next(&mut (#rows)).is_some())
+                }
                 Access::Host(access) => self.host_lookup(&left, &access, true, negative),
                 Access::Built(structure) => {
                     let levels = self.levels_of(&symbol_name(&keyed.right), &structure);

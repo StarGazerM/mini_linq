@@ -15,7 +15,7 @@ pub fn check(scenario: Scenario) {
             by (d, k); n = count(); s = sum(a);
             struct AggregateTwoKeys;
             relation Sale(d: i32, k: i32, id: i32, a: i32);
-            rows(d, k, id, a) :- Sale(d, k, id, a), if *d > 0;
+            rows(d, k, id, a) :- Sale(d, k, id, a), where d > 0;
         }
     };
     let actual = result

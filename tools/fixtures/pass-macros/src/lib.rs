@@ -22,11 +22,11 @@ fn planned(input: TokenStream, options: cq_order::Options, reductions: bool) -> 
                     cq_reduce::Reductions::None
                 },
             };
-            let reduced = cq_reduce::compile(&plan, &options)?;
-            cq_reduce::check(&plan, &reduced, &options)?;
+            let reduced = cq_reduce::compile(&normal, &plan, &options)?;
+            cq_reduce::check(&normal, &plan, &reduced, &options)?;
             plan = reduced;
         }
-        cq_elaborate::compile(&plan)
+        cq_relational_lowering::compile(&normal, &plan).map(|(program, _)| program)
     })
     .into()
 }
@@ -124,24 +124,26 @@ pub fn lazy_anti(input: TokenStream) -> TokenStream {
     .into()
 }
 #[proc_macro]
-pub fn ordered_dedup(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
-        cq_testkit::rewrites::ordered_dedup(source)
-    })
-    .into()
-}
-#[proc_macro]
 pub fn ordered_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, _| {
         let mut target = source.clone();
+        let provider = cq_lang_structures::provider::base::instance(
+            "btree_map_grouped",
+            syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+        );
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
-                keyed.ty = syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>);
+                keyed.provider = provider.clone();
                 keyed.supports =
                     (keyed.levels.len() == 1).then(|| syn::parse_quote!(supports[keys]));
             }
         }
-        Ok(target)
+        target
+            .structures
+            .declare(&[cq_lang_structures::provider::base::declaration(
+                "btree_map_grouped",
+            )])?;
+        Ok((physical.clone(), target))
     })
     .into()
 }
@@ -182,55 +184,63 @@ pub fn expand_identity(input: TokenStream) -> TokenStream {
 }
 #[proc_macro]
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, _| {
         let mut target = source.clone();
+        let declarations: cq_lang_structures::Providers = syn::parse_quote!(providers {
+            sorted_index = SortedIndex<_, _> { reads [exact, membership], build typed };
+        });
+        let provider = declarations.declarations[0].instance();
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
-                keyed.ty = syn::parse_quote!(SortedIndex<_, _>);
+                keyed.provider = provider.clone();
                 keyed.supports = None;
             }
         }
-        Ok(target)
+        target.structures.declare(&declarations.declarations)?;
+        Ok((physical.clone(), target))
     })
     .into()
 }
 #[proc_macro]
 pub fn identity_structures(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| Ok(source.clone()))
-        .into()
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(
+        input.into(), |physical, source, _| Ok((physical.clone(), source.clone())),
+    ).into()
 }
 
 /// A real alternative policy: prefer reserve when no output protocol is authored.
-/// Every other decision is left to the shared rule-based planner.
+/// Every other decision is left to order-preserving decomposition.
 struct ReservePlanner;
 
 impl cq_sequence_plan::Planner for ReservePlanner {
     fn plan(
         &self,
+        physical: &physical::Program,
+        structures: &cq_lang_structures::Program,
         source: &cq_lang_sequence::Program,
         machine: &cq_lang_sequence::Machine,
         catalog: &cq_lang_sequence::Catalog,
         evidence: &cq_lang_sequence::Evidence,
     ) -> syn::Result<cq_sequence_plan::Planned> {
-        if source.sequence.output.is_some() {
-            return cq_sequence_plan::Planner::plan(
-                &cq_sequence_plan::RuleBased,
-                source,
-                machine,
-                catalog,
-                evidence,
-            );
+        let evidence_advice = cq_sequence_plan::Advice::Evidence(evidence.clone());
+        let recorded = evidence_advice.apply(physical, structures, source)?;
+        let output_advice =
+            source
+                .sequence
+                .output
+                .is_none()
+                .then_some(cq_sequence_plan::Advice::Output(
+                    cq_lang_sequence::OutputProtocol::Reserve,
+                ));
+        let advised = match &output_advice {
+            Some(advice) => advice.apply(&recorded.0, &recorded.1, &recorded.2)?,
+            None => recorded,
+        };
+        let mut planned = cq_sequence_plan::decompose(&advised.0, &advised.1, &advised.2, machine, catalog)?;
+        if let Some(advice) = output_advice {
+            planned.trace.insert(0, advice);
         }
-        let advice = cq_sequence_plan::Advice::Output(cq_lang_sequence::OutputProtocol::Reserve);
-        let advised = advice.apply(source)?;
-        let mut planned = cq_sequence_plan::Planner::plan(
-            &cq_sequence_plan::RuleBased,
-            &advised,
-            machine,
-            catalog,
-            evidence,
-        )?;
-        planned.trace.insert(0, advice);
+        planned.trace.insert(0, evidence_advice);
         Ok(planned)
     }
 }
@@ -238,7 +248,7 @@ impl cq_sequence_plan::Planner for ReservePlanner {
 /// Ordinary external checked pass, selected by the facade's named plan phase.
 #[proc_macro]
 pub fn plan_reserve(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+    cq_stage::Sequence::<physical::Program, cq_lang_structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |physical, structures, source, args| {
         if args.to_string() != "expected" {
             return Err(syn::Error::new_spanned(
                 args,
@@ -248,25 +258,27 @@ pub fn plan_reserve(input: TokenStream) -> TokenStream {
         let machine = cq_sequence_pull::machine();
         let planned = cq_sequence_plan::Planner::plan(
             &ReservePlanner,
+            physical,
+            structures,
             source,
             &machine,
             &cq_sequence_pull::catalog(),
             &source.evidence,
         )?;
-        let mut replayed = source.clone();
+        let mut replayed = (physical.clone(), structures.clone(), source.clone());
         for advice in &planned.trace {
-            let next = advice.apply(&replayed)?;
-            cq_lang_sequence::check_rewrite(&replayed, &next)?;
+            let next = advice.apply(&replayed.0, &replayed.1, &replayed.2)?;
+            cq_lang_sequence::check_rewrite(&replayed.0, &replayed.1, &replayed.2, &next.0, &next.1, &next.2)?;
             replayed = next;
         }
-        if replayed != planned.program {
+        if (&replayed.0, &replayed.1, &replayed.2) != (&planned.physical, &planned.structures, &planned.program) {
             return Err(syn::Error::new_spanned(
                 source,
                 "planner trace did not replay",
             ));
         }
-        cq_lang_sequence::check_grading(&planned.program, &machine)?;
-        Ok(planned.program)
+        cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
+        Ok((planned.physical, planned.structures, planned.program))
     })
     .into()
 }

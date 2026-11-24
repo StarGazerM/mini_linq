@@ -1,0 +1,28 @@
+program h06 {
+    input Lineitem(l_orderkey: i64, l_linenumber: i64,
+        l_extendedprice: Decimal, l_discount: Decimal, l_quantity: Decimal,
+        l_shipdate: Date) = table(lineitem);
+    operand start: Date = date { Date::load("1994-01-01").expect("authored ISO date") };
+    operand end: Date = date { Date::load("1995-01-01").expect("authored ISO date") };
+    stage s0 {
+        inputs { Lineitem = Lineitem; }
+        captures [start, end];
+        evidence {}
+        cq {
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64,
+                l_extendedprice: Decimal, l_discount: Decimal, l_quantity: Decimal,
+                l_shipdate: Date);
+            relation answer(revenue: i64);
+            answer(sum(revenue_units)) :-
+                Lineitem(order_key, line_number, price, discount, quantity, shipdate),
+                where shipdate >= start && shipdate < end,
+                if discount.scaled() >= 5 && discount.scaled() <= 7,
+                if quantity.scaled() < 2400,
+                let revenue_units: i64 = price.scaled() * discount.scaled();
+        }
+    }
+    terminal {
+        from s0 project [column(0)] dictionaries [];
+    }
+}

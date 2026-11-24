@@ -1,22 +1,21 @@
 //! An independent theta-join surface lowered to a complete IX program.
 //!
-//! Its denotation is `T X = bottom + Set X`: the join is relational and its Rust
-//! guard is an opaque partial function of free variables. One panic aborts the
-//! evaluation. I/O, mutation and evaluation counts are outside this meaning.
-//! The guard remains after both written relation operands; RA laws do not apply
-//! to the guard.
+//! Its denotation is Set: the join is relational and its Rust guard is opaque,
+//! pure and total. The guard must follow the binders of its free variables;
+//! written order, panic positions and evaluation counts are not constraints.
+//! Core relational predicates use `where`, rather than interpreting Rust guards.
 //!
 //! The public surface accepts declarations, `theta_join L { ... } with
 //! R { ... } if expression;`, and `output answer(...);`. [`Query::indexes`]
 //! authors exact demands in IX without invoking a core planner. A complete
 //! `relational { ... }` input also forwards union/anti, block paths and origin
 //! metadata. Anti requests its exact F key; union adds no demand. Meaning and
-//! branch Before/order contracts remain the core language's.
+//! free-variable placement contracts remain the core language's.
 //! Core blocks preserve union and ordered fallback through this consumer.
 //! Their laws are join distribution over union and `B1 else B2 = B1 union
 //! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
-//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
-//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//! IR retains union/anti, nested occurrence paths and branch-local bindings.
+//! Rust placement follows free-variable dependencies in each branch.
 //!
 use cq_lang_ix::{
     self as ix, ra,
@@ -72,8 +71,8 @@ impl Parse for Query {
         let ra: ra::Program = syn::parse2(quote! {
             relational {
                 #(#declarations)*
-                l = rename #lh@0 { #lm };
-                r = rename #rh@1 { #rm };
+                l = rename #lh { #lm };
+                r = rename #rh { #rm };
                 j = natural_join l with r;
                 s = guard j if (#condition);
                 p = project s keep { #(#kept),* };
@@ -133,9 +132,9 @@ mod tests {
     fn complete_union_and_anti_program_keeps_nested_occurrences() {
         let source: Query = syn::parse_quote! {relational {
             relation R(a:i32); relation S(a:i32);
-            r = rename R@0.0.0 {a -> x}; s = rename S@0.1.0 {a -> x};
+            r = rename R {a -> x}; s = rename S {a -> x};
             a = anti [] s,r;
-            u = union r,a block @0 free[] interface[x] fallback;
+            u = union r,a block free[] interface[x] fallback;
             output u as answer(x);
         }};
         let target = source.indexes().unwrap();
@@ -157,8 +156,8 @@ mod tests {
             relational {
                 relation L(key: i32, value: i32);
                 relation R(key: i32, value: i32);
-                l = rename L@0 {key -> k, value -> x};
-                r = rename R@1 {key -> k, value -> y};
+                l = rename L {key -> k, value -> x};
+                r = rename R {key -> k, value -> y};
                 j = natural_join l with r;
                 s = guard j if (x < y);
                 p = project s keep {x, y};

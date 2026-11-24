@@ -7,3 +7,4 @@ edition.workspace = true
 gpu-device-columns = { path = "../device-columns" }
 gpu-compress-host = { path = "../compress-host" }
 serde_json.workspace = true
+sha2 = "0.10"

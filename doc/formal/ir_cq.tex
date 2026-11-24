@@ -7,12 +7,13 @@ CQ clauses use derived parsing; expressions, patterns and types are
 token trees~\cite{host-synmacro}.
 \begin{lstlisting}
 Program ::= struct Name; Decl* Rule+
-Decl    ::= relation R(c: Type, ...) [= (Expr)];
+Decl    ::= relation R(ColumnDecl, ...) [= (Expr)];
+ColumnDecl ::= c ":" Type ["[" LogicalTypeId "]"] ["in" ["[" DomainId "]"] "(" Expr ")"]
 Rule    ::= h(Expr, ...) :- Clause, ... ;
-Clause  ::= R(Arg, ...) | !R(NegArg, ...) | Guard | let Pat [: Type] = Expr
-          | for Pat in Expr | Block
+Clause  ::= R(Arg, ...) | !R(NegArg, ...) | Guard | where P
+          | let Pat [: Type] = Expr | for Pat in Expr | Block
 Guard   ::= "if" Expr
-NegArg  ::= bound-variable | literal | parameter | _
+NegArg  ::= bound-variable | literal | closed-expression | _
 Arg     ::= x | _ | Expr
 Block   ::= { Body } ( | { Body } )+  |  { Body } ( else { Body } )+
 \end{lstlisting}
@@ -20,7 +21,17 @@ Bare single-segment paths bind logical variables; other arguments compute.
 Several rules for one head are sugar for one rule whose body is a top-level
 union over fresh positional head columns; each rule gets fresh local names,
 opaque syntax receives lexical aliases rather than token substitution.
-A trailing \code{= (Expr)} supplies the host value.
+The declaration table interns logical type spellings once into
+\code{LogicalTypeId}; explicit ids survive printing and are never reinterpreted.
+Equal spellings with explicitly different ids are distinct logical declarations.
+Downstream codec lookup uses the recorded id, not the opaque \code{Type} payload.
+A trailing \code{= (Expr)} supplies the host value. An optional column
+\code{in (D)} records the column's code domain: a query-closed host value
+implementing \code{cq\_storage::CodeDomain} whose codes the column stores.
+The type stays opaque. The declaration table interns the opaque spelling of
+$D$ once, sharing a domain id across input and output declarations.
+Recorded IR prints \code{in [id] (D)} and reparsing preserves that id.
+The id and untouched runtime payload ride in every IR carrying declarations.
 
 \paragraph{Lexical dependencies.}
 $\fv_S(e)=(F,o)$ returns visible value names and an opacity bit; with logical
@@ -65,15 +76,23 @@ each binder extends only its body scope. Macro expansion and pattern resolution
 remain hypotheses.\end{proof}
 
 \paragraph{Scope rules.}
-$\Sigma;B\vdash c\Rightarrow B'$ checks one clause in written scope; atom
-arguments fold left to right.
+$\Sigma;B\vdash c\Rightarrow B'$ checks one clause in written scope; clauses
+fold left to right. An atom matches a tuple simultaneously: let
+$\mathsf{bare}(\bar a)$ be its bare variable arguments and
+$\mathsf{computed}(\bar a)$ its remaining arguments. Computed arguments see
+the incoming scope and all bare binders of this atom, regardless of column
+position, but never binders from later clauses. This is intentional:
+A-Local evaluates an atom-dependent expression after matching the tuple;
+permuting relation columns must not change its scope.
 \begin{mathpar}
 \Rule{CQ-Var}{}{\Sigma;B\vdash x\Rightarrow B\cup\{x\}}
 
 \Rule{CQ-Expr}{e\checkmark_B}{\Sigma;B\vdash e\Rightarrow B}
 
 \Rule{CQ-Atom}{R\in\dom\Sigma\quad |\bar a|=|\Sigma(R)|\quad
- \Sigma;B\vdash\bar a\Rightarrow B'}{\Sigma;B\vdash R(\bar a)\Rightarrow B'}
+ B'=B\cup\mathsf{bare}(\bar a)\quad
+ \forall e\in\mathsf{computed}(\bar a).\ e\checkmark_{B'}}
+ {\Sigma;B\vdash R(\bar a)\Rightarrow B'}
 
 \Rule{CQ-Guard}{e\checkmark_B}{\Sigma;B\vdash\mathsf{if}\ e\Rightarrow B}
 
@@ -96,67 +115,59 @@ semantic premises, not properties established by the structural scope check.
 An atom using a generator-supplied name requires that name already bound.
 
 
-\paragraph{Recognized comparisons.}
-Let $Q$ be the query binders, $B$ the written bound names and $P$ the closing
-host parameters. Over the Syn AST (no separate grammar):
+\paragraph{Explicit relational predicates.}
+Let $Q$ contain every query binder and $B$ the names bound at this clause.
+Unlike Rust guards, \code{where} has its own grammar and denotation:
 \begin{lstlisting}
-t ::= x | *x | &x | literal | -numeric-literal | bare-host-identifier
-a ::= integer-name | *integer-name | integer-literal | -integer-literal
-    | decimal-name.scaled() | a + a | a - a | a * a | a / nonzero-integer-literal | (a)
-    | if C { a } else { a } | lossless-integer-type::from(a)
-t ::= ... | a
-C ::= t == t | t != t | t < t | t <= t | t > t | t >= t
-    | C && C | C || C | !C | (C)
+t ::= query-variable | literal | closed-Rust-expression
+P ::= x == t | x != t | x < t | x <= t | x > t | x >= t
+    | x in [t, ...] | x in t..t | x in t..=t | x == y
+    | P && P | P || P | (P)
 \end{lstlisting}
-Rust desugars these to \code{PartialEq}/\code{PartialOrd} calls; we recognize
-them only under the premises.
+The left-hand $x$ is a bound query variable. Closed Rust operands are stored
+as \code{Term::Closed(syn::Expr)}, not identifier/field-path parameters.
+They are evaluated once on the host, outside row loops; internal languages
+print them as \code{@(Expr)}. A query-dependent Rust expression is not a term.
+The same CQ-Closed judgment applies to atom operands: a query-closed expression
+restricts that occurrence exactly as a literal does. Normalization introduces
+a fresh atom column and a relational equality to the unchanged closed operand,
+not an opaque row binding (A-Closed). Row-dependent atom expressions retain
+their A-Prefix/A-Local binding placement.
 \begin{mathpar}
-\Rule{ORD-Admissible}{\tau:\code{Ord}\quad
- \leq_\tau\text{ total, terminating and consistent with identity}}
- {\tau\text{ admits relational order}}
+\Rule{ORD-Admissible}{\leq_{\mathcal R}\text{ total, terminating and consistent with identity}}
+ {\mathcal R\text{ admits relational order}}
 
-\Rule{CQ-Comparison}{\vars(t_1,t_2)\subseteq B\quad
- t_1,t_2\text{ admissible}\quad op\in\{==,\ne,<,\leq,>,\geq\}}
- {\Sigma;B;P\vdash t_1\ op\ t_2\Rightarrow B}
+\Rule{CQ-Closed}{\fv(e)\cap Q=\emptyset}
+ {Q\vdash e:\mathsf{Closed}}
 
-\Rule{CQ-GuardRecognize}{e\text{ has only recognized comparisons and boolean nodes}\\
- \text{comparison operands satisfy CQ-Arith or the Eq/Ord premises}}
- {\mathsf{recognize}_{Q,P}(e)=\theta\quad\sem e=\sem\theta}
+\Rule{CQ-Comparison}{x\in B\quad\vars(t)\subseteq B\quad
+ t\text{ a variable, literal or CQ-Closed operand}\\
+ op\in\{==,\ne,<,\leq,>,\geq\}}
+ {\Sigma;B;Q\vdash x\ op\ t:\mathsf{Predicate}}
 
-\Rule{CQ-GuardSplit}{e=e_1\mathbin{\&\&}\cdots\mathbin{\&\&}e_n\\
- A=\text{recognized leaves}\quad F=\text{remaining leaves in written order}}
- {\mathsf{if}\ e\rightsquigarrow \mathsf{select}_{\bigwedge A};
-   \mathsf{guard}_{\bigwedge F}\quad
-   \sem{\mathsf{select}_{\bigwedge A};\mathsf{guard}_{\bigwedge F}}
-   \sqsupseteq\sem{\mathsf{if}\ e}}
+\Rule{CQ-Where}{\vars(P)\subseteq B\quad
+ P\text{ follows the relational grammar; each closed operand satisfies CQ-Closed}}
+ {\Sigma;B\vdash\mathsf{where}\ P\Rightarrow B}
 \end{mathpar}
-Recognized comparisons are total, so short-circuit \code{\&\&}, \code{||} and
-\code{!} mean classical connectives on them.
-Arithmetic outside CQ-Arith (Section~\ref{sec:guards-design}), arbitrary calls,
-methods, casts, indexing, blocks, macros, qualified value paths and field
-access are opaque; a mixed \code{||} or \code{!} is one opaque leaf.
-Only the top-level conjunction splits. Typed arithmetic predicates retain
-Guard syntax, with totality rederived from their declared inputs rather than
-an author assertion.
-Parameters print as \code{@name} in later languages and are borrowed once outside
-query loops.
-\begin{proof}[Proof of CQ-GuardSplit]
-In \code{a \&\& f(x)} Rust evaluates $f$ exactly where $a$ holds, so selecting
-the total $a$ earlier gives that domain; in \code{f(x) \&\& a} it evaluates $f$
-on a superset, so selecting $a$ earlier only shrinks it. Iterating over the
-conjunction keeps the opaque leaves in written order: on a returning input,
-either a relational leaf rejects first or all hold and the residual evaluates
-the same opaque leaves in the same order. A disjunction or negation lacks this
-argument and is never split.
-\end{proof}
+Membership denotes a disjunction of representation equalities; ranges use
+representation order with the written open or closed upper endpoint.
+Conjunction and disjunction are classical connectives, not Rust evaluation.
+The representation laws are premises, and rustc checks required trait bounds;
+no \code{syn::Type} spelling establishes or refutes them.
+At a column with code domain $D$, every operand of a comparison, membership,
+range or atom position is compared as a code: normalization translates it into
+a capture of $D$'s code (A-Domain, Section~\ref{sec:passes}). There is no
+string comparison, string literal form or string scan in any later IR.
 
-\paragraph{Opaque Rust predicates.}
-Arithmetic, calls and methods, including \code{contains}, \code{starts_with}
-and \code{ends_with}, remain opaque regardless of declared type names.
-They retain their lexical bindings and the written Rust chain and Before
-facts. There is no guard attribute that asserts position independence.
-Only recognized relational comparisons and relational operators can move
-independently of that chain (Section~\ref{sec:guards-design}).
+\paragraph{One Rust expression.}
+Every \code{if}, \code{let} and \code{for} expression is opaque, pure and total
+by premise. It is never split, recognized, rewritten or type-checked by this
+compiler, including arithmetic and comparison syntax. Its original expression
+and lexical bindings survive printing unchanged. Only its conservative free
+variables govern placement; lexical opacity requires the whole environment.
+Only explicit \code{where} produces relational constraints, join equalities,
+point/range/membership reads, filter ranks, reduction supports and derived
+domains. Atom literals and normalization identities remain occurrence facts.
 
 \paragraph{Normal form.}
 CQ$_{\rm NF}$ restricts the same \code{cq::Program}: every positive atom argument is a
@@ -166,7 +177,39 @@ Shared names across atoms are natural-join variables. Literals remain in their a
 restrict the corresponding declared columns and drop those columns from the
 occurrence's heading. They bind no variable and are not guards. Repeats within
 an occurrence become relational identities at the atom's position; computed
-arguments become positioned binds plus identities; computed heads become final binds.
+arguments become positioned binds plus identities; a row-dependent computed head
+becomes a final bind.
+
+\paragraph{Captures.}
+A query records its host-once values in
+\code{capture \{ let p[:T] = e; if e; \}} after the body and group. A capture
+reads no query variable and binds host names, never valuation columns; every
+later IR carries the list unchanged. A top-level query-closed \code{let} or
+\code{if}, a closed head operand and a closed aggregate argument are captures
+(A-Capture). A query-closed branch \code{let}/\code{if} is a fresh capture
+whose branch binder or guard stays in place as a capture reference
+\code{let p = capture c} / \code{if capture c} (A-CaptureRef), so union
+interfaces keep their binders. A \code{let} capture is printed once as an owned
+value with a reference binder. Every move closure that reads it owns a
+\code{Clone::clone(\&value)} made at closure creation and rebinds its reference.
+An \code{if} capture gates the whole answer (IF-Capture).
+Capture binders are in scope when checking the body and head. After hoisting,
+their occurrences on either side of a relational \code{where} predicate are
+closed host operands, including equalities resolved before hoisting. Such a
+predicate remains a relational restriction, not an opaque Rust guard; its
+capture value is evaluated once without recognizing or rewriting Rust.
+A-Domain records a distinct typed capture
+\code{domain k:T in [id] (D) = f(t)}, with $f\in\{\mathsf{exact},\mathsf{lower},\mathsf{upper}\}$.
+Only its Rust realization prints \code{::cq\_storage::domain::f(\&(D), \&(t))}.
+An authored \code{let} containing that identical Rust call remains opaque.
+Normalization and WF-Domain inspect only the typed record, allowed function
+and recorded domain id, never Rust expression equality or the generated call.
+This uniform rule applies at every closure nesting level and in every
+translator; direct reads use the original value. Rust requires \code{Clone}
+where a closure needs a copy. \code{Copy} values need no allocation;
+non-\code{Copy} values pay their own clone cost per closure instance.
+Authors may explicitly wrap large values in \code{Rc} or \code{Arc}.
+The compiler introduces neither shared handles nor capture-induced collection.
 
 \paragraph{Contract.}
 $\mathsf{CQScope}(s)$ is the scope rules plus:
@@ -178,16 +221,28 @@ without it, head arguments are bound bare variables of known type;
 (5)~blocks have equal interface types and no escaped local names;
 (6)~negated atoms obey CQ-Neg (Section~\ref{sec:guards-design}); aggregation
 and unexpanded \code{name!\{..\}} clauses are rejected;
-(7)~comparison terms are bound names, literals or captured identifiers; known
-Eq/Ord failures are rejected; a recognizable unsplit guard is rejected.
+(7)~relational predicates follow the \code{where} grammar, use bound query
+names and have query-closed Rust operands; types are checked only by rustc.
 \begin{mathpar}
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
 
+\Rule{WF-Capture}{\fv(e_c)\cap Q=\emptyset\quad\mathsf{binders}(c)\cap Q=\emptyset\quad
+ \text{binders distinct}\\
+ \text{each }\code{capture c}\text{ reference names a }\code{let}\text{ capture binder}}
+ {Q\vdash\mathsf{captures}\Downarrow\ok}
+
 \Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested positive atom has distinct variables or literals}\\
- \text{head arguments are bound variables; known inadmissible types rejected}}
+ \text{head arguments are bound variables or captures}\quad
+ \text{no top-level or branch query-closed }\code{let}/\code{if}\text{ remains}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
+
+\Rule{WF-Domain}{\forall x.\ \text{all positive occurrences of }x\text{ sit at columns with one recorded domain id }d_x\ (\text{or none})\\
+ \text{every closed operand compared with }x,\ d_x\ne\bot,\text{ names a typed capture }\mathsf{Domain}(k,T,f,d_x,D,t)\\
+ f=\mathsf{exact}\text{ for }=,\ne;\quad f\in\{\mathsf{lower},\mathsf{upper}\}\text{ for }<,\geq\quad
+ \text{a declared answer domain id equals its head variable's }d_x}
+ {\mathsf{WF}_{Dom}(s)\Downarrow\ok}
 \end{mathpar}
-These checks do not establish admissibility, which remains a premise.
+Representation admissibility and Rust totality remain semantic premises.
 
 \paragraph{Meaning and rewrite check.}
 The meaning is Section~\ref{sec:denotation}: compose the desugared body in

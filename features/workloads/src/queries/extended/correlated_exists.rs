@@ -18,7 +18,7 @@ pub fn check(scenario: Scenario) {
         relation A(x: i32);
         relation S(x: i32, y: i32);
         relation answer(x: i32);
-        answer(*x) :- A(x), exists!{ S(x, y), if *y > limit };
+        answer(*x) :- A(x), exists!{ S(x, y), where y > limit };
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

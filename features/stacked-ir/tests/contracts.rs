@@ -58,12 +58,12 @@ fn all_corpus_rust_expressions_are_unchanged() {
         let returned = leave::compile(&enter::compile(&source).unwrap()).unwrap();
         let reference = cq_structure_selection::compile(&source).unwrap();
         let stacked = cq_structure_selection::compile(&returned).unwrap();
-        let reference = cq_sequence_lowering::compile(&reference).unwrap();
-        let reference_analysis = cq_lang_sequence::check_grading(&reference, &machine).unwrap();
-        let reference = cq_sequence_pull::translate(&reference, &reference_analysis).unwrap();
-        let stacked = cq_sequence_lowering::compile(&stacked).unwrap();
-        let stacked_analysis = cq_lang_sequence::check_grading(&stacked, &machine).unwrap();
-        let stacked = cq_sequence_pull::translate(&stacked, &stacked_analysis).unwrap();
+        let reference_sequence = cq_sequence_lowering::compile(&source, &reference).unwrap();
+        let reference_analysis = cq_lang_sequence::check_grading(&source, &reference, &reference_sequence, &machine).unwrap();
+        let reference = cq_sequence_pull::translate(&source, &reference, &reference_sequence, &reference_analysis).unwrap();
+        let stacked_sequence = cq_sequence_lowering::compile(&returned, &stacked).unwrap();
+        let stacked_analysis = cq_lang_sequence::check_grading(&returned, &stacked, &stacked_sequence, &machine).unwrap();
+        let stacked = cq_sequence_pull::translate(&returned, &stacked, &stacked_sequence, &stacked_analysis).unwrap();
         assert_eq!(reference, stacked, "{}", scenario.name);
         assert_eq!(
             reference.to_token_stream().to_string(),
@@ -90,7 +90,7 @@ fn pass_checks_reject_valid_changes_to_written_decisions() {
         .physical
         .program
         .definitions
-        .last_mut()
+        .first_mut()
         .unwrap()
         .mode = physical::Mode::Let(Default::default());
     changed.check().unwrap();
@@ -106,11 +106,11 @@ fn rust_payloads_are_opaque_and_pinned() {
     let source: physical::Program = syn::parse_quote! {
         physical {
             relation R(x: i32);
-            r = pipe rename R@0 {x -> x};
+            r = pipe rename R {x -> x};
             a = pipe guard r if (first(x));
             b = pipe bind a with y: i32 = (make(x));
             c = pipe guard b if (second(x, y));
-            out = pipe canon project c keep {x, y};
+            out = let canon project c keep {x, y};
             return out as answer(x, y);
         }
     };

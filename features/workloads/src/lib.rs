@@ -1,6 +1,6 @@
 //! Authored MiniLinq/SQL workloads and deterministic conformance data.
 //!
-//! This standalone workspace consumes public core APIs and sibling planner,
+//! This feature group consumes public core APIs and sibling planner,
 //! rewrite, dialect and surface-pass packages. The primary corpus has 20 queries;
 //! the extended corpus adds 29 authored pairs spanning core and extension queries.
 //! Anti-join workloads use core `!R(..)` clauses without a negation surface pass;
@@ -9,20 +9,21 @@
 //! is 151 files; xtask uses cq-testkit for independent SQL evaluation, strict
 //! byte comparisons and seeded abstract fuzz queries.
 //!
-//! Corpus tests compose named public pipelines: all nine planner passes,
+//! Corpus tests compose named public pipelines: all eleven planner choices,
 //! Physical merge/canonical-prefix/smallest/lazy rewrites, recorded Structures
 //! types, supported pull/push printers, and slice/HashMap/BTreeMap hosts.
-//! One joining triangle kernel uses all 2,400 supported configurations; every
+//! One joining triangle kernel uses all 1,424 supported configurations; every
 //! catalog case also runs visible pairwise rows. Positional advice is slice-only.
 //! UI fixtures pin unsupported printer/host choices and malformed retained layouts.
 //! Pull configurations use checked Sequence lowering, host-only grading and pull
-//! translation by default. Explicit push configurations retain the Structures
-//! terminal. The independent fuzz reference and SQL oracle remain unchanged;
+//! translation by default. Push configurations declare `print_input = structures;`,
+//! as do the Structures-consuming conformance terminals; printer paths are opaque.
+//! The independent fuzz reference and SQL oracle remain unchanged;
 //! counted pull executions use the matching Sequence profile translation.
 //! The corpus's `sequence_conformance` tests replay the pairwise configuration
 //! tables and, for the triangle kernel, planner x join x intersection with host
 //! and rewrite axes covered pairwise (26 or 32 rows per planner, not the
-//! 2,848-row executable product), over every existing fixture scenario. It
+//! 1,424-row executable product), over every existing fixture scenario. It
 //! preserves planner, rewrite, representation and host choices, and explicitly
 //! stores the final producer with a checked Sequence rewrite before comparing
 //! Sequential and Tasks on identical terms. Only Tasks grading rejections are
@@ -47,13 +48,15 @@
 //! and the Mac measurement records.
 
 //!
-//! Run acceptance from this standalone workspace. Corpus and benchmark contracts
+//! Run acceptance from the root workspace. Corpus and benchmark contracts
 //! are documented here; commands that measure performance print fresh evidence.
+//! Data and generated benchmark workers remain cached under
+//! `features/workloads/target/bench`; that semantic cache is not the shared Cargo target.
 //!
 //! ```sh
 //! cargo fmt --check
-//! cargo clippy --all-targets -- -D warnings
-//! cargo test
+//! cargo clippy -p 'cq-workload*' -p cq-xtask --all-targets -- -D warnings
+//! cargo test -p 'cq-workload*' -p cq-xtask
 //! cargo test -p cq-workloads --features counters --test growth -- --nocapture
 //! cargo test -p cq-workload-e2e --features parquet
 //! cargo test -p cq-workload-corpus --test 'sequence_conformance_*' -- --nocapture
@@ -83,8 +86,8 @@
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
 //! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! its existing recognition. Only fallback construction proves union arms
+//! disjoint; literal values prove nothing, and no data keys or constraints are assumed.
 //!
 #![recursion_limit = "512"]
 

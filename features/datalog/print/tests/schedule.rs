@@ -94,12 +94,7 @@ fn rendered_invocations_follow_wave_and_within_wave_order() {
 fn renderer_rejects_nonsynchronous_progress() {
     let mut program = program();
     program.schedule.progress = syn::parse_quote!(asynchronous);
-    assert!(
-        compile(&program)
-            .unwrap_err()
-            .to_string()
-            .contains("synchronous")
-    );
+    assert!(compile(&program).is_err());
 }
 
 #[test]

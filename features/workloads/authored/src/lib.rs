@@ -6,6 +6,8 @@
 use proc_macro2::{Span, TokenStream, TokenTree};
 use std::path::Path;
 
+pub mod tpch_evidence;
+
 fn query(path: &Path) -> syn::Result<TokenStream> {
     let source = std::fs::read_to_string(path).map_err(|error| {
         syn::Error::new(Span::call_site(), format!("{}: {error}", path.display()))

@@ -1,0 +1,48 @@
+program h19 {
+    domain Shipmode = dictionary(lineitem.l_shipmode);
+    domain Shipinstruct = dictionary(lineitem.l_shipinstruct);
+    domain Brand = dictionary(part.p_brand);
+    domain Container = dictionary(part.p_container);
+    input Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
+        l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
+        l_shipmode: StringCode in Shipmode, l_shipinstruct: StringCode in Shipinstruct)
+        = table(lineitem);
+    input Part(p_partkey: i64, p_brand: StringCode in Brand, p_container: StringCode in Container,
+        p_size: i32) = table(part);
+    operand q1_low: Decimal = rust { Decimal::from_scaled(100).unwrap() };
+    operand q1_high: Decimal = rust { Decimal::from_scaled(1100).unwrap() };
+    operand q2_low: Decimal = rust { Decimal::from_scaled(1000).unwrap() };
+    operand q2_high: Decimal = rust { Decimal::from_scaled(2000).unwrap() };
+    operand q3_low: Decimal = rust { Decimal::from_scaled(2000).unwrap() };
+    operand q3_high: Decimal = rust { Decimal::from_scaled(3000).unwrap() };
+    stage s0 {
+        inputs { Lineitem = Lineitem; Part = Part; }
+        captures [q1_low, q1_high, q2_low, q2_high, q3_low, q3_high];
+        evidence {}
+        cq {
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
+                l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
+                l_shipmode: StringCode, l_shipinstruct: StringCode);
+            relation Part(p_partkey: i64, p_brand: StringCode, p_container: StringCode, p_size: i32);
+            relation answer(revenue: i64);
+            answer(sum(revenue_units)) :-
+                Lineitem(order_key, line_number, part_key, quantity, price, discount, ship_mode, ship_instruction),
+                where (ship_mode == "AIR" || ship_mode == "AIR REG") && ship_instruction == "DELIVER IN PERSON",
+                Part(part_key, brand, container, size),
+                where (brand == "Brand#12"
+                    && (container == "SM CASE" || container == "SM BOX" || container == "SM PACK" || container == "SM PKG")
+                    && quantity >= q1_low && quantity <= q1_high && size >= 1 && size <= 5)
+                    || (brand == "Brand#23"
+                    && (container == "MED BAG" || container == "MED BOX" || container == "MED PKG" || container == "MED PACK")
+                    && quantity >= q2_low && quantity <= q2_high && size >= 1 && size <= 10)
+                    || (brand == "Brand#34"
+                    && (container == "LG CASE" || container == "LG BOX" || container == "LG PACK" || container == "LG PKG")
+                    && quantity >= q3_low && quantity <= q3_high && size >= 1 && size <= 15),
+                let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
+        }
+    }
+    terminal {
+        from s0 project [column(0)] dictionaries [];
+    }
+}

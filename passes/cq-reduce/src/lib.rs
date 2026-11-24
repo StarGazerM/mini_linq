@@ -1,8 +1,6 @@
 //! Add only relational semijoin reductions to a valuation plan.
-//! The denotation is `T X = bottom + Set X`; the written Rust chain consists
-//! of opaque partial functions. Relational reductions may move earlier across
-//! it, but Rust steps retain their relative order and written relational
-//! predecessors. I/O, mutation and evaluation counts are outside the meaning.
+//! Rust expressions are opaque, pure and total by premise. Reduction planning
+//! uses only relational facts and preserves the already recorded Rust placement.
 //! Erasure must preserve every non-reduction step exactly. Rust guards and
 //! finite set-valued generators are never pushed onto atom inputs; generators
 //! are neither reduction targets nor supports.
@@ -11,17 +9,16 @@
 //! Positive semijoins may distribute into union arms and fallback positive arms.
 //! Negative operands stay original named branch results.
 //! Hypergraph uses a tree reducer only on acyclic scopes, but exact atom-to-block
-//! cuts on any scope. Masks reduces along the reduction tree on every scope.
+//! cuts on any scope. Masks reduces along the filter-carrying edges of the
+//! stream-rooted reduction tree on every scope (not a full reducer).
 //! Each block branch is analyzed as its own scope.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only fallback construction proves union arms disjoint; literal values prove nothing.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,10 +35,8 @@ pub struct Options {
 }
 
 impl Options {
-    fn effective(self, suppress_hypergraph: bool, suppress_tree: bool) -> Self {
-        if suppress_hypergraph && self.semijoins == Reductions::Hypergraph
-            || suppress_tree && self.semijoins == Reductions::Tree
-        {
+    fn effective(self, suppress_tree: bool) -> Self {
+        if suppress_tree && self.semijoins == Reductions::Tree {
             Self {
                 semijoins: Reductions::None,
             }
@@ -71,7 +66,25 @@ pub enum Reductions {
     Masks,
 }
 
-/// The first scheduled atom or Rust-free block of a scope: its outer stream.
+/// Formal rule R-Placement: Only independently hoisted block occurrences enter a reducer graph.
+fn scope_graph(
+    body: &valuation::cq::CommaList<valuation::cq::BodyItem>,
+    steps: &[Step],
+    context: &BTreeSet<String>,
+) -> valuation::cq::hypergraph::Analysis {
+    let excluded = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Block(block, _) if block.placement == valuation::Placement::Correlated => {
+                Some(block.source.clause())
+            }
+            _ => None,
+        })
+        .collect();
+    valuation::cq::hypergraph::Analysis::of_body_excluding(body, context, &excluded)
+}
+
+/// The first scheduled atom or independently hoisted block: its outer stream.
 pub fn outer(steps: &[Step], graph: &valuation::cq::hypergraph::Analysis) -> Option<usize> {
     steps.iter().find_map(|step| match step {
         Step::Atom(a, _) if graph.clauses.contains_key(&a.clause()) => Some(a.clause()),
@@ -104,24 +117,51 @@ pub fn rooted(tree: &[(usize, Option<usize>)], root: usize) -> BTreeMap<usize, u
     parents
 }
 
+/// H-FilterRank of one VO scope through the restrictions its steps record, so
+/// an occurrence ranks as filtered exactly when lowering will filter it. A
+/// restriction carrying a written predicate of the scope ranks by that
+/// predicate; an implied domain ranks as a derived domain.
+pub fn filter_ranks(
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+    steps: &[Step],
+    graph: &valuation::cq::hypergraph::Analysis,
+) -> BTreeMap<usize, u8> {
+    valuation::cq::hypergraph::filter_ranks(
+        body,
+        graph,
+        steps.iter().filter_map(|step| match step {
+            Step::Restrict(restrict, _) => Some((
+                restrict.clause(),
+                &restrict.predicate,
+                body.iter()
+                    .any(|item| valuation::restrict::states(item, &restrict.predicate)),
+            )),
+            _ => None,
+        }),
+    )
+}
+
 /// `(target, support)` mask edges, children first: each inner clause with each
 /// child whose subtree carries a relational filter or a block cut. Siblings run
 /// strongest first. Supports are always children and the outer (root) is
-/// neither a target nor a support.
+/// neither a target nor a support. `ranks` is the scope's [`filter_ranks`].
 /// Formal rule R-Masks: Reduce each inner clause by its filtered child subtrees of the outer-rooted reduction tree.
 pub fn mask_edges(
     graph: &valuation::cq::hypergraph::Analysis,
     body: &cq::CommaList<valuation::cq::BodyItem>,
     root: usize,
+    ranks: &BTreeMap<usize, u8>,
 ) -> Vec<(usize, usize)> {
     let parents = rooted(&graph.reduction_tree, root);
     let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (&child, &parent) in &parents {
         children.entry(parent).or_default().push(child);
     }
-    let mut local = valuation::cq::hypergraph::filter_ranks(body, graph);
-    for (atom, _) in block_cuts(graph, body) {
-        local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
+    let mut local = ranks.clone();
+    for (atom, block) in block_cuts(graph, body) {
+        if atom != root && block != root {
+            local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
+        }
     }
     fn subtree(
         node: usize,
@@ -185,6 +225,7 @@ pub fn block_cuts(
 }
 
 /// The Masks schedule of one scope: block cuts, then outer-rooted mask edges.
+/// Formal rule R-MasksOrder: Emit cuts by support then target clause, followed by deduplicated depth-first post-order tree edges with siblings ranked by subtree strength then clause.
 fn mask_steps(
     body: &cq::CommaList<valuation::cq::BodyItem>,
     steps: &[Step],
@@ -196,9 +237,10 @@ fn mask_steps(
     };
     let mut edges: Vec<_> = block_cuts(graph, body)
         .into_iter()
-        .filter(|&(atom, _)| atom != root)
+        .filter(|&(atom, block)| atom != root && block != root)
         .collect();
-    for edge in mask_edges(graph, body, root) {
+    let ranks = filter_ranks(body, steps, graph);
+    for edge in mask_edges(graph, body, root, &ranks) {
         if body[edge.0].atom().is_some() && !edges.contains(&edge) {
             edges.push(edge);
         }
@@ -209,19 +251,62 @@ fn mask_steps(
         .collect()
 }
 
+/// Why `compile` refused a plan.
+#[derive(Debug)]
+pub enum Error {
+    /// The Yannakakis (`Tree`) reducer was requested on a cyclic query: the
+    /// route does not apply to this query.
+    Cyclic(syn::Error),
+    /// Any other contract or planning failure.
+    Invalid(syn::Error),
+}
+
+impl From<syn::Error> for Error {
+    fn from(error: syn::Error) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+impl From<Error> for syn::Error {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Cyclic(error) | Error::Invalid(error) => error,
+        }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cyclic(error) | Self::Invalid(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 /// Insert the reductions `options` ask for, then check the VO contract.
-/// Formal rule R-Guard: Retain every opaque Rust guard in the written chain.
+/// Formal rule R-Guard: Retain every unchanged Rust guard in its recorded placement.
 /// Formal rule R-Tree: Insert the relational tree schedule before the first atom.
-pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
-    let analysis = valuation::contract::check(source)?;
-    let graph = valuation::cq::hypergraph::Analysis::of(&source.cq);
-    // Independent branches are exact build-side joins, not fact-dependent
-    // semijoin supports. The optional Hypergraph policy does not interpose a
-    // reducer across this recorded physical decomposition.
-    let effective = options.effective(source.valuation.join_branches.is_some(), false);
-    let options = &effective;
+pub fn compile(
+    cq: &valuation::cq::Program,
+    source: &valuation::Program,
+    options: &Options,
+) -> Result<valuation::Program, Error> {
+    let analysis = valuation::contract::check(cq, source)?;
+    let graph = scope_graph(
+        &cq.query.body,
+        &source.valuation.steps,
+        &BTreeSet::new(),
+    );
+    if options.semijoins == Reductions::Tree && graph.join_tree.is_none() {
+        return Err(Error::Cyclic(syn::Error::new_spanned(
+            &cq.query.body,
+            "Yannakakis reduction requires an acyclic query",
+        )));
+    }
     let steps = compile_steps(
-        &source.cq.query.body,
+        &cq.query.body,
         &source.valuation.steps,
         &analysis,
         &graph,
@@ -229,15 +314,14 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
         options,
     )?;
     let program = valuation::Program {
-        cq: source.cq.clone(),
         valuation: valuation::Valuation {
             valuation_token: source.valuation.valuation_token,
-            join_branches: source.valuation.join_branches.clone(),
+            ordering: source.valuation.ordering.clone(),
             brace: Default::default(),
             steps,
         },
     };
-    valuation::contract::check(&program)?;
+    valuation::contract::check(cq, &program)?;
     Ok(program)
 }
 
@@ -266,7 +350,7 @@ fn compile_steps(
         || options.semijoins == Reductions::Hypergraph && graph.acyclic
     {
         let reducer = if options.semijoins == Reductions::Hypergraph {
-            filtered_tree(graph, analysis, body)?
+            filtered_tree(graph, analysis, body, source_steps)?
         } else {
             tree(graph, analysis, body)?
         };
@@ -316,13 +400,13 @@ fn compile_steps(
         .collect();
     if !required.is_empty() {
         let position = analysis
-            .bound_before
+            .provided_before
             .iter()
             .position(|names| required.iter().all(|name| names.contains(name)))
             .ok_or_else(|| {
                 syn::Error::new_spanned(
                     body,
-                    "block finite domain requires its written Rust context",
+                    "block finite domain requires its free columns to be bound",
                 )
             })?;
         let reductions = std::mem::take(&mut before)
@@ -367,11 +451,8 @@ fn compile_steps(
                     .unwrap_or_default()
                     .into_iter()
                     .collect();
-                let inner = valuation::cq::hypergraph::Analysis::of_body(
-                    &written.branches[j].body,
-                    &context,
-                );
-                let options = options.effective(false, !inner.acyclic);
+                let inner = scope_graph(&written.branches[j].body, &branch.steps, &context);
+                let options = options.effective(!inner.acyclic);
                 branch.steps = compile_steps(
                     &written.branches[j].body,
                     &branch.steps,
@@ -454,6 +535,7 @@ fn filtered_tree(
     graph: &valuation::cq::hypergraph::Analysis,
     analysis: &valuation::Analysis,
     body: &cq::CommaList<valuation::cq::BodyItem>,
+    steps: &[Step],
 ) -> syn::Result<Vec<Step>> {
     let tree = &graph.reduction_tree;
     let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -468,7 +550,7 @@ fn filtered_tree(
     let Some(root) = root else {
         return Ok(Vec::new());
     };
-    let local = valuation::cq::hypergraph::filter_ranks(body, graph);
+    let local = filter_ranks(body, steps, graph);
     let mut ranks = local.clone();
     fn summarize(
         node: usize,

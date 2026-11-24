@@ -8,10 +8,9 @@ fn check(case: Case, execute: impl Fn(&Raw) -> (Vec<Vec<i32>>, Vec<Vec<i32>>)) {
         .inputs
         .iter()
         .map(|(name, rows)| {
-            (
-                (*name).to_owned(),
-                rows.iter().map(|row| row.to_vec()).collect(),
-            )
+            let mut rows: Vec<_> = rows.iter().map(|row| row.to_vec()).collect();
+            cq_load::canonicalize(&mut rows);
+            ((*name).to_owned(), rows)
         })
         .collect();
     agreement(case.name, &raw, &case.expected_rows(), &execute);

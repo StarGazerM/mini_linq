@@ -3,23 +3,162 @@
 pub mod canon;
 pub mod device;
 pub mod group;
+pub mod index_bytes;
 mod kernels;
+pub mod offsets;
 pub mod selected;
+pub mod share;
 pub use selected::{select, SelectedRows};
 
 pub use cq_gpu_runtime::{Bounds, Buffer, Codec, ColumnView, DeviceColumns, EncodedColumn, Pool};
-use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
+use cuda_core::{CudaContext, CudaStream, DeviceCopy, LaunchConfig1D};
+type DeviceBuffer<T> = rccl_memory::DeviceBuffer<'static, T, &'static MemoryResource>;
 use gpu_compress::{Catalog, Domain};
 use gpu_compress_host::Kind;
 pub use gpu_device_columns::{MemoryResource, OutputCount};
 use rccl_cub::DoubleBuffer;
-use rccl_thrust::prelude::*;
 use rccl_thrust::{
     arithmetic_range, gather, lower_bound, select_flagged, sort_columns_lexicographic,
 };
 use std::{cell::RefCell, sync::Arc};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+
+/// Launch geometry of one auxiliary kernel family, printed from the GPU realization record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Geometry {
+    pub block_threads: u32,
+    pub shared_bytes: u32,
+}
+
+impl Geometry {
+    /// The family's launch configuration over `blocks` blocks.
+    pub(crate) fn config(self, blocks: u32) -> LaunchConfig1D {
+        LaunchConfig1D::new(blocks, self.block_threads, self.shared_bytes)
+    }
+
+    /// Resident grid for a grid-stride kernel over `items` elements.
+    pub(crate) fn grid(self, function: &cuda_core::CudaFunction, items: usize) -> Result<u32> {
+        cq_gpu_runtime::launch_grid_for_kernel(
+            function,
+            items.div_ceil(self.block_threads as usize),
+            self.block_threads,
+            self.shared_bytes,
+        )
+    }
+
+    /// Reject a recorded geometry the family's kernels cannot execute.
+    pub(crate) fn check(self, family: &str, supported: Geometry) -> Result<Self> {
+        if self == supported {
+            Ok(self)
+        } else {
+            Err(format!(
+                "unsupported {family} auxiliary geometry {self:?}; its kernels support only {supported:?}"
+            )
+            .into())
+        }
+    }
+}
+
+/// Per-family auxiliary kernel geometry (formal rule GPU-Realization auxiliary record).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Auxiliary {
+    /// `range_flags`: selection predicates of `select`, `radix_layout` and range builds.
+    pub selection: Geometry,
+    /// `offsets::scan` adjacent-prefix check.
+    pub offsets: Geometry,
+    /// Range-provider key extraction (`keys_and_rows`, `sequence_decode_column`).
+    pub range: Geometry,
+    /// Canon element kernels (`gather_lane`, `unpack_field`).
+    pub canon: Geometry,
+    /// Group element kernels (`identity`, `gather_key`, `boundaries`).
+    pub group: Geometry,
+    /// Group `reduce`: one block per group and column.
+    pub group_reduce: Geometry,
+    /// `numeric_bounds` reduction of uploads and measured publications.
+    pub bounds: Geometry,
+}
+
+impl Auxiliary {
+    /// Supported-value table. Every auxiliary kernel's launch contract and
+    /// `launch_bounds` fix 256-thread blocks, with matching grid strides and
+    /// tree reductions. Element kernels use no shared memory; `reduce` stages
+    /// 256 i64 lanes (4096 B); `numeric_bounds` writes one partial pair per
+    /// warp. There is deliberately no public default: callers pass the record.
+    pub(crate) const SUPPORTED: Auxiliary = Auxiliary {
+        selection: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        offsets: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        range: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        canon: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        group: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        group_reduce: Geometry {
+            block_threads: 256,
+            shared_bytes: 4096,
+        },
+        bounds: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+    };
+    /// `GlobalFold::finish` combine: 256 i64 values, then 256 u32 presence
+    /// flags at byte 2048 (3072 B), one block per aggregate.
+    pub(crate) const SUPPORTED_COMBINE: Geometry = Geometry {
+        block_threads: 256,
+        shared_bytes: 3072,
+    };
+
+    /// Reject any family geometry its kernels cannot execute; never adjusts.
+    pub fn validate(&self) -> Result<()> {
+        let supported = Self::SUPPORTED;
+        self.selection.check("selection", supported.selection)?;
+        self.offsets.check("offsets", supported.offsets)?;
+        self.range.check("range", supported.range)?;
+        self.canon.check("canon", supported.canon)?;
+        self.group.check("group", supported.group)?;
+        self.group_reduce
+            .check("group_reduce", supported.group_reduce)?;
+        self.bounds.check("bounds", supported.bounds)?;
+        Ok(())
+    }
+}
+
+/// How an uploaded column's bounds are established.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadBounds {
+    /// One device reduction and one readback over the uploaded column.
+    Measure,
+    /// The column scalar type's full range, without a readback.
+    Scalar,
+}
+
+/// Device codec of an uploaded column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadCodec {
+    /// Frame-of-reference over the column's established bounds.
+    For,
+}
+
+/// Recorded representation of one uploaded numeric column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UploadColumn {
+    pub codec: UploadCodec,
+    pub bounds: UploadBounds,
+}
 
 thread_local! {
     // Scratch capacity only: every invocation repopulates every live lane.
@@ -57,7 +196,10 @@ impl Default for QueryScope {
 pub fn register_query_cleanup(release: fn()) {
     QUERY_CLEANUP.with(|cleanup| {
         if let Some(cleanup) = cleanup.borrow_mut().as_mut() {
-            if !cleanup.iter().any(|&existing| std::ptr::fn_addr_eq(existing, release)) {
+            if !cleanup
+                .iter()
+                .any(|&existing| std::ptr::fn_addr_eq(existing, release))
+            {
                 cleanup.push(release);
             }
         }
@@ -84,9 +226,22 @@ pub mod __codegen {
         )*};
     }
     partitions!(
-        partition_0, partition_1, partition_2, partition_3, partition_4, partition_5,
-        partition_6, partition_7, partition_8, partition_9, partition_10, partition_11,
-        partition_12, partition_13, partition_14, partition_15,
+        partition_0,
+        partition_1,
+        partition_2,
+        partition_3,
+        partition_4,
+        partition_5,
+        partition_6,
+        partition_7,
+        partition_8,
+        partition_9,
+        partition_10,
+        partition_11,
+        partition_12,
+        partition_13,
+        partition_14,
+        partition_15,
     );
 }
 
@@ -96,36 +251,45 @@ impl Drop for QueryScope {
         for release in cleanup.into_iter().flatten() {
             release();
         }
-        RANGE_RADIX_WORKSPACE.with(|cache| cache.borrow_mut().take());
+        RADIX_WORKSPACES.with(|cache| cache.borrow_mut().clear());
         TEMP_U32.with(|cache| cache.borrow_mut().take());
         TEMP_U64.with(|cache| cache.borrow_mut().take());
-        canon::release_query_cache();
+        gpu_datalog_runtime::radix_run::release_set_scratch();
         BUILD_MODULE.with(|cache| cache.borrow_mut().take());
         gpu_device_columns::release_cached_kernels();
         NUMERIC_UPLOAD_SCRATCH.with(|cache| cache.borrow_mut().clear());
     }
 }
 
-/// Upload primitive numeric columns emitted by a host Sequence boundary.
-/// The translator supplies one i64 lane per declared field, in layout order.
-/// This avoids re-encoding primitive tuples through a dictionary and scratch
-/// row vector. Scratch capacities are reused, never relation contents, and all
-/// realization and upload work remains inside the provider's build timing.
+/// Upload scalar numeric lanes emitted by a host Sequence boundary.
+/// The translator supplies one i64 lane per declared field, in layout order,
+/// and one recorded [`UploadColumn`] per field. Measured columns run one
+/// `numeric_bounds` reduction and readback each, with the recorded `bounds`
+/// family `geometry`; scalar columns use their type's full range.
+/// Scalar codecs retain Decimal coefficients, Date epoch days, and published
+/// symbol codes without staging a tuple vector. Scratch capacities are reused,
+/// and all realization and upload work remains inside the provider's build timing.
 #[doc(hidden)]
-pub fn upload_numeric_columns<Row: cq_gpu_runtime::OwnedRowCodec, F>(
+pub fn upload_numeric_columns<Row: gpu_datalog_runtime::ScalarTuple, F>(
     pool: Arc<Pool>,
     fill: F,
+    columns: &[UploadColumn],
+    geometry: Geometry,
 ) -> Result<DeviceColumns<'static, Row>>
 where
     F: FnOnce(&mut [Vec<i64>]) -> Result<()>,
 {
+    if columns.len() != Row::COLUMNS.len() {
+        return Err("numeric upload records must describe every row column".into());
+    }
+    geometry.check("bounds", Auxiliary::SUPPORTED.bounds)?;
     // Check out the scratch rather than holding a RefCell borrow across host
     // evaluation: an opaque host expression may invoke another query.
     let mut raw = NUMERIC_UPLOAD_SCRATCH.with(|cache| std::mem::take(&mut *cache.borrow_mut()));
-    raw.resize_with(Row::WIDTH, Vec::new);
+    raw.resize_with(Row::COLUMNS.len(), Vec::new);
     let result = (|| {
         fill(&mut raw)?;
-        upload_numeric_lanes(pool, &raw)
+        upload_numeric_lanes(pool, &raw, columns, geometry)
     })();
     for column in &mut raw {
         column.clear();
@@ -134,65 +298,94 @@ where
     result
 }
 
-fn upload_numeric_lanes<Row: cq_gpu_runtime::OwnedRowCodec>(
+/// The full range of a scalar lane, which must be representable in i64.
+fn scalar_bounds(column: gpu_datalog_runtime::Column) -> Result<Bounds> {
+    let bits = column.bits();
+    let (min, max) = if column.is_signed() {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    };
+    match (i64::try_from(min), i64::try_from(max)) {
+        (Ok(min), Ok(max)) => Ok(Bounds::Inclusive { min, max }),
+        _ => Err(format!("{column:?} upload lanes have no i64 scalar range").into()),
+    }
+}
+
+fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
     pool: Arc<Pool>,
     raw: &[Vec<i64>],
+    records: &[UploadColumn],
+    geometry: Geometry,
 ) -> Result<DeviceColumns<'static, Row>> {
     let rows = raw.first().ok_or("numeric upload needs a column")?.len();
-    if raw.len() != Row::WIDTH || raw.iter().any(|column| column.len() != rows) {
+    if raw.len() != Row::COLUMNS.len() || raw.iter().any(|column| column.len() != rows) {
         return Err("numeric upload columns must match the row layout".into());
     }
     if rows > u32::MAX as usize {
         return Err("numeric upload exceeds the u32 row domain".into());
     }
-    let metadata = Arc::new(Buffer::from_host(pool.clone(), &[gpu_device_columns::OutputCount {
-        rows: rows as u64,
-        error: 0,
-        padding: 0,
-    }])?);
+    let metadata = Arc::new(Buffer::from_host(
+        pool.clone(),
+        &[gpu_device_columns::OutputCount {
+            rows: rows as u64,
+            error: 0,
+            padding: 0,
+        }],
+    )?);
     let columns = raw
         .iter()
-        .map(|values| {
+        .zip(records)
+        .zip(Row::COLUMNS)
+        .map(|((values, record), &column)| {
             let input = Buffer::from_host(pool.clone(), values)?;
-            let bounds = if rows == 0 {
-                Bounds::Empty
-            } else {
-                let blocks = rows.div_ceil(256).min(568);
-                let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), blocks * 16)? };
-                let module = build_module(&pool)?;
-                module.numeric_bounds(
-                    pool.stream(),
-                    &module.prepare_numeric_bounds(LaunchConfig1D::new(blocks as u32, 256, 0))?,
-                    input.ptr(),
-                    rows as u32,
-                    partial.ptr(),
-                )?;
-                let partial = partial.to_host()?;
-                let (min, max) = partial.chunks_exact(2).fold(
-                    (i64::MAX, i64::MIN),
-                    |(min, max), pair| (min.min(pair[0]), max.max(pair[1])),
-                );
-                Bounds::Inclusive { min, max }
+            let bounds = match record.bounds {
+                UploadBounds::Measure => source_bounds(
+                    &pool,
+                    ColumnDescriptor::native_source(input.ptr().cast(), rows),
+                    rows,
+                    geometry,
+                )?,
+                UploadBounds::Scalar => scalar_bounds(column)?,
             };
-            // This upload initialized the complete prefix. The immutable
-            // metadata retains its exact count; no compact-extent readback
-            // is needed in a timed provider build.
+            let bounds = if rows == 0 { Bounds::Empty } else { bounds };
+            let codec = match record.codec {
+                UploadCodec::For => Codec::For,
+            };
+            // The upload initialized the complete prefix and already measured
+            // its source bounds (or supplied a proven scalar range). Reuse that
+            // enclosure without another publication reduction or readback.
             unsafe {
-                EncodedColumn::from_device(
-                    pool.clone(), input.ptr(), rows, metadata.clone(), 0, Codec::For, bounds,
-                ).map(Arc::new)
+                EncodedColumn::from_device_with_bounds(
+                    pool.clone(),
+                    input.ptr(),
+                    rows,
+                    metadata.clone(),
+                    0,
+                    codec,
+                    bounds,
+                )
+                .map(Arc::new)
             }
         })
         .collect::<Result<Vec<_>>>()?;
     let bounds = columns.iter().map(|column| column.bounds()).collect();
-    let host_views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
+    let host_views: Vec<_> = columns
+        .iter()
+        .map(|column| unsafe { column.view() })
+        .collect();
     let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
     // Columns are initialized on this pool's stream; the table retains every
     // owner and its exact row count. Primitive lanes need no dictionary IDs.
     Ok(unsafe {
         DeviceColumns::from_parts(
             gpu_device_columns::Table {
-                columns, views, metadata, capacity: rows, bounds, statuses: Vec::new(),
+                columns,
+                views,
+                metadata,
+                capacity: rows,
+                bounds,
+                statuses: Vec::new(),
             },
             Arc::new(cq_gpu_runtime::Dictionary::default()),
             pool,
@@ -219,7 +412,9 @@ impl<'a> DenseDictionary<'a> {
     pub fn encode(&self, value: i64) -> Option<u32> {
         self.domain.id(value)
     }
+    // DECODE ?: domain ordinal inverse has no local caller read/publication evidence.
     pub fn decode(&self, id: u32) -> Option<i64> {
+        // DECODE ?: checked domain lookup reconstructs a source key for an unspecified consumer.
         ((id as usize) < self.len()).then(|| self.domain.value(id))
     }
     pub fn len(&self) -> usize {
@@ -237,6 +432,7 @@ impl<'a> DenseDictionary<'a> {
 }
 
 /// An owning source column and its known live row prefix.
+/// Bounds enclose the live values; a subset need not retain either endpoint.
 #[derive(Clone)]
 pub struct ColumnDescriptor {
     owner: ColumnOwner,
@@ -360,6 +556,15 @@ impl ColumnDescriptor {
     pub fn bounds(&self) -> Bounds {
         self.bounds
     }
+    /// Measure a computed publication when its declared scalar range is not
+    /// a usable provider domain, with the recorded `bounds` family geometry.
+    /// Only reduction metadata crosses to the host.
+    pub fn measure_bounds(&mut self, geometry: Geometry) -> Result<()> {
+        geometry.check("bounds", Auxiliary::SUPPORTED.bounds)?;
+        // DECODE V: measuring a computed packed publication reconstructs values before provider planning; P6 reuse recorded summaries.
+        self.bounds = source_bounds(self.pool(), self.source, self.rows, geometry)?;
+        Ok(())
+    }
     pub fn rows(&self) -> usize {
         self.rows
     }
@@ -368,12 +573,123 @@ impl ColumnDescriptor {
     }
 }
 
-/// One dense u32 key level, in lexicographic order. The first level owns the
-/// domain+1 lower-bound directory; subsequent levels order rows within ranges.
+// DECODE ?: source-bound reduction accepts identity and packed sources; caller representation facts decide whether it decodes.
+/// `geometry` is the checked `bounds` family geometry.
+fn source_bounds(
+    pool: &Arc<Pool>,
+    source: gpu_device_columns::SourceView,
+    rows: usize,
+    geometry: Geometry,
+) -> Result<Bounds> {
+    if rows == 0 {
+        return Ok(Bounds::Empty);
+    }
+    let rows_u32 = u32::try_from(rows).map_err(|_| "numeric bounds exceed the u32 row domain")?;
+    let module = build_module(pool)?;
+    let shape = module.prepare_numeric_bounds(geometry.config(1))?;
+    let blocks = geometry.grid(shape.function(), rows)?;
+    // One (min, max) partial per warp of every launched block.
+    let partials = blocks as usize * (geometry.block_threads as usize / 32) * 2;
+    let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), partials)? };
+    // DECODE V: bounds discovery launches source reconstruction before index building; P6 consume recorded summaries instead.
+    module.numeric_bounds(
+        pool.stream(),
+        &module.prepare_numeric_bounds(geometry.config(blocks))?,
+        source,
+        rows_u32,
+        partial.ptr(),
+    )?;
+    let partial = partial.to_host()?;
+    let (min, max) = partial
+        .chunks_exact(2)
+        .fold((i64::MAX, i64::MIN), |(min, max), pair| {
+            (min.min(pair[0]), max.max(pair[1]))
+        });
+    Ok(Bounds::Inclusive { min, max })
+}
+
+/// One dense u32 key level, in lexicographic order. Values are translated by
+/// the recorded column minimum before indexing; payload values stay unchanged.
 #[derive(Clone)]
 pub struct KeyDescriptor {
     pub column: ColumnDescriptor,
     pub domain_size: usize,
+}
+
+fn key_base(bounds: Bounds) -> i64 {
+    match bounds {
+        Bounds::Empty => 0,
+        Bounds::Inclusive { min, .. } => min,
+    }
+}
+
+/// Checked directory extent for a possibly signed, dense integer domain.
+pub fn dense_key_domain(bounds: Bounds) -> Result<usize> {
+    match bounds {
+        Bounds::Empty => Ok(0),
+        Bounds::Inclusive { min, max } => {
+            let span = max
+                .checked_sub(key_base(bounds))
+                .and_then(|span| span.checked_add(1))
+                .filter(|&span| min <= max && span > 0 && span < u32::MAX as i64)
+                .ok_or("dense key domain must leave u32::MAX available as a sentinel")?;
+            Ok(usize::try_from(span)?)
+        }
+    }
+}
+
+#[cfg(test)]
+mod dense_key_tests {
+    use super::{dense_key_domain, key_base, Bounds};
+
+    #[test]
+    fn radix_fields_use_recorded_value_bits_not_carrier_widths() {
+        use gpu_datalog_runtime::Column;
+        assert_eq!(super::radix_source_field(Bounds::Inclusive { min: 3, max: 127 }, Column::U32).unwrap(), (7, false));
+        assert_eq!(super::radix_source_field(Bounds::Inclusive { min: -128, max: 127 }, Column::I32).unwrap(), (8, true));
+        assert_eq!(super::radix_source_field(Bounds::Inclusive { min: -1, max: 0 }, Column::I32).unwrap(), (1, true));
+        assert_eq!(super::radix_source_field(Bounds::Empty, Column::U32).unwrap(), (1, false));
+        assert!(super::radix_source_field(Bounds::Inclusive { min: -1, max: 4 }, Column::U32).is_err());
+        assert!(super::radix_source_field(Bounds::Inclusive { min: 0, max: 1i64 << 40 }, Column::I64).is_err());
+    }
+
+    #[test]
+    fn domains_translate_from_their_recorded_minimum() {
+        for (min, max, base, size) in [
+            (-3, -1, -3, 3),
+            (-3, 2, -3, 6),
+            (i64::MIN, i64::MIN, i64::MIN, 1),
+            (7, 100, 7, 94),
+        ] {
+            let bounds = Bounds::Inclusive { min, max };
+            assert_eq!(key_base(bounds), base);
+            assert_eq!(dense_key_domain(bounds).unwrap(), size);
+        }
+        assert_eq!(key_base(Bounds::Empty), 0);
+        assert_eq!(dense_key_domain(Bounds::Empty).unwrap(), 0);
+    }
+
+    #[test]
+    fn unrepresentable_dense_domains_fail_before_key_normalization() {
+        for (min, max) in [
+            (i64::MIN, i64::MAX),
+            (i64::MIN, 0),
+            (0, i64::MAX),
+            (-1, u32::MAX as i64 - 2),
+            (0, u32::MAX as i64 - 1),
+            (2, 1),
+        ] {
+            assert!(dense_key_domain(Bounds::Inclusive { min, max }).is_err());
+        }
+        assert_eq!(
+            dense_key_domain(Bounds::Inclusive {
+                min: -1,
+                max: u32::MAX as i64 - 3
+            })
+            .unwrap(),
+            u32::MAX as usize - 1,
+        );
+    }
 }
 #[derive(Clone)]
 pub struct RangeSelection {
@@ -395,6 +711,8 @@ pub struct PayloadDescriptor {
 #[derive(Clone)]
 pub struct RangeDescriptor {
     pub key: Vec<KeyDescriptor>,
+    /// Checked allocation size, including the terminal lower-bound entry.
+    pub directory_entries: usize,
     /// A half-open predicate applied before sorting, not a post-build filter.
     pub selection: Option<RangeSelection>,
     pub payload: Vec<PayloadDescriptor>,
@@ -412,9 +730,11 @@ impl RangeDescriptor {
     }
 
     fn directory_entries(&self) -> Option<usize> {
-        self.key
-            .first()
-            .map_or(Some(0), |key| key.domain_size.checked_add(1))
+        let valid = match self.key.first() {
+            None => self.directory_entries == 0,
+            Some(key) => self.directory_entries.checked_sub(1) == Some(key.domain_size),
+        };
+        valid.then_some(self.directory_entries)
     }
 }
 
@@ -431,6 +751,7 @@ pub struct CatalogRangeSelection {
 pub struct CatalogRangeDescriptor {
     pub table: String,
     pub key: Vec<CatalogKeyDescriptor>,
+    pub directory_entries: usize,
     pub selection: Option<CatalogRangeSelection>,
     pub payload: Vec<String>,
 }
@@ -479,10 +800,102 @@ impl RangeDescriptor {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
+            directory_entries: descriptor.directory_entries,
             key,
             selection,
             payload,
         })
+    }
+}
+
+fn radix_source_field(bounds: Bounds, column: gpu_datalog_runtime::Column) -> Result<(u32, bool)> {
+    let signed = column.is_signed();
+    let bits = match bounds {
+        Bounds::Empty => 1,
+        Bounds::Inclusive { min, max } if min <= max => {
+            if signed {
+                let negative = if min < 0 { (!min) as u64 } else { 0 };
+                1 + (64 - negative.max(max.max(0) as u64).leading_zeros())
+            } else {
+                if min < 0 { return Err("unsigned radix key has negative recorded bounds".into()); }
+                (64 - (max as u64).leading_zeros()).max(1)
+            }
+        }
+        _ => return Err("radix key has invalid recorded bounds".into()),
+    };
+    if bits > 32 || bits > column.bits() {
+        return Err("recorded radix key exceeds its <=32-bit code carrier".into());
+    }
+    Ok((bits, signed))
+}
+
+/// Formal rule GPU-RadixSourceBuild over resident CQ sources: one radix
+/// publication of the key and value descriptor columns, restricted to the
+/// recorded half-open selection when present. Every column shares `pool`
+/// and the same live row count; keys and lanes follow the caller's recorded
+/// schema (`K`, `C`), checked against the layout's types by the runtime.
+/// `selection_geometry` is the recorded `selection` family geometry.
+pub fn radix_layout<K, V, W, O, C>(
+    pool: &Arc<Pool>,
+    params: gpu_datalog_runtime::RadixRunParams,
+    keys: &[ColumnDescriptor],
+    values: &[ColumnDescriptor],
+    selection: Option<&RangeSelection>,
+    selection_geometry: Geometry,
+) -> Result<gpu_datalog_runtime::RadixLayout<K, V, W, O, C>>
+where
+    K: gpu_datalog_runtime::ScalarTuple,
+    V: gpu_datalog_runtime::ScalarTuple,
+    W: gpu_datalog_runtime::Word + 'static,
+    O: gpu_datalog_runtime::OffsetWord,
+    C: gpu_datalog_runtime::SourceItemColumns,
+{
+    let rows = keys
+        .iter()
+        .chain(values)
+        .map(|column| column.rows)
+        .next()
+        .ok_or("radix layout needs a source column")?;
+    if keys
+        .iter()
+        .chain(values)
+        .any(|column| column.rows != rows || !Arc::ptr_eq(column.pool(), pool))
+    {
+        return Err("radix source columns must share the pool and live row count".into());
+    }
+    let selected = selection
+        .map(|selection| select(pool.clone(), selection, selection_geometry))
+        .transpose()?;
+    let (positions, count) = match &selected {
+        Some(selected) if selected.is_empty() => (std::ptr::null(), 0),
+        Some(selected) => (selected.ptr(), selected.len()),
+        None => (std::ptr::null(), rows),
+    };
+    if keys.len() != K::COLUMNS.len() {
+        return Err("radix key descriptors differ from the carrier schema".into());
+    }
+    let fields = keys.iter().zip(K::COLUMNS).map(|(key, &column)| {
+        radix_source_field(key.bounds(), column)
+    }).collect::<Result<Vec<_>>>()?;
+    let packing = gpu_datalog_runtime::RadixLayout::<K, V, W, O, C>::derive_packing_with_fields(&fields)?;
+    let keys = keys.iter().map(ColumnDescriptor::view).collect::<Vec<_>>();
+    let values = values
+        .iter()
+        .map(ColumnDescriptor::view)
+        .collect::<Vec<_>>();
+    // SAFETY: descriptors own their columns, whose live prefixes are ready on
+    // `pool`'s stream (ColumnDescriptor contract); selected positions are
+    // produced on the same stream and index that prefix.
+    unsafe {
+        gpu_datalog_runtime::RadixLayout::from_sources_with_packing(
+            pool.clone(),
+            params,
+            packing,
+            &keys,
+            &values,
+            positions,
+            count,
+        )
     }
 }
 
@@ -495,6 +908,7 @@ pub struct RangeView {
     pub payload: *const ColumnView,
     pub payload_columns: u32,
     pub domain: u32,
+    pub base: i64,
     pub len: u32,
 }
 
@@ -505,18 +919,28 @@ pub struct RangeProvider {
     payload: Vec<EncodedColumn>,
     payload_views: Arc<Buffer<ColumnView>>,
     domain: u32,
+    base: i64,
     len: u32,
 }
 impl RangeProvider {
-    pub fn build(pool: Arc<Pool>, descriptor: &RangeDescriptor) -> Result<Self> {
-        RangeBuilder::new(&pool)?.build(descriptor)
+    /// Construction follows the selected provider, including its reusable workspace ABI.
+    pub fn builder<'pool>(pool: &'pool Arc<Pool>, aux: &Auxiliary) -> Result<RangeBuilder<'pool>> {
+        RangeBuilder::new(pool, aux)
+    }
+    pub fn build(pool: Arc<Pool>, descriptor: &RangeDescriptor, aux: &Auxiliary) -> Result<Self> {
+        RangeBuilder::new(&pool, aux)?.build(descriptor)
     }
     pub fn from_catalog(
         pool: Arc<Pool>,
         catalog: &Catalog,
         descriptor: &CatalogRangeDescriptor,
+        aux: &Auxiliary,
     ) -> Result<Self> {
-        Self::build(pool, &RangeDescriptor::from_catalog(catalog, descriptor)?)
+        Self::build(
+            pool,
+            &RangeDescriptor::from_catalog(catalog, descriptor)?,
+            aux,
+        )
     }
     pub fn len(&self) -> usize {
         self.len as usize
@@ -550,6 +974,7 @@ impl RangeProvider {
             payload: self.payload_views.ptr(),
             payload_columns: self.payload.len() as u32,
             domain: self.domain,
+            base: self.base,
             len: self.len,
         }
     }
@@ -558,27 +983,20 @@ impl RangeProvider {
 thread_local! {
     static BUILD_MODULE: RefCell<Option<(Arc<CudaContext>, kernels::build::LoadedModule)>> =
         const { RefCell::new(None) };
-    static RANGE_RADIX_WORKSPACE: RefCell<Option<RangeRadixWorkspace>> =
-        const { RefCell::new(None) };
+    static RADIX_WORKSPACES: RefCell<Vec<RadixWorkspace>> =
+        const { RefCell::new(Vec::new()) };
 }
 
-/// Release this thread's idle canonicalization and range-sort device scratch.
+/// Release this thread's idle range-sort and grouped-sort device scratch.
 ///
 /// Call after dropping stratum-local providers, before [`Pool::release_unused`].
 /// Published results and checked-out providers retain their own allocations.
 /// Frees follow prior uses on the matching pool's stream; this does not wait
-/// for completion. Native CUDA scratch is not included in pool memory stats.
+/// for completion. Pooled library scratch is included in pool memory stats.
 pub fn release_cached_scratch(pool: &Arc<Pool>) {
-    canon::release_cached_scratch(pool);
-    let scratch = RANGE_RADIX_WORKSPACE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache.as_ref().is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool)) {
-            cache.take()
-        } else {
-            None
-        }
+    RADIX_WORKSPACES.with(|cache| {
+        cache.borrow_mut().retain(|scratch| !Arc::ptr_eq(&scratch.pool, pool));
     });
-    drop(scratch);
 }
 
 /// Keep only the most recently used context's named build module on this thread.
@@ -595,56 +1013,62 @@ pub(crate) fn build_module(pool: &Pool) -> Result<kernels::build::LoadedModule> 
     })
 }
 
-struct RangeRadixWorkspace {
+type PooledRadixWorkspace = rccl_cub::DeviceRadixSortBufferWorkspace<
+    rccl_memory::DeviceBuffer<'static, u64, &'static MemoryResource>,
+    rccl_memory::DeviceBuffer<'static, i32, &'static MemoryResource>,
+    rccl_memory::DeviceBuffer<'static, i32, &'static MemoryResource>,
+>;
+struct RadixWorkspace {
     rows: usize,
-    workspace: rccl_cub::DeviceRadixSortBufferWorkspace,
+    wide_keys: bool,
+    workspace: PooledRadixWorkspace,
     pool: Arc<Pool>,
 }
-impl Drop for RangeRadixWorkspace {
-    fn drop(&mut self) {
-        // Match CanonScratch: consuming these controls is not exposed by RCCL.
-        // Empty replacements allocate nothing; real frees stay stream ordered.
-        fn release<T: DeviceCopy>(pool: &Pool, buffer: &mut DeviceBuffer<T>) {
-            let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }
-                .expect("zero-length device buffer needs no allocation");
-            let buffer = std::mem::replace(buffer, empty);
-            pool.context().record_err(unsafe { buffer.drop_async(pool.stream()) });
-        }
-        let (bins, lookback, counters) = self.workspace.__parts_mut();
-        release(&self.pool, bins);
-        release(&self.pool, lookback);
-        release(&self.pool, counters);
-    }
-}
 
-fn with_range_radix_workspace(
+/// Retain grow-only controls for each key width on the active pool.
+/// RCCL clears controls before each sort; sharing is stream ordered.
+/// Published results never borrow this scratch.
+fn with_radix_workspace(
     pool: &Arc<Pool>,
     launch: &rccl_cub::cuda::Launch<'_, '_>,
     rows: usize,
-    sort: impl FnOnce(&mut rccl_cub::DeviceRadixSortBufferWorkspace) -> Result<()>,
+    wide_keys: bool,
+    sort: impl FnOnce(&mut PooledRadixWorkspace) -> Result<()>,
 ) -> Result<()> {
-    RANGE_RADIX_WORKSPACE.with(|cache| {
+    RADIX_WORKSPACES.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache
-            .as_ref()
-            .is_none_or(|scratch| !Arc::ptr_eq(&scratch.pool, pool) || scratch.rows != rows)
-        {
-            // Keep only the latest exact-row workspace, not one allocation
-            // for every relation size encountered on this thread. Free before
-            // allocating its replacement to avoid overlapping their lifetimes.
-            drop(cache.take());
-            pool.context().bind_to_thread()?;
-            *cache = Some(RangeRadixWorkspace {
-                rows,
-                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(launch, rows)?,
-                pool: pool.clone(),
-            });
-        }
-        let scratch = cache.as_mut().unwrap();
-        // RCCL clears the entire lookback allocation each pass, so retain exact
-        // row-sized controls rather than clearing the largest provider's scratch.
-        // The retained pool fixes the stream, so successive uses remain ordered.
-        sort(&mut scratch.workspace)
+        cache.retain(|scratch| Arc::ptr_eq(&scratch.pool, pool));
+        let index = match cache.iter().position(|scratch| {
+            scratch.rows >= rows && scratch.wide_keys == wide_keys
+        }) {
+            Some(index) => {
+                let scratch = cache.remove(index);
+                cache.push(scratch);
+                cache.len() - 1
+            }
+            None => {
+                cache.retain(|scratch| scratch.wide_keys != wide_keys);
+                pool.context().bind_to_thread()?;
+                // SAFETY: workspace drops before its retained stable-address pool.
+                let retained: &'static Pool = unsafe { &*Arc::as_ptr(pool) };
+                assert!(std::ptr::eq(launch.stream(), retained.stream().as_ref()));
+                let launch: rccl_cub::cuda::Launch<'static, '_> =
+                    unsafe { std::mem::transmute(*launch) };
+                let workspace = if wide_keys {
+                    rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u64, u32, _>(retained.resource(), &launch, rows)?
+                } else {
+                    rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u32, u32, _>(retained.resource(), &launch, rows)?
+                };
+                cache.push(RadixWorkspace {
+                    rows,
+                    wide_keys,
+                    workspace,
+                    pool: pool.clone(),
+                });
+                cache.len() - 1
+            }
+        };
+        sort(&mut cache[index].workspace)
     })
 }
 
@@ -687,19 +1111,25 @@ impl RangeWorkspace {
 
 /// Reuse loaded build/RCCL programs across providers on the existing pool.
 /// Fresh builders also share the named module and radix controls on this thread.
+/// Every build launches with the recorded `selection` and `range` geometries.
 pub struct RangeBuilder<'pool> {
     pool: &'pool Arc<Pool>,
     module: kernels::build::LoadedModule,
     thrust: rccl_thrust::cuda::Program<'pool>,
     cub: rccl_cub::cuda::Program<'pool>,
+    selection: Geometry,
+    range: Geometry,
 }
 impl<'pool> RangeBuilder<'pool> {
-    pub fn new(pool: &'pool Arc<Pool>) -> Result<Self> {
+    pub fn new(pool: &'pool Arc<Pool>, aux: &Auxiliary) -> Result<Self> {
+        aux.validate()?;
         Ok(Self {
             module: build_module(pool)?,
             thrust: rccl_thrust::cuda::Program::load(pool.context())?,
             cub: rccl_cub::cuda::Program::load(pool.context())?,
             pool,
+            selection: aux.selection,
+            range: aux.range,
         })
     }
     pub fn pool(&self) -> &Arc<Pool> {
@@ -746,7 +1176,7 @@ impl<'pool> RangeBuilder<'pool> {
             match key.column.bounds() {
                 Bounds::Empty if base_rows == 0 => {}
                 Bounds::Inclusive { min, max }
-                    if min >= 0 && max >= min && max < key.domain_size as i64 => {}
+                    if max >= min && dense_key_domain(key.column.bounds())? <= key.domain_size => {}
                 _ => return Err("key bounds do not fit the declared dense domain".into()),
             }
         }
@@ -773,26 +1203,29 @@ impl<'pool> RangeBuilder<'pool> {
         let module = &self.module;
         let (rows, selected) = match &descriptor.selection {
             Some(selection) if base_rows > 0 => {
-                let flags = temporary::<u32>(stream, base_rows)?;
+                let flags = temporary::<u32>(pool, base_rows)?;
+                let shape = module.prepare_range_flags(self.selection.config(1))?;
+                let blocks = self.selection.grid(shape.function(), base_rows)?;
+                // DECODE V: index selection launch reconstructs values before range comparison; P6 translate predicates to codes.
                 module.range_flags(
                     stream,
-                    &module.prepare_range_flags(config(base_rows))?,
+                    &module.prepare_range_flags(self.selection.config(blocks))?,
                     selection.column.view(),
                     base_rows as u32,
                     selection.start,
                     selection.end,
                     pointer(&flags),
                 )?;
-                let mut selected = temporary::<u32>(stream, base_rows)?;
-                let mut count = temporary::<u64>(stream, 1)?;
+                let mut selected = temporary::<u32>(pool, base_rows)?;
+                let mut count = temporary::<u64>(pool, 1)?;
                 select_flagged(
                     &exec,
                     arithmetic_range(0_u32, 1, base_rows),
-                    flags.view(),
-                    selected.view_mut(),
+                    &flags,
+                    &mut selected,
                     &mut count,
                 )?;
-                let rows = count.to_host_vec(stream)?[0] as usize;
+                let rows = count.to_host_vec()?[0] as usize;
                 release(stream, flags)?;
                 release(stream, count)?;
                 (rows, Some(selected))
@@ -821,11 +1254,12 @@ impl<'pool> RangeBuilder<'pool> {
                 .payload
                 .iter()
                 .map(|payload| unsafe {
+                    // DECODE I: keyless payload publication decodes then FOR-reencodes selected rows; avoidable reorganization, P4 keep index payloads plain.
                     pack_payload(pool, payload, source, rows, row_count.clone())
                 })
                 .collect::<Result<Vec<_>>>()?;
             let offsets = unsafe {
-                EncodedColumn::from_device(
+                EncodedColumn::from_device_with_bounds(
                     pool.clone(),
                     std::ptr::null::<i64>(),
                     0,
@@ -838,14 +1272,14 @@ impl<'pool> RangeBuilder<'pool> {
             if let Some(selected) = selected {
                 release(stream, selected)?;
             }
-            return finish(offsets, payload, 0, rows, workspace);
+            return finish(offsets, payload, 0, 0, rows, workspace);
         }
         let first = &descriptor.key[0];
         // Empty selections still own a complete all-zero directory.
         if rows == 0 {
             let zeros = Buffer::<i64>::zeroed(pool.clone(), entries)?;
             let offsets = unsafe {
-                EncodedColumn::from_device(
+                EncodedColumn::from_device_with_bounds(
                     pool.clone(),
                     zeros.ptr(),
                     entries,
@@ -865,23 +1299,39 @@ impl<'pool> RangeBuilder<'pool> {
             if let Some(selected) = selected {
                 release(stream, selected)?;
             }
-            return finish(offsets, payload, first.domain_size, rows, workspace);
+            return finish(
+                offsets,
+                payload,
+                first.domain_size,
+                key_base(first.column.bounds()),
+                rows,
+                workspace,
+            );
         }
-        let mut keys = temporary::<u32>(stream, rows)?;
-        let mut order = temporary::<u32>(stream, rows)?;
+        let mut keys = temporary::<u32>(pool, rows)?;
+        let mut order = temporary::<u32>(pool, rows)?;
         let source = selected
             .as_ref()
             .map_or(std::ptr::null(), |selected| pointer(selected) as *const u32);
+        let shape = module.prepare_keys_and_rows(self.range.config(1))?;
+        let blocks = self.range.grid(shape.function(), rows)?;
+        let keys_prepared = module.prepare_keys_and_rows(self.range.config(blocks))?;
         if descriptor.key.len() > 1 {
+            let shape = module.prepare_sequence_decode_column(self.range.config(1))?;
+            let blocks = self.range.grid(shape.function(), rows)?;
+            let decode_prepared =
+                module.prepare_sequence_decode_column(self.range.config(blocks))?;
             let plain = descriptor
                 .key
                 .iter()
                 .map(|key| {
-                    let out = temporary::<u32>(stream, rows)?;
+                    let out = temporary::<u32>(pool, rows)?;
+                    // DECODE V: multi-key index build launches full column reconstruction before sorting; P6 sort retained encoded fields.
                     module.sequence_decode_column(
                         stream,
-                        &module.prepare_sequence_decode_column(config(rows))?,
+                        &decode_prepared,
                         key.column.view(),
+                        key_base(key.column.bounds()),
                         source,
                         rows as u32,
                         pointer(&out),
@@ -894,7 +1344,7 @@ impl<'pool> RangeBuilder<'pool> {
                 .iter()
                 .map(|key| key_bits(key.domain_size))
                 .collect::<Vec<_>>();
-            let mut permutation = temporary::<u32>(stream, rows)?;
+            let mut permutation = temporary::<u32>(pool, rows)?;
             sort_columns_lexicographic(
                 &exec,
                 &plain.iter().collect::<Vec<_>>(),
@@ -904,22 +1354,24 @@ impl<'pool> RangeBuilder<'pool> {
             )?;
             let base_order = match &selected {
                 Some(selected) => {
-                    let mut mapped = temporary::<u32>(stream, rows)?;
+                    let mut mapped = temporary::<u32>(pool, rows)?;
                     gather(
                         &exec,
-                        selected.view(),
-                        permutation.view(),
-                        mapped.view_mut(),
+                        selected,
+                        &permutation,
+                        &mut mapped,
                     )?;
                     release(stream, permutation)?;
                     mapped
                 }
                 None => permutation,
             };
+            // DECODE V: leading-key reconstruction follows tuple sort for directory building; P6 retain encoded key order.
             module.keys_and_rows(
                 stream,
-                &module.prepare_keys_and_rows(config(rows))?,
+                &keys_prepared,
                 first.column.view(),
+                key_base(first.column.bounds()),
                 pointer(&base_order),
                 rows as u32,
                 pointer(&keys),
@@ -929,10 +1381,12 @@ impl<'pool> RangeBuilder<'pool> {
                 release(stream, buffer)?;
             }
         } else {
+            // DECODE V: single-key reconstruction precedes radix sort; P6 sort recorded codes or use plain indexes.
             module.keys_and_rows(
                 stream,
-                &module.prepare_keys_and_rows(config(rows))?,
+                &keys_prepared,
                 first.column.view(),
+                key_base(first.column.bounds()),
                 source,
                 rows as u32,
                 pointer(&keys),
@@ -940,14 +1394,14 @@ impl<'pool> RangeBuilder<'pool> {
             )?;
             let bits = key_bits(first.domain_size);
             if rows > 1 && bits > 0 {
-                let mut alternate_keys = temporary::<u32>(stream, rows)?;
-                let mut alternate_order = temporary::<u32>(stream, rows)?;
+                let mut alternate_keys = temporary::<u32>(pool, rows)?;
+                let mut alternate_order = temporary::<u32>(pool, rows)?;
                 let mut pairs = DoubleBuffer::paired(
                     (&mut keys, &mut order),
                     (&mut alternate_keys, &mut alternate_order),
                 )
                 .ok_or("radix double buffer extents differ")?;
-                with_range_radix_workspace(pool, &launch, rows, |workspace| {
+                with_radix_workspace(pool, &launch, rows, false, |workspace| {
                     rccl_cub::device_radix_sort_pairs_buffer(
                         &launch,
                         &mut pairs,
@@ -966,22 +1420,24 @@ impl<'pool> RangeBuilder<'pool> {
                 release(stream, alternate_order)?;
             }
         }
-        let mut offsets = temporary::<u64>(stream, entries)?;
+        let mut offsets = temporary::<u64>(pool, entries)?;
         lower_bound(
             &exec,
-            keys.view(),
+            &keys,
             arithmetic_range(0_u32, 1, entries),
-            offsets.view_mut(),
+            &mut offsets,
         )?;
         let payload = descriptor
             .payload
             .iter()
             .map(|payload| unsafe {
+                // DECODE I: sorted index payload publication decodes then FOR-reencodes rows; avoidable reorganization, P4 keep index runs plain.
                 pack_payload(pool, payload, pointer(&order), rows, row_count.clone())
             })
             .collect::<Result<Vec<_>>>()?;
         let packed_offsets = unsafe {
-            EncodedColumn::from_device(
+            // Lower-bound positions lie in 0..=rows, including empty buckets.
+            EncodedColumn::from_device_with_bounds(
                 pool.clone(),
                 pointer(&offsets) as *const i64,
                 entries,
@@ -998,7 +1454,14 @@ impl<'pool> RangeBuilder<'pool> {
             release(stream, buffer)?;
         }
         release(stream, offsets)?;
-        finish(packed_offsets, payload, first.domain_size, rows, workspace)
+        finish(
+            packed_offsets,
+            payload,
+            first.domain_size,
+            key_base(first.column.bounds()),
+            rows,
+            workspace,
+        )
     }
 }
 
@@ -1006,6 +1469,7 @@ fn finish(
     offsets: EncodedColumn,
     payload: Vec<EncodedColumn>,
     domain: usize,
+    base: i64,
     len: usize,
     workspace: &mut RangeWorkspace,
 ) -> Result<RangeProvider> {
@@ -1020,14 +1484,21 @@ fn finish(
         unsafe { workspace.payload_views.write_async(views)? };
     }
     let payload_views = workspace.payload_views.clone();
-    Ok(RangeProvider {
+    let provider = RangeProvider {
         offsets,
         payload,
         payload_views,
         domain: domain as u32,
+        base,
         len: len as u32,
-    })
+    };
+    if index_bytes::enabled() {
+        let bytes = provider.bytes();
+        index_bytes::record("range", bytes, bytes);
+    }
+    Ok(provider)
 }
+// DECODE I: payload packing reconstructs source values then emits new FOR frames; avoidable reorganization, P4 keep index runs plain.
 unsafe fn pack_payload(
     pool: &Arc<Pool>,
     payload: &PayloadDescriptor,
@@ -1035,10 +1506,13 @@ unsafe fn pack_payload(
     rows: usize,
     count: Arc<Buffer<u64>>,
 ) -> Result<EncodedColumn> {
-    let bounds = payload.column.bounds();
+    // A permutation or subset preserves the source enclosure, not necessarily
+    // its extrema. A known empty prefix has no values to enclose.
+    let bounds = if rows == 0 { Bounds::Empty } else { payload.column.bounds() };
     match payload.kind {
         PayloadKind::U32 => unsafe {
-            EncodedColumn::from_gather_source::<_, u32>(
+            // DECODE I: u32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
+            EncodedColumn::from_gather_source_with_bounds::<_, u32>(
                 pool.clone(),
                 payload.column.view(),
                 order,
@@ -1049,7 +1523,8 @@ unsafe fn pack_payload(
             )
         },
         PayloadKind::I32 => unsafe {
-            EncodedColumn::from_gather_source::<_, i32>(
+            // DECODE I: i32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
+            EncodedColumn::from_gather_source_with_bounds::<_, i32>(
                 pool.clone(),
                 payload.column.view(),
                 order,
@@ -1060,7 +1535,8 @@ unsafe fn pack_payload(
             )
         },
         PayloadKind::I64 => unsafe {
-            EncodedColumn::from_gather_source::<_, i64>(
+            // DECODE I: i64 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
+            EncodedColumn::from_gather_source_with_bounds::<_, i64>(
                 pool.clone(),
                 payload.column.view(),
                 order,
@@ -1072,9 +1548,6 @@ unsafe fn pack_payload(
         },
     }
 }
-fn config(rows: usize) -> LaunchConfig1D {
-    LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 568 * 4) as u32, 256, 0)
-}
 fn key_bits(domain: usize) -> u32 {
     if domain <= 1 {
         0
@@ -1083,17 +1556,8 @@ fn key_bits(domain: usize) -> u32 {
     }
 }
 struct TemporaryCache<T: DeviceCopy> {
-    stream: Arc<CudaStream>,
     buffers: Vec<DeviceBuffer<T>>,
-}
-impl<T: DeviceCopy> Drop for TemporaryCache<T> {
-    fn drop(&mut self) {
-        for buffer in self.buffers.drain(..) {
-            self.stream
-                .context()
-                .record_err(unsafe { buffer.drop_async(&self.stream) });
-        }
-    }
+    pool: Arc<Pool>,
 }
 thread_local! {
     static TEMP_U32: RefCell<Option<TemporaryCache<u32>>> = const { RefCell::new(None) };
@@ -1112,24 +1576,27 @@ impl TemporaryElement for u64 {
         &TEMP_U64
     }
 }
-fn temporary<T: TemporaryElement>(stream: &Arc<CudaStream>, len: usize) -> Result<DeviceBuffer<T>> {
+fn temporary<T: TemporaryElement>(pool: &Arc<Pool>, len: usize) -> Result<DeviceBuffer<T>> {
     T::cache().with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache
             .as_ref()
-            .is_none_or(|cache| !Arc::ptr_eq(&cache.stream, stream))
+            .is_none_or(|cache| !Arc::ptr_eq(&cache.pool, pool))
         {
             *cache = Some(TemporaryCache {
-                stream: stream.clone(),
+                pool: pool.clone(),
                 buffers: Vec::new(),
             });
-            stream.context().bind_to_thread()?;
+            pool.context().bind_to_thread()?;
         }
         let buffers = &mut cache.as_mut().unwrap().buffers;
         if let Some(index) = buffers.iter().position(|buffer| buffer.len() == len) {
             return Ok(buffers.swap_remove(index));
         }
-        Ok(unsafe { DeviceBuffer::uninitialized_async(stream, len)? })
+        // SAFETY: all private callers retain this pool until returned scratch
+        // drops or is returned to this cache. Published SelectedRows retains it.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(pool) };
+        Ok(DeviceBuffer::zeroed_in(retained.resource(), retained.stream(), len)?)
     })
 }
 fn pointer<T: DeviceCopy>(buffer: &DeviceBuffer<T>) -> *mut T {
@@ -1139,14 +1606,14 @@ fn release<T: TemporaryElement>(stream: &CudaStream, buffer: DeviceBuffer<T>) ->
     T::cache().with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(cache) = cache.as_mut() {
-            if cache.stream.cu_stream() == stream.cu_stream()
-                && Arc::ptr_eq(cache.stream.context(), stream.context())
+            if cache.pool.stream().cu_stream() == stream.cu_stream()
+                && Arc::ptr_eq(cache.pool.context(), stream.context())
             {
                 cache.buffers.push(buffer);
                 return Ok(());
             }
         }
-        unsafe { buffer.drop_async(stream)? };
+        drop(buffer);
         Ok(())
     })
 }

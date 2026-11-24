@@ -1,8 +1,42 @@
 # Resident GPU Datalog profiling
 
-## Reproduce
+## Current profiling entry point
 
-Use the pinned Rust/CUDA toolchain from `experiments/gpu`:
+Use the toolchain and supported benchmark commands in the [GPU workspace
+README](../README.md#build-and-run), then pass the built executable to
+`profile/profile.sh OUTPUT_PREFIX -- PROGRAM [ARGS...]` from `experiments/gpu`.
+The wrapper captures CUDA/NVTX/OS-runtime events, exports SQLite, and runs
+`analyze.py`; set `NSYS` to select the installed Nsight Systems executable.
+Without matching NVTX ranges the analyzer uses captured GPU activity, not an
+assumed fixpoint boundary. Current Datalog phase timing uses
+`GPU_DATALOG_PHASES=1`; do not equate a profiler window with its synchronized
+fixpoint timer.
+
+For the latest recorded GPU Datalog performance, see
+[P6b in the planning progress record](../../../doc/PLANNING-REDESIGN.md):
+the **2026-10-31** lane experiment records `srd-doop-gpu` fixpoint times of
+**0.905 s (xalan)** and **1.580 s (batik)**. The historical
+[SRD fullclock record](../compare/p3b-profile/01-doop-report.md#evidence)
+reports **1.008194–1.021628 s** and **1.818340–2.101104 s**, respectively.
+These are separately recorded timings, not a new paired cross-engine test.
+They concern DOOP, **not ddisasm cvc5**: they neither remeasure cvc5 nor
+establish that its historical target was reached.
+
+## Archived reproduction and investigations
+
+**Historical scope:** everything below describes the removed resident Datalog
+workspace and its **2026-10-18/19** measurements, retained in this README at
+`4d62cf91` (2026-10-24). It is not a current API or performance guide.
+`gpu-datalog-oracle`, `gpu-datalog-ddisasm`, the old NVTX feature, `DeviceSet`
+policies, and the commands below belong to that removed implementation.
+The cvc5 comparison has **not been re-measured since** in the retained evidence.
+The absolute artifact paths and removed raw logs below cannot be verified from
+the repository; their numbers remain historical reported observations, not
+independently revalidated measurements.
+
+### Historical reproduction
+
+The archived run used this Rust/CUDA toolchain:
 
 ```sh
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
@@ -560,10 +594,11 @@ remains unmet; no Compacting fallback was substituted. Final Fused allocator
 peak is 12,687,827,976 bytes, versus 6,504,636,136 bytes historically: speed
 improved at a higher persistent-storage memory cost.
 
-The 0.609 s prepared SRDatalog target is **not reached**. Re-time isolated
-after integration before claiming a stable end-to-end factor. All raw traces,
-exact-check logs, feature configuration, diagnostic records and kernel summaries
-remain in the evidence directory above.
+At this historical checkpoint the 0.609 s prepared SRDatalog cvc5 target was
+**not reached**; this is not the status of the current GPU backend or the DOOP
+comparison above. The report cited raw traces, exact-check logs, feature
+configuration, diagnostic records and kernel summaries in the external evidence
+directory above; their continued availability is unverified.
 
 ## LE variant-25 regression isolation (2026-10-19)
 

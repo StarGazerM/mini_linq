@@ -1,9 +1,9 @@
-//! Batch boundaries certify total lookahead from an indexable producer.
+//! Batch boundaries certify supported adapters from an indexable producer.
 use super::*;
 
-fn total(operator: &Operator) -> bool {
-    // ST-Total: Relational constraints are total under the Eq/Ord premises;
-    // opaque Rust binds and guards and branch scopes are not stage steps.
+fn supported(operator: &Operator) -> bool {
+    // ST-Total: The chunk adapter supports relational operators. Rust is total
+    // too, but its adapters and branch scopes do not implement this batch protocol.
     matches!(
         operator,
         Operator::Rename(_)
@@ -24,18 +24,22 @@ fn membership_step(operator: &Operator, facts: &Analysis) -> bool {
         return false;
     };
     let key = (symbol_name(&probe.right), names(&probe.columns));
-    matches!(probe.choice, Some(physical::Choice::First(_)))
-        && facts.membership.contains(&key)
-        && facts.filtered.get(&key.0).is_some_and(|filtered| {
-            filtered
-                .payload
-                .columns
-                .iter()
-                .all(|column| key.1.contains(&symbol_name(column)))
-        })
+    facts.membership.contains(&key)
+        && if let Some(filtered) = facts.filtered.get(&key.0) {
+            matches!(probe.choice, Some(physical::Choice::First(_)))
+                && filtered
+                    .payload
+                    .columns
+                    .iter()
+                    .all(|column| key.1.contains(&symbol_name(column)))
+        } else {
+            // STR-FullKey certificates make even an each-probe zero-or-one:
+            // its complete set row is already present in the supplied key.
+            facts.physical.headings[&key.0] == key.1
+        }
 }
 
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, usize>> {
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, usize>> {
     let mut stages = BTreeMap::new();
     let mut expands = BTreeSet::new();
     for entry in &program.structures.entries {
@@ -53,8 +57,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             expands.insert(symbol_name(&entry.name));
         }
     }
-    let definitions: BTreeMap<_, _> = program
-        .physical
+    let definitions: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -68,18 +71,20 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         .collect();
     // ST-Expand: The selected provider declares finite, exact-size retained
     // cursors. This law does not confer ordering or contiguous range placement.
-    let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
-    let smallest_forces: BTreeSet<_> = program
-        .physical
-        .program
-        .definitions
-        .windows(2)
-        .filter(|pair| {
-            candidates
+    let candidates = physical::candidate_prefixes(physical, &facts.physical);
+    let ordered = &physical.program.definitions;
+    let smallest_forces: BTreeSet<_> = ordered
+        .iter()
+        .enumerate()
+        .flat_map(|(position, first)| {
+            let count = candidates
                 .iter()
-                .any(|candidate| candidate.reader == &pair[0].name)
+                .find(|candidate| candidate.reader == &first.name)
+                .map_or(1, |candidate| candidate.sides.len());
+            ordered[position + 1..position + count]
+                .iter()
+                .map(|definition| symbol_name(&definition.name))
         })
-        .map(|pair| symbol_name(&pair[1].name))
         .collect();
     for name in &expands {
         let definition = definitions[name];
@@ -109,7 +114,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             if !range {
                 return error(
                     definition,
-                    "expand smallest requires declared expand support on both selected two-level candidate builds",
+                    "expand smallest requires declared expand support on every selected two-level candidate build",
                 );
             }
         } else {
@@ -129,8 +134,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             }
         }
     }
-    // ST-Stage: A positive, unique boundary ends a total segment before any
-    // partial step, starting at a for producer, never a probe/merge cursor.
+    // ST-Stage: A positive, unique boundary ends a supported adapter segment,
+    // starting at a for producer, never an unrecorded probe/merge cursor.
     // Certified full-key membership probes are zero-or-one lane-local steps:
     // their only non-key observations are recorded, proven constants. They
     // need no range cursor and assert nothing about source-key uniqueness.
@@ -151,11 +156,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             {
                 break;
             }
-            if !total(&definition.operator) {
-                return error(
-                    definition,
-                    "stage segment contains a partial or unsupported step",
-                );
+            if !supported(&definition.operator) {
+                return error(definition, "stage segment contains an unsupported adapter");
             }
             if matches!(definition.operator, Operator::Rename(_))
                 || facts.reads.contains_key(&current)

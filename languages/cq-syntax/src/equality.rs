@@ -1,6 +1,6 @@
-//! Relational equality is Leibniz identity in classical Set. An admissible
-//! column type's `==` is the generated decision procedure for that identity.
-//! CQ recognizes the corresponding Rust comparison trait operations in guards.
+//! Relational equality follows the column representation's equality law.
+//! It arises from explicit `where` predicates and atom restrictions, never
+//! from inspecting Rust guards. Rust trait obligations are checked by rustc.
 use syn::{Ident, Token};
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]

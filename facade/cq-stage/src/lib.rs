@@ -36,13 +36,13 @@
 //! A printer consumes these decisions through the checked pass queue.
 //!
 //! ```text
-//! structures {
-//!   result = ::cq_storage::HashIndex<'_, _, _> [key];
-//!   host_result host reader = ::cq_storage::dispatch::KeySet<_> [key];
-//!   host_result host scan = ::core::iter::Map<_, _> [];
-//!   result canon = ::std::collections::HashSet<_>;
-//!   returned head = ::std::collections::HashSet<_>;
-//!   retained rows = ::std::vec::Vec<_>;
+//! structures { providers { hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; }
+//!   result = @hash_index as ::cq_storage::HashIndex<'_, _, _> [key];
+//!   host_result host result(reader) = @keyset as ::cq_storage::dispatch::KeySet<_> [key];
+//!   host_result host scan = @host_scan as ::core::iter::Map<_, _> [];
+//!   result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
+//!   returned head = @sort as ::cq_storage::dedup::Sort;
+//!   retained rows = @vec as ::std::vec::Vec<_>;
 //! }
 //! ```
 //! Host fallbacks are recorded per reader/key, including the initial scan of
@@ -52,22 +52,43 @@
 //!
 //! Rewrite checks are exported by the languages: Physical preserves RA′ erasure
 //! and admissible demand supplies; Structures preserves Physical and discharges
-//! every read and boundary. RA′ uses the existing tableau/Rust-chain proof. VO
-//! preserves CQ, valuation erasure and existing reductions under its coverage
-//! and Before contract. IX preserves RA′. Contracted CQ rewrites are identity;
+//! every read and boundary. RA′ compares relational facts and opaque total Rust
+//! payloads with their free-variable bindings. VO preserves CQ, valuation erasure,
+//! existing reductions and dependency coverage. IX preserves RA′. Contracted CQ rewrites are identity;
 //! surface expansions operate on raw tokens before that boundary. Known invalid
 //! standard representations fail contracts; rustc checks arbitrary user types
 //! against the generated Build, read and dedup obligations.
 //!
+//! [`Structures`] and [`Sequence`] carry the realization stack as separately
+//! printed programs. Their pass/rewrite closures receive Physical, Structures,
+//! and (where present) Sequence as separate typed arguments. Continuations use
+//! `realization { physical { ... } structures { ... } sequence { ... } }`,
+//! omitting Sequence before its lowering. [`Annotation`] parses and checks each
+//! annotation against its separately supplied upper programs. Observers print
+//! only the selected IR.
+//! Authored entry parses Physical, then Structures against Physical, then Sequence
+//! against both bases; annotations do not embed upper programs. The carrier checks
+//! these actual seams rather than comparing printed token prefixes.
+//!
 //! Restricted context facts enter only through [`pass_with_context`] (the
 //! lower/select adapters). Checked continuations carry a separate
-//! `context { consumer = canonical, host_set R discharged };` envelope after
+//! `context { consumer = canonical };` envelope after
 //! arguments. Its facts must equal the source's recorded facts; ordinary passes
 //! cannot add facts. Printing an IR does not print this envelope, so factful
 //! re-entry requires an explicit exact envelope from the enclosing compiler.
 //! Lower/select arguments introduce facts only into a fact-free source; matching
-//! arguments never replace an envelope. Fact-free expansions retain their
-//! original token protocol, and pass arguments remain opaque.
+//! arguments never replace an envelope. Fact-free expansions omit the context
+//! envelope, and pass arguments remain opaque.
+//!
+//! An `output_consumer { ... }` continuation requirement is separate from those
+//! facts. It records original output identities and the values read by an outer
+//! checked context. Ordinary passes forward it opaquely; selection binds it once
+//! through [`pass_with_output_consumer`]. It never authorizes removing dedup.
+
+pub mod planning;
+
+mod realization;
+pub use realization::{Annotation, Sequence, Structures, Valuation};
 
 use std::collections::BTreeSet;
 
@@ -82,18 +103,31 @@ mod kw {
     syn::custom_keyword!(context);
     syn::custom_keyword!(consumer);
     syn::custom_keyword!(canonical);
-    syn::custom_keyword!(host_set);
-    syn::custom_keyword!(discharged);
+    syn::custom_keyword!(observe);
+    syn::custom_keyword!(output_consumer);
+    syn::custom_keyword!(head);
+    syn::custom_keyword!(value_reads);
+    syn::custom_keyword!(planning_tables);
 }
 
-/// Public contract implemented by each IR language. Rust expressions terminate
-/// the pipeline; raw token streams are used only by surface expansion passes.
+/// Public contract implemented by standalone IR languages and realization carriers.
+/// Annotation layers implement [`Annotation`] against their separate bases instead.
+/// Rust expressions terminate the pipeline; raw token streams are used only by
+/// surface expansion passes.
 pub trait Language: Parse + ToTokens {
     fn check(&self) -> syn::Result<()>;
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()>;
+    /// Printed selected IR, without the realization transport envelope.
+    fn program_tokens(&self) -> TokenStream {
+        self.to_token_stream()
+    }
     /// Restricted facts recorded in this program, not ambient Rust assumptions.
     fn context(&self) -> Context {
         Context::default()
+    }
+    /// Original output demand bound by the owning selection boundary.
+    fn output_consumer(&self) -> Option<&OutputConsumer> {
+        None
     }
     fn terminal() -> bool {
         false
@@ -131,54 +165,31 @@ impl Language for syn::Expr {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Context {
     pub consumer_canonical: bool,
-    pub discharged_host_sets: BTreeSet<String>,
 }
 impl Context {
     pub fn is_empty(&self) -> bool {
-        !self.consumer_canonical && self.discharged_host_sets.is_empty()
+        !self.consumer_canonical
     }
 
     pub fn is_subset(&self, other: &Self) -> bool {
-        (!self.consumer_canonical || other.consumer_canonical)
-            && self
-                .discharged_host_sets
-                .is_subset(&other.discharged_host_sets)
+        !self.consumer_canonical || other.consumer_canonical
     }
 
     fn extend(&mut self, other: &Self) {
         self.consumer_canonical |= other.consumer_canonical;
-        self.discharged_host_sets
-            .extend(other.discharged_host_sets.iter().cloned());
     }
 }
 impl Parse for Context {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        use syn::ext::IdentExt;
-
         let mut context = Self::default();
         while !input.is_empty() {
-            if input.peek(kw::consumer) {
-                input.parse::<kw::consumer>()?;
-                input.parse::<Token![=]>()?;
-                input.parse::<kw::canonical>()?;
-                if context.consumer_canonical {
-                    return Err(input.error("CTX-Entry: duplicate consumer context fact"));
-                }
-                context.consumer_canonical = true;
-            } else {
-                input.parse::<kw::host_set>()?;
-                let host: syn::Ident = input.parse()?;
-                input.parse::<kw::discharged>()?;
-                if !context
-                    .discharged_host_sets
-                    .insert(host.unraw().to_string())
-                {
-                    return Err(syn::Error::new_spanned(
-                        host,
-                        "CTX-Entry: duplicate host context fact",
-                    ));
-                }
+            input.parse::<kw::consumer>()?;
+            input.parse::<Token![=]>()?;
+            input.parse::<kw::canonical>()?;
+            if context.consumer_canonical {
+                return Err(input.error("CTX-Entry: duplicate consumer context fact"));
             }
+            context.consumer_canonical = true;
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
@@ -188,20 +199,82 @@ impl Parse for Context {
 }
 impl ToTokens for Context {
     fn to_tokens(&self, output: &mut TokenStream) {
-        let mut comma = false;
         if self.consumer_canonical {
             output.extend(quote!(consumer = canonical));
-            comma = true;
         }
-        for host in &self.discharged_host_sets {
-            if comma {
-                output.extend(quote!(,));
-            }
-            let host: syn::Ident = syn::parse_str(host)
-                .unwrap_or_else(|_| syn::Ident::new_raw(host, proc_macro2::Span::call_site()));
-            output.extend(quote!(host_set #host discharged));
-            comma = true;
+    }
+}
+
+/// Value demand of an enclosing checked consumer, not an optimization premise.
+/// `head` preserves the complete original output order, including ignored
+/// witnesses; `value_reads` names only fields whose logical values are read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputConsumer {
+    pub original_consumer: String,
+    pub head: Vec<String>,
+    pub value_reads: Vec<String>,
+}
+
+impl OutputConsumer {
+    pub fn check(&self) -> syn::Result<()> {
+        let fail = |message| syn::Error::new(proc_macro2::Span::call_site(), message);
+        if self.original_consumer.is_empty() || self.head.iter().any(String::is_empty) {
+            return Err(fail("ST-Consumer: output identities must not be empty"));
         }
+        let head: BTreeSet<_> = self.head.iter().collect();
+        let reads: BTreeSet<_> = self.value_reads.iter().collect();
+        if head.len() != self.head.len() || reads.len() != self.value_reads.len() {
+            return Err(fail("ST-Consumer: duplicate output identity"));
+        }
+        if !reads.is_subset(&head) {
+            return Err(fail("ST-Consumer: value reads must name original head fields"));
+        }
+        Ok(())
+    }
+
+    pub fn parse_optional(input: ParseStream<'_>) -> syn::Result<Option<Self>> {
+        if input.peek(kw::output_consumer) {
+            input.parse().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl Parse for OutputConsumer {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::output_consumer>()?;
+        let body;
+        braced!(body in input);
+        let original_consumer: syn::LitStr = body.parse()?;
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::head>()?;
+        let head;
+        syn::bracketed!(head in body);
+        let head = head.parse_terminated(|input| input.parse::<syn::LitStr>(), Token![,])?
+            .into_iter().map(|field| field.value()).collect();
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::value_reads>()?;
+        let reads;
+        syn::bracketed!(reads in body);
+        let value_reads = reads.parse_terminated(|input| input.parse::<syn::LitStr>(), Token![,])?
+            .into_iter().map(|field| field.value()).collect();
+        body.parse::<Token![;]>()?;
+        if !body.is_empty() {
+            return Err(body.error("ST-Consumer: unexpected output consumer fields"));
+        }
+        let consumer = Self { original_consumer: original_consumer.value(), head, value_reads };
+        consumer.check()?;
+        Ok(consumer)
+    }
+}
+
+impl ToTokens for OutputConsumer {
+    fn to_tokens(&self, output: &mut TokenStream) {
+        let Self { original_consumer, head, value_reads } = self;
+        output.extend(quote!(output_consumer {
+            #original_consumer; head [#(#head),*]; value_reads [#(#value_reads),*];
+        }));
     }
 }
 
@@ -240,6 +313,12 @@ impl ToTokens for Invocation {
 #[derive(Clone, Debug, Default)]
 pub struct Pipeline {
     pub passes: Vec<Invocation>,
+    /// Diagnostic receiver invoked with the final checked payload, not a continuation.
+    pub observer: Option<syn::Path>,
+    /// Pending checked outer-consumer requirement, consumed only by selection.
+    pub output_consumer: Option<OutputConsumer>,
+    /// Producer-owned side tables, consumed by advice at its own invocation.
+    pub planning: Option<planning::Planning>,
 }
 impl Parse for Pipeline {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -250,13 +329,32 @@ impl Parse for Pipeline {
             .parse_terminated(Invocation::parse, Token![,])?
             .into_iter()
             .collect();
-        Ok(Self { passes })
+        let observer = if input.peek(kw::observe) {
+            input.parse::<kw::observe>()?;
+            let receiver;
+            braced!(receiver in input);
+            let path = receiver.parse()?;
+            if !receiver.is_empty() {
+                return Err(receiver.error("expected one observer macro path"));
+            }
+            Some(path)
+        } else {
+            None
+        };
+        let output_consumer = OutputConsumer::parse_optional(input)?;
+        let planning = if input.peek(kw::planning_tables) { Some(input.parse()?) } else { None };
+        Ok(Self { passes, observer, output_consumer, planning })
     }
 }
 impl ToTokens for Pipeline {
     fn to_tokens(&self, output: &mut TokenStream) {
         let passes = &self.passes;
         output.extend(quote!(pipeline { #(#passes),* }));
+        if let Some(receiver) = &self.observer {
+            output.extend(quote!(observe { #receiver }));
+        }
+        self.output_consumer.to_tokens(output);
+        self.planning.to_tokens(output);
     }
 }
 impl Pipeline {
@@ -273,6 +371,9 @@ impl Pipeline {
         context: Context,
     ) -> syn::Result<TokenStream> {
         if self.passes.is_empty() {
+            if let Some(receiver) = self.observer {
+                return Ok(quote!(#receiver! { #program }));
+            }
             return Err(syn::Error::new_spanned(
                 program,
                 "pipeline requires a final printer",
@@ -341,7 +442,25 @@ pub fn pass<In: Language, Out: Language>(
     input: TokenStream,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), f, |_, _| Ok(()))
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), |_, _| Ok(()))
+}
+
+/// Run a producer with side tables consumed by later planning advice.
+pub fn pass_with_planning<In: Language, Out: Language>(
+    input: TokenStream,
+    f: impl FnOnce(&In, TokenStream, &mut Option<planning::Planning>) -> syn::Result<Out>,
+) -> TokenStream {
+    run(input, |_| Ok(Context::default()), false,
+        |source, args, _, planning| f(source, args, planning), |_, _| Ok(()))
+}
+
+/// Run a rewrite with producer-owned side tables; never inspect future passes.
+pub fn rewrite_with_planning<L: Language>(
+    input: TokenStream,
+    f: impl FnOnce(&L, TokenStream, Option<&planning::Planning>) -> syn::Result<L>,
+) -> TokenStream {
+    run(input, |_| Ok(Context::default()), false,
+        |source, args, _, planning| f(source, args, planning.as_ref()), L::check_rewrite)
 }
 
 /// Introduce facts named by a lower/select argument packet into a fact-free source.
@@ -357,7 +476,17 @@ pub fn pass_with_context<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, f, |_, _| Ok(()))
+    run(input, authorize, false, |source, args, _, _| f(source, args), |_, _| Ok(()))
+}
+
+/// Bind a pending outer-consumer requirement into the selected target exactly
+/// once. This does not introduce a canonical-consumer or host-set fact.
+pub fn pass_with_output_consumer<In: Language, Out: Language>(
+    input: TokenStream,
+    authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
+    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>) -> syn::Result<Out>,
+) -> TokenStream {
+    run(input, authorize, true, |source, args, consumer, _| f(source, args, consumer), |_, _| Ok(()))
 }
 
 /// Run an L → L pass and the language's exported correspondence check.
@@ -365,7 +494,7 @@ pub fn rewrite<L: Language>(
     input: TokenStream,
     f: impl FnOnce(&L, TokenStream) -> syn::Result<L>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), f, L::check_rewrite)
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), L::check_rewrite)
 }
 
 /// Delegate an invocation's checked packet to a target-owned macro path.
@@ -389,17 +518,37 @@ pub fn delegate(input: TokenStream) -> TokenStream {
     };
     parser
         .parse2(input)
-        .unwrap_or_else(syn::Error::into_compile_error)
+        .unwrap_or_else(error_expression)
 }
 
+// A checked pass is expanded in expression position. Combined checker/candidate
+// failures must remain one diagnostic expression, not adjacent macro invocations
+// that Rust would parse as malformed expression syntax.
+fn error_expression(errors: syn::Error) -> TokenStream {
+    use std::fmt::Write;
+
+    let span = errors.span();
+    let mut message = String::new();
+    for error in errors {
+        if !message.is_empty() {
+            message.push('\n');
+        }
+        write!(&mut message, "{error}").unwrap();
+    }
+    let diagnostic = syn::Error::new(span, message).into_compile_error();
+    quote!({ #diagnostic })
+}
+
+/// Formal rule ST-Observe: Invoke a diagnostic receiver only after checking the selected prefix's result.
 fn run<In: Language, Out: Language>(
     input: TokenStream,
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
-    f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
+    bind_consumer: bool,
+    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>, &mut Option<planning::Planning>) -> syn::Result<Out>,
     correspondence: impl FnOnce(&In, &Out) -> syn::Result<()>,
 ) -> TokenStream {
     let result = (|| {
-        let input: Input<In> = syn::parse2(input)?;
+        let mut input: Input<In> = syn::parse2(input)?;
         let source_context = input.program.context();
         if input
             .context
@@ -425,7 +574,35 @@ fn run<In: Language, Out: Language>(
             ));
         }
         input.program.check()?;
-        let target = f(&input.program, input.args)?;
+        let consumer = if bind_consumer {
+            input.pipeline.output_consumer.take()
+        } else {
+            None
+        };
+        let target = f(&input.program, input.args, consumer.as_ref(), &mut input.pipeline.planning)?;
+        if bind_consumer {
+            if input.program.output_consumer().is_some()
+                || target.output_consumer() != consumer.as_ref()
+            {
+                return Err(syn::Error::new_spanned(
+                    &target,
+                    "ST-Consumer: selection must bind exactly the original consumer requirement",
+                ));
+            }
+        } else if target.output_consumer().is_some()
+            && target.output_consumer() != input.program.output_consumer()
+        {
+            return Err(syn::Error::new_spanned(
+                &target,
+                "ST-Consumer: only selection may bind original consumer requirements",
+            ));
+        }
+        if Out::terminal() && input.pipeline.output_consumer.is_some() {
+            return Err(syn::Error::new_spanned(
+                &target,
+                "ST-Consumer: output requirement must be bound before the terminal",
+            ));
+        }
         target.check()?;
         correspondence(&input.program, &target)?;
         let target_context = target.context();
@@ -444,7 +621,10 @@ fn run<In: Language, Out: Language>(
             ));
         }
         if input.pipeline.passes.is_empty() {
-            if Out::terminal() {
+            if let Some(receiver) = input.pipeline.observer {
+                let target = target.program_tokens();
+                Ok(quote!(#receiver! { #target }))
+            } else if Out::terminal() {
                 Ok(target.to_token_stream())
             } else {
                 Err(syn::Error::new_spanned(
@@ -463,10 +643,58 @@ fn run<In: Language, Out: Language>(
                 .start_with_context(target.to_token_stream(), target_context)
         }
     })();
-    result.unwrap_or_else(syn::Error::into_compile_error)
+    result.unwrap_or_else(error_expression)
+}
+
+/// Selectable outputs of the resolved facade queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Boundary {
+    Cq,
+    Vo,
+    RelationalPlan,
+    IndexRequirements,
+    Physical,
+    Structures,
+    Represent,
+    Stage,
+    Sequence,
+    Decompose,
+    Grade,
+    Rust,
+}
+
+impl Parse for Boundary {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let name: syn::Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "cq" => Ok(Self::Cq),
+            "vo" => Ok(Self::Vo),
+            "relational_plan" => Ok(Self::RelationalPlan),
+            "index_requirements" => Ok(Self::IndexRequirements),
+            "physical" => Ok(Self::Physical),
+            "structures" => Ok(Self::Structures),
+            "represent" => Ok(Self::Represent),
+            "stage" => Ok(Self::Stage),
+            "sequence" => Ok(Self::Sequence),
+            "decompose" => Ok(Self::Decompose),
+            "grade" => Ok(Self::Grade),
+            "final_rust" => Ok(Self::Rust),
+            _ => Err(syn::Error::new_spanned(
+                name,
+                "unknown observation boundary",
+            )),
+        }
+    }
 }
 
 /// Parse the named facade grammar. Missing phases inherit from `defaults`.
+/// Declared input language of a configured terminal. Macro spelling is opaque.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintInput {
+    Structures,
+    Sequence,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Configuration {
     pub plan: Option<Invocation>,
@@ -481,6 +709,7 @@ pub struct Configuration {
     pub decompose: Vec<Invocation>,
     pub grade: Option<Invocation>,
     pub print: Option<Invocation>,
+    pub print_input: Option<PrintInput>,
     pub surface: Vec<Invocation>,
 }
 impl Parse for Configuration {
@@ -506,6 +735,19 @@ impl Parse for Configuration {
                 "sequence" => config.sequence = Some(contents.parse()?),
                 "grade" => config.grade = Some(contents.parse()?),
                 "print" => config.print = Some(contents.parse()?),
+                "print_input" => {
+                    let language: syn::Ident = contents.parse()?;
+                    config.print_input = Some(match language.to_string().as_str() {
+                        "structures" => PrintInput::Structures,
+                        "sequence" => PrintInput::Sequence,
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                language,
+                                "expected structures or sequence",
+                            ));
+                        }
+                    });
+                }
                 "physical" | "structures" | "surface" | "decompose" => {
                     let list;
                     syn::bracketed!(list in contents);
@@ -529,17 +771,42 @@ impl Parse for Configuration {
 }
 impl Configuration {
     pub fn resolve(self, defaults: Self) -> syn::Result<Pipeline> {
+        self.resolve_prefix(defaults, None)
+    }
+
+    /// Resolve the ordinary queue, retaining exactly its requested prefix.
+    pub fn resolve_observed(
+        self,
+        defaults: Self,
+        boundary: Boundary,
+        receiver: syn::Path,
+    ) -> syn::Result<Pipeline> {
+        self.resolve_prefix(defaults, Some((boundary, receiver)))
+    }
+
+    /// Formal rule ST-Endpoint: Terminal routing consumes the declared input language, never the macro path.
+    fn resolve_prefix(
+        self,
+        defaults: Self,
+        observation: Option<(Boundary, syn::Path)>,
+    ) -> syn::Result<Pipeline> {
         let explicit_sequence =
             self.sequence.is_some() || self.grade.is_some() || !self.decompose.is_empty();
+        let authored_advice = self.plan.is_some()
+            || !self.physical.is_empty()
+            || self.select.is_some()
+            || !self.structures.is_empty()
+            || self.represent.is_some()
+            || self.stage.is_some();
         let explicit_print = self.print.is_some();
-        let structures_terminal = !explicit_sequence
-            && self.print.as_ref().is_some_and(|print| {
-                print
-                    .path
-                    .segments
-                    .last()
-                    .is_none_or(|p| p.ident != "translate_pull")
-            });
+        let endpoint = self.print_input.or(defaults.print_input);
+        let structures_terminal = endpoint == Some(PrintInput::Structures);
+        if structures_terminal && explicit_sequence {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "Structures-consuming print cannot follow Sequence phases",
+            ));
+        }
         let default_sequence_target =
             !structures_terminal && defaults.sequence.is_some() && defaults.grade.is_some();
         let sequence = self.sequence.or_else(|| {
@@ -550,41 +817,78 @@ impl Configuration {
         let grade = self
             .grade
             .or_else(|| (!structures_terminal).then_some(defaults.grade).flatten());
-        let sequence_target = sequence.is_some() || grade.is_some() || !self.decompose.is_empty();
+        let sequence_target = sequence.is_some()
+            || grade.is_some()
+            || !self.decompose.is_empty()
+            || endpoint == Some(PrintInput::Sequence);
         let print = self.print.or(defaults.print);
-        let terminal = print.as_ref().and_then(|p| p.path.segments.last());
         if sequence_target
             && (sequence.is_none()
                 || grade.is_none()
-                || (!explicit_print && !default_sequence_target)
-                || terminal.is_some_and(|p| p.ident == "push"))
+                || (!explicit_print && !default_sequence_target))
         {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
-                "sequence, grade and an explicit Sequence-consuming print must be selected together",
-            ));
-        }
-        if !sequence_target && terminal.is_some_and(|p| p.ident == "translate_pull") {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "translate_pull requires sequence and grade phases",
+                "sequence, grade and a Sequence-consuming print must be selected together",
             ));
         }
         let mut passes = self.surface;
+        let mut cutoff = None;
+        let mut record = |boundary, length| {
+            if observation
+                .as_ref()
+                .is_some_and(|(selected, _)| *selected == boundary)
+            {
+                cutoff = Some(length);
+            }
+        };
+        record(Boundary::Cq, passes.len());
         let missing =
             || syn::Error::new(proc_macro2::Span::call_site(), "missing pipeline default");
         passes.push(self.plan.or(defaults.plan).ok_or_else(missing)?);
+        record(Boundary::RelationalPlan, passes.len());
         passes.push(self.ix.or(defaults.ix).ok_or_else(missing)?);
+        record(Boundary::IndexRequirements, passes.len());
         passes.push(self.lower.or(defaults.lower).ok_or_else(missing)?);
         passes.extend(self.physical);
+        record(Boundary::Physical, passes.len());
         passes.push(self.select.or(defaults.select).ok_or_else(missing)?);
         passes.extend(self.structures);
+        record(Boundary::Structures, passes.len());
         passes.push(self.represent.or(defaults.represent).ok_or_else(missing)?);
+        record(Boundary::Represent, passes.len());
         passes.push(self.stage.or(defaults.stage).ok_or_else(missing)?);
+        record(Boundary::Stage, passes.len());
         passes.extend(sequence);
-        passes.extend(self.decompose);
+        if sequence_target {
+            record(Boundary::Sequence, passes.len());
+        }
+        if !explicit_sequence && !authored_advice && sequence_target {
+            passes.extend(defaults.decompose);
+        } else {
+            passes.extend(self.decompose);
+        }
+        if sequence_target {
+            record(Boundary::Decompose, passes.len());
+        }
         passes.extend(grade);
+        if sequence_target {
+            record(Boundary::Grade, passes.len());
+        }
         passes.push(print.ok_or_else(missing)?);
-        Ok(Pipeline { passes })
+        record(Boundary::Rust, passes.len());
+        let observer = if let Some((_, receiver)) = observation {
+            let cutoff = cutoff.ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &receiver,
+                    "observation boundary is absent from the configured pipeline",
+                )
+            })?;
+            passes.truncate(cutoff);
+            Some(receiver)
+        } else {
+            None
+        };
+        Ok(Pipeline { passes, observer, output_consumer: None, planning: None })
     }
 }

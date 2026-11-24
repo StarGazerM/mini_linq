@@ -1,20 +1,28 @@
 //! Opt-in host capabilities are selection inputs, never type-dispatch guesses.
 //! Unknown hosts keep the exact pre-existing entries.
+//!
+//! DESIGN contract8-positional-selection
+//! Owns recorded positional access strategy, not join order (contract 8, SEL-Positional/STR-Repr).
+//! Sources: doc/STORAGE.md §§4,8,9,12; Data Blocks §3; DuckDB physical_hash_join.cpp:1837-1966.
+//! DO NOT infer provider capabilities from types or conflate scan columns with grouped index runs.
+//! Known deviation: separate adaptive keysets still accompany indexes; grouped-run reuse is Plan P4.
+//! Group ranges/offsets should avoid payload expansion; filter/evidence propagation is Plan P7.
+//! DO NOT select pruning/compression by doctrine: TPC-H load order skips almost nothing; require target evidence.
 use super::*;
 use structures::{Origin, Structure};
 
 /// Formal rule SEL-Positional: Record only statically eligible reads of explicitly positional hosts.
 pub(super) fn choose(
+    physical: &physical::Program,
     target: &mut structures::Program,
     bases: &BTreeSet<String>,
 ) -> syn::Result<()> {
-    let facts = structures::contract::check(target)?;
+    let facts = structures::contract::check(physical, target)?;
     let lineage = &facts.lineage;
-    let defs = &target.physical.program.definitions;
+    let defs = &physical.program.definitions;
     let origin = |name: &str| -> syn::Result<Origin> {
         let l = &lineage[name];
-        let input = target
-            .physical
+        let input = physical
             .inputs()
             .find(|r| symbol_name(&r.name) == l.base)
             .expect("checked base");
@@ -34,7 +42,7 @@ pub(super) fn choose(
     for base in bases {
         if !facts.host_layouts.contains_key(base) {
             return Err(syn::Error::new_spanned(
-                &target.physical,
+                &physical,
                 format!("unknown positional host `{base}`"),
             ));
         }
@@ -59,8 +67,6 @@ pub(super) fn choose(
                 .unwrap();
             if !matches!(&d.operator, Operator::Semi(_,k) if !matches!(k.choice, Some(physical::Choice::Lazy(_))))
                 || key.len() != 1
-                || structures::ungroup_type(&facts.physical.rows[name].types[&key[0]])
-                    != &syn::parse_quote!(i64)
             {
                 continue;
             }
@@ -75,7 +81,11 @@ pub(super) fn choose(
                 .clone();
             let column = &facts.physical.rows[name].bindings[&key[0]];
             let origin = origin(name)?;
-            extra.push(syn::parse2(quote!(#ident keyset = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 67108864> [#column] owned #origin;))?);
+            let keyset =
+                cq_lang_structures::provider::base::declaration("positional_keyset").instance();
+            extra.push(syn::parse2(
+                quote!(#ident keyset = #keyset [#column] owned #origin;),
+            )?);
         }
     }
     let mut reads = BTreeSet::new();
@@ -108,28 +118,7 @@ pub(super) fn choose(
         } else {
             continue;
         };
-        // cq-load's default markers support these exact scalar/text schemas.
-        let ty = structures::ungroup_type(&facts.physical.rows[&name].types[&column]);
-        let type_name = quote!(#ty).to_string();
-        if !matches!(
-            type_name.as_str(),
-            "i8" | "i16"
-                | "i32"
-                | "i64"
-                | "i128"
-                | "isize"
-                | "u8"
-                | "u16"
-                | "u32"
-                | "u64"
-                | "u128"
-                | "usize"
-                | "bool"
-                | "String"
-                | "Date"
-        ) {
-            continue;
-        }
+        // The chosen marker's trait bounds establish accepted row elements.
         let l = &lineage[&name];
         let host_column = &l.columns[&column];
         let n = syn::Index::from(
@@ -138,8 +127,7 @@ pub(super) fn choose(
                 .position(|c| c == host_column)
                 .unwrap(),
         );
-        let input = target
-            .physical
+        let input = physical
             .inputs()
             .find(|r| symbol_name(&r.name) == l.base)
             .expect("checked base");
@@ -209,8 +197,9 @@ pub(super) fn choose(
         {
             let ident = &d.name;
             let origin = origin(&name)?;
+            let selection = cq_lang_structures::provider::base::declaration("selection").instance();
             extra.push(syn::parse2(
-                quote!(#ident selection = ::cq_storage::Selection<_> #origin summary per_block;),
+                quote!(#ident selection = #selection #origin summary per_block;),
             )?);
             positional_sources.insert(name.clone());
             selections.insert(name.clone());
@@ -300,19 +289,49 @@ pub(super) fn choose(
         .structures
         .entries
         .retain(|entry| match &entry.structure {
-            Structure::Host { reader, .. } if reads.contains(&symbol_name(reader)) => false,
-            Structure::Rows { .. } => !selections.contains(&symbol_name(&entry.name)),
-            Structure::Built { keyed, .. }
-                if keyed.ty == syn::parse_quote!(::cq_storage::HashSet<_>)
-                    && keyed.levels.len() == 1 =>
+            Structure::Host { reader, .. } | Structure::Native { reader, .. }
+                if reader
+                    .result()
+                    .is_some_and(|name| reads.contains(&symbol_name(name))) =>
             {
-                !sets.contains(&(symbol_name(&entry.name), keyed.level_names()[0].clone()))
+                false
+            }
+            Structure::Rows { .. } => !selections.contains(&symbol_name(&entry.name)),
+            Structure::Built { keyed, .. } if keyed.levels.len() == 1 => {
+                let name = symbol_name(&entry.name);
+                let key = &keyed.level_names()[0];
+                let contains_only = facts
+                    .physical
+                    .keyed_reads
+                    .get(&name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, columns, _)| columns == key)
+                    .all(|(reader, _, _)| {
+                        defs.iter()
+                            .find(|d| symbol_name(&d.name) == *reader)
+                            .is_some_and(|d| {
+                                matches!(d.operator, Operator::Semi(..) | Operator::Anti(..))
+                            })
+                    })
+                    && !facts
+                        .physical
+                        .merge_reads
+                        .get(&name)
+                        .into_iter()
+                        .flatten()
+                        .any(|(_, columns)| columns == key);
+                !contains_only || !sets.contains(&(name, key.clone()))
             }
             _ => true,
         });
     target.structures.entries.extend(extra);
-    choose_join_filters(target, bases)?;
-    structures::contract::check(target)?;
+    target
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations())?;
+    choose_join_filters(physical, target, bases)?;
+    structures::record_join_filter_policies(physical, target)?;
+    structures::contract::check(physical, target)?;
     Ok(())
 }
 trait KeyNames {
@@ -350,15 +369,15 @@ fn positional_source(
     }
 }
 
-/// Formal rule SEL-JoinFilter: Choose an exact key set for each eligible covered scalar key column of a filtered build, at its scan.
+/// Formal rule SEL-JoinFilter: Choose a projected exact key set for each eligible covered scalar key column of a filtered build, at its scan; source retyping preserves this default, while borrowed and attached realizations require explicit advice.
 fn choose_join_filters(
+    physical: &physical::Program,
     target: &mut structures::Program,
     bases: &BTreeSet<String>,
 ) -> syn::Result<()> {
-    let facts = structures::contract::check(target)?;
+    let facts = structures::contract::check(physical, target)?;
     let named = |name: &str| {
-        &target
-            .physical
+        &physical
             .program
             .definitions
             .iter()
@@ -369,10 +388,26 @@ fn choose_join_filters(
     let mut entries = Vec::new();
     // Record every admissible covering witness. The contract checks all of
     // them before coalescing equivalent scan/build/key/layout runtime filters.
-    for d in &target.physical.program.definitions {
-        for candidate in structures::join_filter_candidates(target, &facts, &symbol_name(&d.name)) {
+    for d in &physical.program.definitions {
+        let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &d.operator else {
+            continue;
+        };
+        let columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+        for candidate in structures::join_filter_candidates(physical, target, &facts, &symbol_name(&d.name)) {
             let origin = &facts.lineage[&candidate.scan];
-            if !candidate.filtered || !bases.contains(&origin.base) {
+            if !candidate.filtered
+                || !bases.contains(&origin.base)
+                || facts
+                    .built_on(&candidate.build, &columns)
+                    .is_none_or(|(provider, _)| !facts.facts(provider).join_filter)
+                // A contains-only build already performs this exact test and
+                // need not enumerate keys to build a redundant scan filter.
+                || facts.membership.iter().any(|(build, columns)| {
+                    build == &candidate.build
+                        && matches!(&d.operator, Operator::Probe(_, key) | Operator::Semi(_, key)
+                            if sorted(&key.columns.iter().map(symbol_name).collect::<Vec<_>>()) == *columns)
+                })
+            {
                 continue;
             }
             let index = syn::Index::from(
@@ -385,10 +420,14 @@ fn choose_join_filters(
             let build = named(&candidate.build);
             let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
             let covering = &d.name;
-            let ty = quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>);
-            entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
+            let ty = cq_lang_structures::provider::base::declaration("join_filter_membership")
+                .instance();
+            entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index> policy always;))?);
         }
     }
     target.structures.entries.extend(entries);
+    target
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations())?;
     Ok(())
 }

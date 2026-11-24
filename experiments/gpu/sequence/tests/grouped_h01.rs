@@ -108,15 +108,17 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
         let result = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation L(orderkey:u32,linenumber:u32,returnflag:u32,linestatus:u32,quantity:i64,price:i64,shipdate:i32)=(&data);
-                l=pipe rename L@0 {orderkey -> orderkey,linenumber -> linenumber,returnflag -> returnflag,linestatus -> linestatus,quantity -> quantity,price -> price,shipdate -> shipdate};
-                filtered=pipe canon select l if (shipdate <= 10471);
+                l=pipe rename L {orderkey -> orderkey,linenumber -> linenumber,returnflag -> returnflag,linestatus -> linestatus,quantity -> quantity,price -> price,shipdate -> shipdate};
+                filtered=let canon select l if (shipdate <= 10471);
                 grouped=let group filtered by [returnflag,linestatus] {sum_quantity:i64=sum(quantity);sum_price:i64=sum(price);count_order:usize=count();};
                 return grouped as answer(returnflag,linestatus,sum_quantity,sum_price,count_order);
             }
-            structures {
-                l host scan=::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32,u32,i64,i64,i32)> [];
-                filtered canon=::cq_gpu_sequence_runtime::canon::PackedCanon;
-                grouped rows=::cq_gpu_sequence_runtime::group::GroupedRows<_>;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
+                l host scan=@device_columns input { keys 0; columns [u32 => u32, u32 => u32, u32 => u32, u32 => u32, i64 => i64, i64 => i64, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32,u32,i64,i64,i32)> [];
+                filtered rows=@radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                filtered canon=rows;
+                grouped rows=@grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
+                grouped group=@group_map as ::std::collections::HashMap<_, (i64, i64, usize)>;
             }
             sequence {
                 source=store rows l;
@@ -128,6 +130,7 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
             graded gpu {source at host;feed at device.block;valuations at host;result at host;}
         };
         let gpu_ms = start.elapsed().as_secs_f64() * 1000.0;
+        // DECODE P: publish final H01 groups for exact host comparison with DuckDB.
         let mut actual: Vec<Answer> = result.to_host()?;
         actual.sort();
         expected.sort();

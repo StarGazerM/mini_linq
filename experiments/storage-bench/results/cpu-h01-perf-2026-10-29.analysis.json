@@ -1,0 +1,797 @@
+{
+  "provenance": {
+    "binary": "/data/mini_linq/features/workloads/target/bench/build/release/deps/tpch_derived_retail_h01-2abb2513a75956d0",
+    "binary_sha256": "9034fffae39970948db6d07c50d5efbb89119572950ec24ccb3c3f84f709c173",
+    "fingerprint_path": "/data/mini_linq/features/workloads/target/bench/build/release/.fingerprint/tpch-derived-retail_h01-2abb2513a75956d0/bin-tpch-derived-retail_h01.json",
+    "fingerprint": {
+      "rustc": 12019306335353385202,
+      "features": "[]",
+      "declared_features": "[\"counters\", \"profile\"]",
+      "target": 9335349044804955774,
+      "profile": 2040997289075261528,
+      "path": 4942398508502643691,
+      "deps": [
+        [
+          996098503211255033,
+          "cq_ext_correlated",
+          false,
+          17019252505560428891
+        ],
+        [
+          5330460842384404171,
+          "serde_json",
+          false,
+          7184901480362186933
+        ],
+        [
+          6886653637693017676,
+          "cq_load",
+          false,
+          7620388830109302815
+        ],
+        [
+          7093345933279513325,
+          "cq_sequence_tasks",
+          false,
+          11127516104897119442
+        ],
+        [
+          9623861668757926529,
+          "cq_planners",
+          false,
+          13071237519857737284
+        ],
+        [
+          10167771438536856169,
+          "cq_rewrites",
+          false,
+          17839808467546336471
+        ],
+        [
+          11490247810446369721,
+          "cq_sequence_tasks_macros",
+          false,
+          48137521265266396
+        ],
+        [
+          11910974697091955563,
+          "rayon",
+          false,
+          9548559821661576325
+        ],
+        [
+          17056643665338625331,
+          "cq_join_filters",
+          false,
+          10369130825215917399
+        ],
+        [
+          17072606717073632298,
+          "mini_linq",
+          false,
+          6811256153742521432
+        ],
+        [
+          17117908228540721611,
+          "cq_ext_aggregate",
+          false,
+          16112802007424579218
+        ],
+        [
+          18060037956969276125,
+          "cq_storage",
+          false,
+          3760438013529655662
+        ]
+      ],
+      "local": [
+        {
+          "CheckDepInfo": {
+            "dep_info": "release/.fingerprint/tpch-derived-retail_h01-2abb2513a75956d0/dep-bin-tpch-derived-retail_h01",
+            "checksum": false
+          }
+        }
+      ],
+      "rustflags": [],
+      "config": 9396254390672932401,
+      "compile_kind": 0
+    },
+    "counter_binary": "/data/mini_linq/target/expanded-diff/build/current/release/tpch-derived-retail_h01",
+    "counter_binary_sha256": "a7653f064cda384e8d4019442daddd4049d59ae69c377ee3091d554d800a1054",
+    "counter_matching_artifact": "/data/mini_linq/target/expanded-diff/build/current/release/build/tpch-derived-retail_h01/89a0593ebef41215/out/tpch_derived_retail_h01",
+    "counter_fingerprint": {
+      "rustc": 16556433843423139625,
+      "features": "[\"counters\"]",
+      "declared_features": "[\"counters\", \"profile\"]",
+      "target": 9335349044804955774,
+      "profile": 854319013279132213,
+      "path": 4942398508502643691,
+      "deps": [
+        [
+          996098503211255033,
+          "cq_ext_correlated",
+          false,
+          1070528735432862322
+        ],
+        [
+          6886653637693017676,
+          "cq_load",
+          false,
+          12251012988494657703
+        ],
+        [
+          7093345933279513325,
+          "cq_sequence_tasks",
+          false,
+          6246173285226923093
+        ],
+        [
+          8160210889872729633,
+          "serde_json",
+          false,
+          4823685799001134621
+        ],
+        [
+          9623861668757926529,
+          "cq_planners",
+          false,
+          2706779091924466988
+        ],
+        [
+          10167771438536856169,
+          "cq_rewrites",
+          false,
+          7507638899080394164
+        ],
+        [
+          11490247810446369721,
+          "cq_sequence_tasks_macros",
+          false,
+          10803129944676611635
+        ],
+        [
+          11910974697091955563,
+          "rayon",
+          false,
+          546224973898807714
+        ],
+        [
+          17056643665338625331,
+          "cq_join_filters",
+          false,
+          10712221098224621718
+        ],
+        [
+          17072606717073632298,
+          "mini_linq",
+          false,
+          6871590160362660710
+        ],
+        [
+          17117908228540721611,
+          "cq_ext_aggregate",
+          false,
+          6996228060115104601
+        ],
+        [
+          18060037956969276125,
+          "cq_storage",
+          false,
+          7059252381854091219
+        ]
+      ],
+      "local": [
+        {
+          "CheckDepInfo": {
+            "dep_info": "release/build/tpch-derived-retail_h01/89a0593ebef41215/fingerprint/dep-bin-tpch-derived-retail_h01",
+            "fingerprint": "mtime"
+          }
+        }
+      ],
+      "rustflags": [],
+      "config": 8362119626465528914,
+      "compile_kind": 0
+    },
+    "command": [
+      "perf",
+      "record",
+      "-g",
+      "--call-graph",
+      "dwarf,16384",
+      "-e",
+      "cycles:u",
+      "-e",
+      "page-faults",
+      "-F",
+      "199",
+      "-o",
+      "/data/mini_linq/experiments/storage-bench/results/cpu-h01-perf-2026-10-29.data",
+      "--",
+      "/data/mini_linq/features/workloads/target/bench/build/release/deps/tpch_derived_retail_h01-2abb2513a75956d0",
+      "/data/mini_linq/features/workloads/target/bench/data/tpch-1/retail_h01",
+      "default",
+      "21",
+      "/data/mini_linq/experiments/storage-bench/results/cpu-h01-perf-2026-10-29.answers.json",
+      "/data/mini_linq/experiments/storage-bench/results/cpu-h01-perf-2026-10-29.metrics.json",
+      "/data/mini_linq/features/workloads/target/bench/runs/sf-1/retail_h01/default/oracle.json"
+    ],
+    "environment": {
+      "RAYON_NUM_THREADS": "1"
+    },
+    "windows": [
+      {
+        "before": {
+          "utc": "2026-10-29T04:44:13Z",
+          "uptime": " 00:44:13 up 2 days,  1:28,  3 users,  load average: 0.60, 1.60, 2.00\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server",
+            " 779573  3.1 omp",
+            "3786478  2.3 /home/stargazermiao/.vscode-server/extensions/rust-lang.rust-analyzer-0.3.3097-linux-x64/server/rust-analyzer"
+          ],
+          "heavy_external_cpu_processes": [],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:44:13 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "after": {
+          "utc": "2026-10-29T04:45:17Z",
+          "uptime": " 00:45:17 up 2 days,  1:29,  3 users,  load average: 4.06, 2.49, 2.28\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834004  100 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 98.8 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834004  100 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 98.8 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:45:17 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "accepted": false,
+        "returncode": 0
+      },
+      {
+        "before": {
+          "utc": "2026-10-29T04:45:17Z",
+          "uptime": " 00:45:17 up 2 days,  1:29,  3 users,  load average: 4.06, 2.49, 2.28\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834004  101 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 99.0 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834004  101 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 99.0 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:45:17 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "after": {
+          "utc": "2026-10-29T04:45:17Z",
+          "uptime": " 00:45:17 up 2 days,  1:29,  3 users,  load average: 4.06, 2.49, 2.28\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834004  101 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 99.0 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834004  101 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 99.0 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:45:17 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "accepted": false,
+        "reason": "busy before profile"
+      },
+      {
+        "before": {
+          "utc": "2026-10-29T04:45:32Z",
+          "uptime": " 00:45:32 up 2 days,  1:29,  3 users,  load average: 3.75, 2.50, 2.28\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3833707 99.4 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "3834004 98.9 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.7 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server"
+          ],
+          "heavy_external_cpu_processes": [
+            "3833707 99.4 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "3834004 98.9 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:45:32 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "after": {
+          "utc": "2026-10-29T04:45:32Z",
+          "uptime": " 00:45:32 up 2 days,  1:29,  3 users,  load average: 3.75, 2.50, 2.28\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3833707 99.4 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "3834004 98.9 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.7 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server"
+          ],
+          "heavy_external_cpu_processes": [
+            "3833707 99.4 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "3834004 98.9 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:45:32 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "accepted": false,
+        "reason": "busy before profile"
+      },
+      {
+        "before": {
+          "utc": "2026-10-29T04:45:47Z",
+          "uptime": " 00:45:47 up 2 days,  1:29,  3 users,  load average: 3.36, 2.47, 2.28\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834004 99.3 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 93.8 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.7 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834004 99.3 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 93.8 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:45:47 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "after": {
+          "utc": "2026-10-29T04:45:47Z",
+          "uptime": " 00:45:47 up 2 days,  1:29,  3 users,  load average: 3.36, 2.47, 2.28\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834004 99.3 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 93.8 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.7 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834004 99.3 /data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-b721dde3e2bf5f34/build-script-build",
+            "3833707 93.8 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_sequence_runtime --edition=2021 sequence-runtime/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=9c4e403924147a81 -C extra-filename=-382d93ab227d2bc8 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern gpu_tiles=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_tiles-b81d30d75e1e1f9a.rmeta --extern rccl_cub=/data/mini_linq/experiments/gpu/target/release/deps/librccl_cub-6e6586f9e1045486.rmeta --extern rccl_memory=/data/mini_linq/experiments/gpu/target/release/deps/librccl_memory-35fce5445e5d13d0.rmeta --extern rccl_thrust=/data/mini_linq/experiments/gpu/target/release/deps/librccl_thrust-573e4467496cb5f3.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:45:47 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "accepted": false,
+        "reason": "busy before profile"
+      },
+      {
+        "before": {
+          "utc": "2026-10-29T04:46:02Z",
+          "uptime": " 00:46:02 up 2 days,  1:30,  3 users,  load average: 2.84, 2.40, 2.26\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834826  109 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.7 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server",
+            " 779573  3.1 omp"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834826  109 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:46:02 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "after": {
+          "utc": "2026-10-29T04:46:02Z",
+          "uptime": " 00:46:02 up 2 days,  1:30,  3 users,  load average: 2.84, 2.40, 2.26\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834826  109 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.7 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server",
+            " 779573  3.1 omp"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834826  109 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:46:02 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "accepted": false,
+        "reason": "busy before profile"
+      },
+      {
+        "before": {
+          "utc": "2026-10-29T04:46:17Z",
+          "uptime": " 00:46:17 up 2 days,  1:30,  3 users,  load average: 2.82, 2.41, 2.26\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834826  103 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server",
+            " 779573  3.1 omp"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834826  103 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:46:17 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "after": {
+          "utc": "2026-10-29T04:46:17Z",
+          "uptime": " 00:46:17 up 2 days,  1:30,  3 users,  load average: 2.82, 2.41, 2.26\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "3834826  103 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server",
+            " 779573  3.1 omp"
+          ],
+          "heavy_external_cpu_processes": [
+            "3834826  103 /home/stargazermiao/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name cq_gpu_tpch --edition=2024 tpch/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C codegen-units=1 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=939b6979cdb8277d -C extra-filename=-85bb99c7d1484d65 --out-dir /data/mini_linq/experiments/gpu/target/release/deps -C strip=debuginfo -L dependency=/data/mini_linq/experiments/gpu/target/release/deps --extern cq_gpu_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_runtime-04291b7e9aca4e1d.rmeta --extern cq_gpu_sequence_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libcq_gpu_sequence_runtime-382d93ab227d2bc8.rmeta --extern cq_load=/data/mini_linq/experiments/gpu/target/release/deps/libcq_load-095559a80700d004.rmeta --extern cq_storage=/data/mini_linq/experiments/gpu/target/release/deps/libcq_storage-7d5408b98be3f4f0.rmeta --extern cq_testkit=/data/mini_linq/experiments/gpu/target/release/deps/libcq_testkit-d6f379ab5f8ab7e4.rmeta --extern csv=/data/mini_linq/experiments/gpu/target/release/deps/libcsv-d17a91dd142cc870.rmeta --extern cuda_core=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_core-80be148f38d7214b.rmeta --extern cuda_device=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_device-c2015a646a8b3b73.rmeta --extern cuda_host=/data/mini_linq/experiments/gpu/target/release/deps/libcuda_host-9ac4a66548a9d186.rmeta --extern gpu_compress=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress-8780fce5ecba6c4e.rmeta --extern gpu_compress_host=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_compress_host-c4b79af14e25ed13.rmeta --extern gpu_datalog_runtime=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_datalog_runtime-267271755a1f0d06.rmeta --extern gpu_device_columns=/data/mini_linq/experiments/gpu/target/release/deps/libgpu_device_columns-8f01f6e899ba4983.rmeta --extern serde=/data/mini_linq/experiments/gpu/target/release/deps/libserde-b2441f4ccf1eb3b9.rmeta --extern serde_json=/data/mini_linq/experiments/gpu/target/release/deps/libserde_json-d913689d4ab1b7f2.rmeta --cfg cuda_oxide_internal_backend_identity=\"39595997a81ee53cd8b2b6f2d10adbf1c7f1d93348ef9ad694d70ecc162aefa2\" -Zcodegen-backend=/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so -Zmir-enable-passes=-JumpThreading -Zalways-encode-mir -Csymbol-mangling-version=v0 --check-cfg=cfg(cuda_arch,values(any())) --check-cfg=cfg(cuda_arch_ge_80) --check-cfg=cfg(cuda_arch_ge_90) --check-cfg=cfg(cuda_arch_ge_100) --cfg cuda_arch=\"sm_89\" --cfg cuda_arch_ge_80 -L native=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib"
+          ],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:46:17 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "accepted": false,
+        "reason": "busy before profile"
+      },
+      {
+        "before": {
+          "utc": "2026-10-29T04:46:32Z",
+          "uptime": " 00:46:32 up 2 days,  1:30,  3 users,  load average: 2.19, 2.29, 2.23\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server",
+            " 779573  3.1 omp",
+            "3786478  2.2 /home/stargazermiao/.vscode-server/extensions/rust-lang.rust-analyzer-0.3.3097-linux-x64/server/rust-analyzer"
+          ],
+          "heavy_external_cpu_processes": [],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:46:32 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "after": {
+          "utc": "2026-10-29T04:47:33Z",
+          "uptime": " 00:47:33 up 2 days,  1:31,  3 users,  load average: 1.71, 2.13, 2.17\n",
+          "top_cpu_processes": [
+            "    PID %CPU COMMAND",
+            "1069064  8.4 /home/stargazermiao/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rust-analyzer",
+            "3809193  4.8 herdr session attach default",
+            "   8738  3.7 /home/stargazermiao/.local/bin/herdr server",
+            " 779573  3.1 omp",
+            "3786478  2.2 /home/stargazermiao/.vscode-server/extensions/rust-lang.rust-analyzer-0.3.3097-linux-x64/server/rust-analyzer"
+          ],
+          "heavy_external_cpu_processes": [],
+          "gpu_processes": "",
+          "gpu_clocks": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Thu Oct 29 00:47:33 2026\nDriver Version                                         : 580.178.04\nCUDA Version                                           : 13.0\n\nAttached GPUs                                          : 1\nGPU 00000000:51:00.0\n    Clocks\n        Graphics                                       : 210 MHz\n        SM                                             : 210 MHz\n        Memory                                         : 405 MHz\n        Video                                          : 1185 MHz\n    Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Default Applications Clocks\n        Graphics                                       : 2505 MHz\n        Memory                                         : 10001 MHz\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 3105 MHz\n        SM                                             : 3105 MHz\n        Memory                                         : 10001 MHz\n        Video                                          : 2415 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : N/A\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n"
+        },
+        "accepted": true,
+        "returncode": 0
+      }
+    ],
+    "scope": "whole-process perf capture; worker reports load separately; callchain analysis separates load from query where symbols permit; one worker warmup plus 21 exact checked runs; profiling run is diagnostic, not M6 timing samples"
+  },
+  "worker_metrics": {
+    "answer_rows": 4,
+    "instrumented": false,
+    "load_ms": 1069.997255,
+    "median_ms": 2597.293107,
+    "peak_rss_kib": 1831708,
+    "samples_ms": [
+      2574.839034,
+      2575.6187339999997,
+      2577.200774,
+      2583.045636,
+      2587.698287,
+      2590.521397,
+      2590.8291769999996,
+      2593.224302,
+      2594.8583479999998,
+      2595.354598,
+      2597.293107,
+      2599.803664,
+      2609.403668,
+      2621.614156,
+      2624.894948,
+      2659.748067,
+      2696.146228,
+      2721.041493,
+      2752.096295,
+      2869.091974,
+      3074.543006
+    ],
+    "zone_build_ms": 0.0,
+    "zone_metadata_bytes": 0
+  },
+  "cycle_phases": {
+    "query": {
+      "weight": 211400384854,
+      "samples": 11316,
+      "percent": 98.45945685650005
+    },
+    "load": {
+      "weight": 2838776789,
+      "samples": 214,
+      "percent": 1.3221566317148103
+    },
+    "other/unclassified": {
+      "weight": 468893432,
+      "samples": 37,
+      "percent": 0.21838651178513546
+    }
+  },
+  "query_roles": {
+    "dedup hashing": {
+      "weight": 86184067888,
+      "samples": 5165,
+      "percent": 40.76816981554765
+    },
+    "dedup table/probe/growth": {
+      "weight": 45984666785,
+      "samples": 2219,
+      "percent": 21.75240447966001
+    },
+    "group table/probe": {
+      "weight": 25014117089,
+      "samples": 1146,
+      "percent": 11.832578784695952
+    },
+    "group hashing (SipHash)": {
+      "weight": 18065226811,
+      "samples": 831,
+      "percent": 8.545503274971063
+    },
+    "page-fault-context sample": {
+      "weight": 17608496911,
+      "samples": 1092,
+      "percent": 8.329453573682471
+    },
+    "fused scan/decimal/group reduction": {
+      "weight": 15328737566,
+      "samples": 706,
+      "percent": 7.251045250739031
+    },
+    "string/key comparisons": {
+      "weight": 2413173865,
+      "samples": 109,
+      "percent": 1.1415181985910843
+    },
+    "other/unclassified": {
+      "weight": 801897939,
+      "samples": 48,
+      "percent": 0.379326622112735
+    },
+    "allocation/free": {
+      "weight": 0,
+      "samples": 0,
+      "percent": 0.0
+    },
+    "memory copy/zero": {
+      "weight": 0,
+      "samples": 0,
+      "percent": 0.0
+    },
+    "scan/decimal": {
+      "weight": 0,
+      "samples": 0,
+      "percent": 0.0
+    }
+  },
+  "top_query_symbols": [
+    {
+      "symbol": "<cq_storage::hash_state::HashState as core::hash::BuildHasher>::hash_one::<&(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date)>",
+      "role": "dedup hashing",
+      "weight": 86184067888,
+      "samples": 5165,
+      "percent": 40.76816981554765
+    },
+    {
+      "symbol": "<hashbrown::map::HashMap<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date), (), cq_storage::hash_state::HashState>>::insert",
+      "role": "dedup table/probe/growth",
+      "weight": 29179052728,
+      "samples": 1355,
+      "percent": 13.802743428377392
+    },
+    {
+      "symbol": "<hashbrown::map::HashMap<(&alloc::string::String, &alloc::string::String), (i64, i64, usize), std::hash::random::RandomState>>::rustc_entry",
+      "role": "group table/probe",
+      "weight": 25014117089,
+      "samples": 1146,
+      "percent": 11.832578784695952
+    },
+    {
+      "symbol": "tpch_derived_retail_h01::query::default::run",
+      "role": "fused scan/decimal/group reduction",
+      "weight": 13841748011,
+      "samples": 638,
+      "percent": 6.5476456064919475
+    },
+    {
+      "symbol": "<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write",
+      "role": "group hashing (SipHash)",
+      "weight": 13086869486,
+      "samples": 602,
+      "percent": 6.190560861579423
+    },
+    {
+      "symbol": "<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date) as hashbrown::Equivalent<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date)>>::equivalent",
+      "role": "dedup table/probe/growth",
+      "weight": 10639517391,
+      "samples": 486,
+      "percent": 5.032875128561378
+    },
+    {
+      "symbol": "<hashbrown::raw::RawTable<((&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date), ())>>::reserve_rehash::<hashbrown::map::make_hasher<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date), (), cq_storage::hash_state::HashState>::{closure#0}>",
+      "role": "dedup table/probe/growth",
+      "weight": 6166096666,
+      "samples": 378,
+      "percent": 2.9167859227212416
+    },
+    {
+      "symbol": "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(&alloc::string::String, &alloc::string::String)>",
+      "role": "group hashing (SipHash)",
+      "weight": 4978357325,
+      "samples": 229,
+      "percent": 2.3549424133916386
+    },
+    {
+      "symbol": "clear_page_erms",
+      "role": "page-fault-context sample",
+      "weight": 4210846951,
+      "samples": 262,
+      "percent": 1.991882348704402
+    },
+    {
+      "symbol": "asm_exc_page_fault",
+      "role": "page-fault-context sample",
+      "weight": 3764035163,
+      "samples": 230,
+      "percent": 1.7805242717980696
+    },
+    {
+      "symbol": "__memcmp_avx2_movbe",
+      "role": "string/key comparisons",
+      "weight": 2413173865,
+      "samples": 109,
+      "percent": 1.1415181985910843
+    },
+    {
+      "symbol": "<core::iter::adapters::map::Map<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::iter::adapters::map::Map<core::iter::adapters::map::Map<core::slice::iter::Iter<(i64, i64, alloc::string::String, alloc::string::String, cq_load::scalar::Decimal, cq_load::scalar::Decimal, cq_load::scalar::Date)>, <&(i64, i64, alloc::string::String, alloc::string::String, cq_load::scalar::Decimal, cq_load::scalar::Decimal, cq_load::scalar::Date) as cq_storage::rows::Columns>::columns>, tpch_derived_retail_h01::query::no_reduce::run::{closure#1}>, tpch_derived_retail_h01::query::no_reduce::run::{closure#2}>, tpch_derived_retail_h01::query::no_reduce::run::{closure#3}>, tpch_derived_retail_h01::query::no_reduce::run::{closure#4}> as core::iter::traits::iterator::Iterator>::try_fold::<(), core::iter::adapters::map::map_try_fold<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date), (&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date), (), core::ops::control_flow::ControlFlow<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date)>, tpch_derived_retail_h01::query::no_reduce::run::{closure#5}, core::iter::traits::iterator::Iterator::find::check<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date), &mut tpch_derived_retail_h01::query::no_reduce::run::{closure#6}>::{closure#0}>::{closure#0}, core::ops::control_flow::ControlFlow<(&i64, &alloc::string::String, &i64, &cq_load::scalar::Decimal, i64, &cq_load::scalar::Decimal, i64, &alloc::string::String, &cq_load::scalar::Date)>>",
+      "role": "fused scan/decimal/group reduction",
+      "weight": 1486989555,
+      "samples": 68,
+      "percent": 0.7033996442470828
+    },
+    {
+      "symbol": "__handle_mm_fault",
+      "role": "page-fault-context sample",
+      "weight": 1026109228,
+      "samples": 63,
+      "percent": 0.485386641423886
+    },
+    {
+      "symbol": "___perf_sw_event",
+      "role": "page-fault-context sample",
+      "weight": 584496632,
+      "samples": 36,
+      "percent": 0.2764879696901557
+    },
+    {
+      "symbol": "get_page_from_freelist",
+      "role": "page-fault-context sample",
+      "weight": 520140305,
+      "samples": 32,
+      "percent": 0.24604510789288575
+    },
+    {
+      "symbol": "do_user_addr_fault",
+      "role": "page-fault-context sample",
+      "weight": 507632717,
+      "samples": 31,
+      "percent": 0.24012856804900695
+    },
+    {
+      "symbol": "lock_vma_under_rcu",
+      "role": "page-fault-context sample",
+      "weight": 506485982,
+      "samples": 31,
+      "percent": 0.2395861210705911
+    },
+    {
+      "symbol": "rmqueue",
+      "role": "page-fault-context sample",
+      "weight": 499173343,
+      "samples": 31,
+      "percent": 0.23612697930741489
+    },
+    {
+      "symbol": "mas_walk",
+      "role": "page-fault-context sample",
+      "weight": 367498308,
+      "samples": 23,
+      "percent": 0.173839942748357
+    },
+    {
+      "symbol": "__alloc_pages",
+      "role": "page-fault-context sample",
+      "weight": 344715996,
+      "samples": 21,
+      "percent": 0.1630630881954506
+    },
+    {
+      "symbol": "__rmqueue_pcplist",
+      "role": "page-fault-context sample",
+      "weight": 333576053,
+      "samples": 20,
+      "percent": 0.1577934937206375
+    },
+    {
+      "symbol": "handle_mm_fault",
+      "role": "page-fault-context sample",
+      "weight": 324979051,
+      "samples": 20,
+      "percent": 0.15372680197552202
+    },
+    {
+      "symbol": "__perf_sw_event",
+      "role": "page-fault-context sample",
+      "weight": 288075408,
+      "samples": 18,
+      "percent": 0.13627004898735368
+    },
+    {
+      "symbol": "handle_pte_fault",
+      "role": "page-fault-context sample",
+      "weight": 266068499,
+      "samples": 17,
+      "percent": 0.1258599879956489
+    },
+    {
+      "symbol": "alloc_pages_mpol",
+      "role": "page-fault-context sample",
+      "weight": 259692344,
+      "samples": 16,
+      "percent": 0.12284383691134337
+    }
+  ],
+  "fault_phases": {
+    "query": {
+      "weight": 7137119,
+      "samples": 3972,
+      "percent": 95.67794138071008
+    },
+    "load": {
+      "weight": 225884,
+      "samples": 158,
+      "percent": 3.0281288725661315
+    },
+    "other/unclassified": {
+      "weight": 96521,
+      "samples": 41,
+      "percent": 1.2939297467237856
+    }
+  },
+  "rehash_dedup_hash_query_cycle_percent": 36.11547755304637,
+  "sample_count": 15738,
+  "demangler": "c++filt -s rust",
+  "phase_rules": "query run/default/no_reduce callchain first, then query::load/cq_load::load/parquet callchain, otherwise unclassified; exclusive self-symbol roles",
+  "limitations": "sample-period-weighted estimates, not exact operation counts; mixed fused functions cannot isolate scan vs reduction; user-cycle event cannot measure all kernel handling time; page-fault events reported separately"
+}

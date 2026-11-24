@@ -1,6 +1,6 @@
 //! Authored core block corpus, including branch locals, overlap, nesting,
-//! ordered fallback and head-only multi-rule sugar. Arbitrary Rust and panic
-//! refinements are compiled in the facade and seeded fuzz lanes.
+//! ordered fallback and head-only multi-rule sugar. Arbitrary total Rust
+//! expressions are compiled in the facade and seeded fuzz lanes.
 
 use crate::Case;
 
@@ -59,9 +59,15 @@ pub const CASES: &[Case] = &[
     },
     Case {
         name: "prefix_constraint_domain",
-        cq: "struct Q; relation P(x:i32); answer(x) :- P(x), {if x == 1} else {if x == 2};",
+        cq: "struct Q; relation P(x:i32); answer(x) :- P(x), {where x == 1} else {where x == 2};",
         inputs: &[("P", &[&[1], &[2], &[3]])],
         expected: &[&[1], &[2]],
+    },
+    Case {
+        name: "relational_membership_ranges",
+        cq: "struct Q; relation P(x:i32); answer(x) :- P(x), {where x in [1, 3] && x != 3} else {where x in 2..4 || x in 5..=5};",
+        inputs: &[("P", &[&[0], &[1], &[2], &[3], &[4], &[5], &[6]])],
+        expected: &[&[1], &[2], &[3], &[5]],
     },
 ];
 

@@ -59,6 +59,10 @@ struct Metrics {
     source_elapsed: Duration,
 }
 impl State {
+    #[inline]
+    fn add_rows(&self, value: &mut u64, amount: u64) {
+        *value += amount;
+    }
     fn update(&self, update: impl FnOnce(&mut Metrics)) {
         update(
             &mut self
@@ -142,6 +146,7 @@ pub fn operators() -> Vec<OperatorRecord> {
     }
     records
 }
+
 /// Shared handles cloned per iterator/task, never looked up through TLS per row.
 #[derive(Clone)]
 pub struct OperatorProgram(Arc<Vec<Arc<State>>>, super::TaskContext);
@@ -307,9 +312,9 @@ impl OperatorProgram {
     #[cfg(feature = "counters")]
     pub fn rows(&self, index: usize, input: u64, output: u64, inserted: u64) {
         self.0[index].update(|metrics| {
-            metrics.rows_in += input;
-            metrics.rows_out += output;
-            metrics.inserted += inserted;
+            self.0[index].add_rows(&mut metrics.rows_in, input);
+            self.0[index].add_rows(&mut metrics.rows_out, output);
+            self.0[index].add_rows(&mut metrics.inserted, inserted);
         });
     }
 }
@@ -375,9 +380,9 @@ impl<I> OperatorInput<I> {
             return;
         }
         self.state.update(|metrics| {
-            metrics.rows_in += self.count;
+            self.state.add_rows(&mut metrics.rows_in, self.count);
             if self.insert {
-                metrics.inserted += self.count;
+                self.state.add_rows(&mut metrics.inserted, self.count);
             }
         });
         self.count = 0;
@@ -394,7 +399,7 @@ impl<I: Iterator> Iterator for OperatorInput<I> {
     fn next(&mut self) -> Option<Self::Item> {
         let row = self.source.as_mut().expect("live iterator").next();
         if row.is_some() {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
         } else {
             self.flush();
         }
@@ -406,7 +411,7 @@ impl<I: Iterator> Iterator for OperatorInput<I> {
     {
         let source = self.source.take().expect("live iterator");
         source.fold(init, |acc, row| {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
             f(acc, row)
         })
     }
@@ -454,7 +459,7 @@ impl<I> OperatorStream<I> {
                 metrics.elapsed += elapsed;
                 metrics.calls += 1;
             }
-            metrics.rows_out += self.count;
+            self.state.add_rows(&mut metrics.rows_out, self.count);
         });
         self.count = 0;
     }
@@ -470,7 +475,7 @@ impl<I: Iterator> Iterator for OperatorStream<I> {
         if row.is_some() {
             #[cfg(feature = "counters")]
             {
-                self.count += 1;
+                self.state.add_rows(&mut self.count, 1);
             }
         } else {
             self.finish();
@@ -486,7 +491,7 @@ impl<I: Iterator> Iterator for OperatorStream<I> {
         source.fold(init, |acc, row| {
             #[cfg(feature = "counters")]
             {
-                self.count += 1;
+                self.state.add_rows(&mut self.count, 1);
             }
             f(acc, row)
         })
@@ -612,7 +617,7 @@ pub(crate) struct DeferredClock(Option<OperatorClock>);
 impl DeferredBuild {
     pub(crate) fn cardinality(&self, rows: usize) {
         self.0.update(|metrics| {
-            metrics.stored_rows = Some(metrics.stored_rows.unwrap_or(0) + rows as u64);
+            self.0.add_rows(metrics.stored_rows.get_or_insert(0), rows as u64);
         });
     }
     pub(crate) fn start(&self) -> DeferredClock {
@@ -640,9 +645,13 @@ pub struct OperatorPredicate<P> {
 impl<P> Drop for OperatorPredicate<P> {
     fn drop(&mut self) {
         let count = *self.count.get_mut();
-        self.state.update(|metrics| metrics.rows_in += count);
+        self.state.update(|metrics| {
+            self.state.add_rows(&mut metrics.rows_in, count);
+        });
         if let Some(source) = &self.source {
-            source.update(|metrics| metrics.rows_out += count);
+            source.update(|metrics| {
+                source.add_rows(&mut metrics.rows_out, count);
+            });
         }
     }
 }
@@ -668,7 +677,9 @@ impl<I> OperatorOutput<I> {
         if self.count == 0 {
             return;
         }
-        self.state.update(|metrics| metrics.rows_out += self.count);
+        self.state.update(|metrics| {
+            self.state.add_rows(&mut metrics.rows_out, self.count);
+        });
         self.count = 0;
     }
 }
@@ -683,7 +694,7 @@ impl<I: Iterator> Iterator for OperatorOutput<I> {
     fn next(&mut self) -> Option<Self::Item> {
         let row = self.source.as_mut().expect("live iterator").next();
         if row.is_some() {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
         } else {
             self.flush();
         }
@@ -695,7 +706,7 @@ impl<I: Iterator> Iterator for OperatorOutput<I> {
     {
         let source = self.source.take().expect("live iterator");
         source.fold(init, |acc, row| {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
             f(acc, row)
         })
     }
@@ -723,7 +734,7 @@ pub(crate) fn build_cardinality(rows: usize) {
     ACTIVE_BUILD.with(|active| {
         if let Some((state, _)) = &*active.borrow() {
             state.update(|metrics| {
-                metrics.stored_rows = Some(metrics.stored_rows.unwrap_or(0) + rows as u64);
+                state.add_rows(metrics.stored_rows.get_or_insert(0), rows as u64);
             });
         }
     });
@@ -823,7 +834,7 @@ mod tests {
 
     #[cfg(feature = "counters")]
     #[test]
-    fn task_store_and_native_canon_match_independent_primitives() {
+    fn task_store_and_sort_canon_match_independent_primitives() {
         counters::reset();
         let program = OperatorProgram::new(&[
             OperatorLabel {
@@ -857,10 +868,8 @@ mod tests {
                         let part: Vec<_> = program
                             .build(1, || program.inserting(1, rows.iter().copied()).collect());
                         let _part = crate::retain_rows(&part);
-                        let mut seen = counters::DistinctSet::from_set(crate::HashSet::default());
-                        let canonical = program
-                            .inserting(2, part.into_iter())
-                            .filter(|row| seen.insert(*row));
+                        let canonical =
+                            crate::dedup::sort(program.inserting(2, part.into_iter()), Ord::cmp);
                         assert_eq!(program.stream(2, canonical).collect::<Vec<_>>(), [1, 2]);
                     })
                 });
@@ -876,32 +885,10 @@ mod tests {
             counts.rows_copied,
             records[0].rows_inserted + records[1].rows_inserted
         );
-        assert_eq!(counts.distinct_insertions, records[2].rows_inserted);
+        assert_eq!(counts.distinct_insertions, 0);
+        assert_eq!(counts.hash_computations, 0);
         assert_eq!(counts.bytes_retained_current, 0);
         assert!(counts.bytes_retained_peak > 0);
-    }
-
-    #[cfg(feature = "counters")]
-    #[test]
-    fn native_canon_wrapper_preserves_hash_state_and_capacity() {
-        use std::hash::BuildHasher;
-        counters::reset();
-        let native =
-            crate::HashSet::<u64>::with_capacity_and_hasher(16, crate::HashState::default());
-        let capacity = native.capacity();
-        let hash = native.hasher().hash_one(42u64);
-        let mut counted = counters::DistinctSet::from_set(native);
-        assert_eq!(counted.0.capacity(), capacity);
-        assert_eq!(counted.0.hasher().hash_one(42u64), hash);
-        assert_eq!(
-            counters::snapshot().bytes_retained_current,
-            (capacity * 9) as u64
-        );
-        assert!(counted.insert(42));
-        assert!(!counted.insert(42));
-        assert_eq!(counters::snapshot().distinct_insertions, 2);
-        drop(counted);
-        assert_eq!(counters::snapshot().bytes_retained_current, 0);
     }
 
     #[cfg(feature = "counters")]
@@ -975,3 +962,4 @@ mod tests {
         assert!(operators().is_empty());
     }
 }
+

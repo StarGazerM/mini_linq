@@ -14,8 +14,8 @@ fn independently_selected_batch_and_positions_holes_match_default_and_ascent() {
                     relation Reach(x:i32);
                     output Reach;
                     Reach(*x) :- Seed(x);
-                    Reach(*x + 1) :- Reach(x), if *x < 70;
-                    Reach(*x + 2) :- Reach(x), if *x < 69;
+                    Reach(*x + 1) :- Reach(x), where x < 70;
+                    Reach(*x + 2) :- Reach(x), where x < 69;
                 }.into_iter().collect::<BTreeSet<_>>()
             };
         }

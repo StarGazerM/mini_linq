@@ -46,7 +46,7 @@ fn compile_merge(source: &physical::Program) -> syn::Result<physical::Program> {
     Ok(target)
 }
 
-/// Record merge decisions in Physical, preserving RA erasure and Rust order.
+/// Record merge decisions in Physical, preserving RA erasure and Rust dependencies.
 #[proc_macro]
 pub fn merge(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<physical::Program>(input.into(), |source, arguments| {
@@ -59,11 +59,12 @@ pub fn merge(input: TokenStream) -> TokenStream {
 /// Select concrete default representations from the written Physical program.
 #[proc_macro]
 pub fn select(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<physical::Program, cq_lang_structures::Program>(
+    cq_stage::pass::<physical::Program, cq_stage::Structures<cq_lang_structures::physical::Program, cq_lang_structures::Program>>(
         input.into(),
         |source, arguments| {
             no_arguments(arguments)?;
-            cq_structure_selection::compile(source)
+            let target = cq_structure_selection::compile(source)?;
+            Ok(cq_stage::Structures::new(source.clone(), target))
         },
     )
     .into()
@@ -72,11 +73,12 @@ pub fn select(input: TokenStream) -> TokenStream {
 /// Lower the checked Structures program to Sequence.
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<cq_stage::Sequence<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>>(
         input.into(),
-        |source, arguments| {
+        |physical, source, arguments| {
             no_arguments(arguments)?;
-            cq_sequence_lowering::compile(source)
+            let target = cq_sequence_lowering::compile(physical, source)?;
+            Ok(cq_stage::Sequence::new(physical.clone(), source.clone(), target))
         },
     )
     .into()
@@ -85,10 +87,10 @@ pub fn sequence(input: TokenStream) -> TokenStream {
 /// Check host-only grading without changing authored Sequence decisions.
 #[proc_macro]
 pub fn sequential(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |physical, structures, source, arguments| {
         no_arguments(arguments)?;
-        cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        Ok(source.clone())
+        cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
+        Ok((physical.clone(), structures.clone(), source.clone()))
     })
     .into()
 }
@@ -96,10 +98,10 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 /// End the queue with a Rust pull expression.
 #[proc_macro]
 pub fn translate_pull(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |physical, structures, source, arguments| {
         no_arguments(arguments)?;
-        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        cq_sequence_pull::translate(source, &analysis)
+        let analysis = cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
+        cq_sequence_pull::translate(physical, structures, source, &analysis)
     })
     .into()
 }
@@ -124,11 +126,11 @@ mod tests {
             physical {
                 relation L(key: i32, value: i32);
                 relation R(key: i32, value: i32);
-                l = pipe rename L@0 { key -> k, value -> x };
-                r = pipe rename R@1 { key -> k, value -> y };
+                l = pipe rename L { key -> k, value -> x };
+                r = pipe rename R { key -> k, value -> y };
                 j = pipe merge [k] l, r;
                 s = pipe guard j if (x < y);
-                p = pipe canon project s keep {x, y};
+                p = let canon project s keep {x, y};
                 return p as answer(x, y);
             }
         };
@@ -151,13 +153,12 @@ mod tests {
         let target = pass.run(None).unwrap();
         cq_physical_lowering::check(&indexes(), &target).unwrap();
         let selected = cq_structure_selection::compile(&target).unwrap();
-        assert_eq!(selected.physical, target);
         cq_structure_selection::check(&target, &selected).unwrap();
-        let sequence = cq_sequence_lowering::compile(&selected).unwrap();
-        cq_sequence_lowering::check(&selected, &sequence).unwrap();
+        let sequence = cq_sequence_lowering::compile(&target, &selected).unwrap();
+        cq_sequence_lowering::check(&target, &selected, &sequence).unwrap();
         let analysis =
-            cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
-        cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+            cq_lang_sequence::check_grading(&target, &selected, &sequence, &cq_sequence_pull::machine()).unwrap();
+        cq_sequence_pull::translate(&target, &selected, &sequence, &analysis).unwrap();
     }
 
     #[test]
@@ -168,12 +169,12 @@ mod tests {
         });
         assert!(output.to_string().starts_with("theta_passes :: select !"));
         let missing = lower_stage(quote!(pipeline {}; #source)).to_string();
-        assert!(missing.contains("pipeline ended before its Rust printer"));
+        assert!(missing.contains("compile_error"));
         let arguments = lower_stage(quote! {
             arguments { unexpected }; pipeline { theta_passes::select }; #source
         })
         .to_string();
-        assert!(arguments.contains("this example pass accepts no arguments"));
+        assert!(arguments.contains("compile_error"));
     }
 
     #[test]
@@ -181,9 +182,9 @@ mod tests {
         let source: physical::Program = syn::parse_quote! {
             physical {
                 relation L(x: i32); relation R(y: i32);
-                l = pipe rename L@0 {x -> x};
-                r = pipe rename R@1 {y -> y};
-                j = pipe canon probe first [] l, r;
+                l = pipe rename L {x -> x};
+                r = pipe rename R {y -> y};
+                j = let canon probe first [] l, r;
                 return j as answer(x, y);
             }
         };

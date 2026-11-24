@@ -14,7 +14,7 @@ pub fn check(scenario: Scenario) {
         struct SurfaceComputedHead;
         relation R(x: i32, y: i32);
         relation answer(c0: i32, c1: i32);
-        answer(*x - *y, *x * 2 + *y) :- R(x, y), if *x >= 0;
+        answer(*x - *y, *x * 2 + *y) :- R(x, y), where x >= 0;
     };
     let actual = result
         .map(|(column_0, column_1)| vec![column_0, column_1])

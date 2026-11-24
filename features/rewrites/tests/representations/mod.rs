@@ -17,7 +17,6 @@ impl<K: Ord> cq_storage::ExactMembership<K> for Membership<K> {
 }
 type Ordered<K, V> = BTreeMap<K, V>;
 type Curried<'a, K, I> = cq_storage::Trie<'a, K, I>;
-type State<K> = BTreeSet<K>;
 type Buffer<T> = VecDeque<T>;
 type Pairs = Vec<(i32, i32)>;
 
@@ -52,7 +51,7 @@ fn merge_native_hosts_executes_corpus_ix_with_ordered_retype() {
             mini_linq::passes::lower,
             cq_rewrites::merge_joins(all),
             mini_linq::passes::select,
-            cq_rewrites::retype(ordered => Ordered<_, Vec<_>>),
+            cq_rewrites::retype(ordered => @btree_map_grouped as Ordered<_, Vec<_>>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
@@ -71,10 +70,10 @@ fn merge_mixed_native_and_retained_keys_execute_corpus_answers() {
         pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation R(first:i32, second:i32); relation S(first:i32, second:i32);
-            r0 = pipe rename R@0 {first -> x, second -> y};
-            r1 = let rename S@1 {first -> x, second -> y};
+            r0 = pipe rename R {first -> x, second -> y};
+            r1 = let rename S {first -> x, second -> y};
             r2 = pipe probe first [x,y] r0,r1;
-            r3 = pipe canon project r2 keep {x,y}; return r3 as answer(x,y);
+            r3 = let canon project r2 keep {x,y}; return r3 as answer(x,y);
         }
     }
     .map(|(x, y)| vec![*x, *y])
@@ -84,13 +83,12 @@ fn merge_mixed_native_and_retained_keys_execute_corpus_answers() {
 
 #[test]
 #[allow(non_snake_case)]
-fn named_payload_and_dedup_retypes_execute_corpus_physical() {
+fn named_payload_retype_executes_corpus_physical() {
     let (R, S, expected) = intersection_inputs();
     let actual: Rows = cq_rewrite_test_driver::corpus_physical! {
         intersection; pipeline {
             mini_linq::passes::select,
-            cq_rewrites::retype(r1 => Payload<'_, _, _>),
-            cq_rewrites::retype(dedup => State<_>),
+            cq_rewrites::retype(r1 => @hash_index as Payload<'_, _, _>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
@@ -106,7 +104,6 @@ fn standard_hash_state_retypes_execute_after_fast_default_selection() {
     let actual: Rows = cq_rewrite_test_driver::corpus_physical! {
         intersection; pipeline {
             mini_linq::passes::select,
-            cq_rewrites::retype(dedup => ::std::collections::HashSet<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
@@ -119,28 +116,37 @@ fn standard_hash_state_retypes_execute_after_fast_default_selection() {
 #[allow(non_snake_case)]
 fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
     let L = BTreeMap::from([((1,), vec![()]), ((2,), vec![()]), ((3,), vec![()])]);
-    let R = [(1, 10), (1, 11), (2, 20), (3, 30), (1, 10)];
+    let R = [(1, 10), (1, 11), (2, 20), (3, 30)];
     let S = [(1,), (3,)];
     let T = [(1, 10), (2, 20), (3, 30)];
     let actual: Rows = mini_linq::passes::select! {
         pipeline {
-            cq_rewrites::retype(ordered => Ordered<_, Vec<_>>),
-            cq_rewrites::retype(r => Payload<'_, _, _>),
-            cq_rewrites::retype(s => Membership<_>),
-            cq_rewrites::retype(trie => Curried<'_, _, Payload<'_, _, _>>),
-            cq_rewrites::retype(rows => Buffer<_>),
-            cq_rewrites::retype(dedup => State<_>),
+            cq_rewrites::retype(ordered => @btree_map_grouped as Ordered<_, Vec<_>>),
+            cq_rewrites::retype(r => @hash_index as Payload<'_, _, _>),
+            cq_rewrites::retype(
+                providers { membership = Membership<_> { reads [membership], build typed }; }
+                s => @membership as Membership<_>
+            ),
+            cq_rewrites::retype(
+                trie => @trie(@hash_index as Payload<'_, _, _>) as Curried<'_, _, Payload<'_, _, _>>
+            ),
+            // Entry 10 is p's ordinary rows; out's canonical rows remain Sort.
+            cq_rewrites::retype(providers { buffer = Buffer<_> { reads [], build typed }; } entry(10) => @buffer as Buffer<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         };
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);
-            l = pipe rename L@0 {a -> x}; o = let rename L@1 {a -> x};
-            r = let rename R@2 {a -> x,b -> y}; s = let rename S@3 {a -> x};
-            t = let rename T@4 {a -> x,b -> y};
+            l = pipe rename L {a -> x}; o = let rename L {a -> x};
+            r = let rename R {a -> x,b -> y}; s = let rename S {a -> x};
+            t = let rename T {a -> x,b -> y};
             j = pipe merge[x] l,o; n = pipe semi eager[x] j,t;
-            p = let probe first[x] n,r; m = pipe semi eager[x] p,s;
+            p = let probe first[x] n,r;
+            // Two scan consumers retain the ordinary rows buffer.
+            copy = pipe project p keep {x,y};
+            repeated = pipe union p,copy;
+            m = pipe semi eager[x] repeated,s;
             q = pipe probe first[x,y] m,t;
-            out = pipe canon project q keep {x,y}; return out as answer(x,y);
+            out = let canon project q keep {x,y}; return out as answer(x,y);
         }
     }
     .map(|(x, y)| vec![*x, *y])
@@ -157,14 +163,13 @@ fn facade_pipeline_keeps_opaque_rust_steps_in_written_order() {
         mini_linq::compile! {
             pipeline {
                 physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections, cq_rewrites::lazy_semijoins];
-                structures = [cq_rewrites::retype(dedup => State<_>)];
             }
             struct Division;
             relation R(x:i32, y:i32) = (rows);
             answer(x, quotient) :- R(x,y), if (allowed(x)), let quotient:i32 = 100 / *x, if (*y < quotient + 1);
         }.map(|(x, quotient)| vec![*x, quotient]).collect()
     }
-    let input = [(0, 999), (1, 2), (1, 2), (2, 60), (-1, -101)];
+    let input = [(0, 999), (1, 2), (2, 60), (-1, -101)];
     harness::check_refinement_on(
         &input,
         |rows| {

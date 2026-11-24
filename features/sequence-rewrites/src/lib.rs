@@ -12,11 +12,9 @@
 //! | `segment` | `d, n` or `d, n, items m` | Materialize a named flatten's offsets and pair tile/flatten around that store. |
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
 //! | `output` | `count`, `reserve`, `reserve_previous`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
+//! | `roots` | `spread` | Size fold-free dispatches' root tiles at launch to fill resident blocks, at most the declared tile (GPU-RootSpread). |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
-//! | `evidence` | `evidence { ... }` | Record estimates and author-asserted key premises. False keys can change grouped answers. |
-//! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
-//! | `lookup_first` | `using Provider, order [...], transfer [...], early [...]` | Checked LargestRoot/ATP Lookup-before-Expand family; every decision is replayable. |
-//! | `adaptive` | selected filter plus published-count decision | Choose checked optional-filter and exact-join alternatives from the same family. |
+//! | `evidence` | `evidence from authored("origin") { ... }` | Record sourced planning advice without asserting uniqueness. |
 //!
 //! Every pass checks the source, target and construction-based support equality.
 //! Grading records advice only: it neither resolves the machine nor certifies
@@ -28,22 +26,21 @@
 //! initial capacity (zero on first invocation), not an output bound. Full counter
 //! and BE-Abort checks and overflow replay must succeed before publication.
 //!
-//! Lookup-first preserves live smallest-intersection candidate and membership
-//! adapters, removing them only when their intersection is reexpressed. Movable
-//! full-row providers with distinct key layouts use separate identity-projection
-//! stores over shared retained rows, following Structures' full-key-before-prefix
-//! selection rule. Rust prefixes, candidate-pair identities and authored projected
-//! union representations remain pinned. Translators consume these recorded
-//! decisions; they do not choose an index layout or a new join order.
-//!
 //! The macro protocol is `arguments { advice }; pipeline { next, ... };` followed
-//! by a complete Sequence program. Core dependencies are public packaged APIs;
-//! this workspace does not depend on storage, target translations or test hooks.
+//! by the explicit Physical, Structures, and Sequence stack. Core dependencies are public packaged APIs;
+//! this package does not depend on storage, target translations or test hooks.
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
 
 macro_rules! sequence_rewrite {
+    (@apply key_partition, $physical:expr, $structures:expr, $source:expr, $arguments:expr) => {
+        cq_sequence_plan::rewrites::key_partition($physical, $structures, $source, $arguments)
+    };
+    (@apply $name:ident, $physical:expr, $structures:expr, $source:expr, $arguments:expr) => {{
+        let target = cq_sequence_plan::rewrites::$name($physical, $structures, $source, $arguments)?;
+        Ok(($physical.clone(), $structures.clone(), target))
+    }};
     ($name:ident, $($invalid:tt)*) => {
         #[doc = concat!(
             "Checked `", stringify!($name), "` rewrite. Invalid advice is rejected:\n",
@@ -54,19 +51,21 @@ macro_rules! sequence_rewrite {
             "    pipeline { finish };\n",
             "    physical {\n",
             "        relation R(a:i32);\n",
-            "        r = pipe canon rename R@0 {a -> a};\n",
+            "        r = let canon rename R {a -> a};\n",
             "        return r as answer(a);\n",
             "    }\n",
-            "    structures { r host scan = Reader []; r canon = Canon; }\n",
+            "    structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }\n",
             "    sequence { a = rows r; b = flatten tile 8 a; d = store a; }\n",
             "}\n",
             "```"
         )]
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            cq_stage::rewrite::<cq_lang_sequence::Program>(
+            cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(
                 input.into(),
-                cq_sequence_plan::rewrites::$name,
+                |physical, structures, source, arguments| {
+                    sequence_rewrite!(@apply $name, physical, structures, source, arguments)
+                },
             )
             .into()
         }
@@ -81,8 +80,6 @@ sequence_rewrite!(segment, missing, 0);
 sequence_rewrite!(key_partition, missing, publication, [], 0);
 sequence_rewrite!(choose, b, len r < 4 => a, else => missing);
 sequence_rewrite!(output, bounded);
+sequence_rewrite!(roots, declared);
 sequence_rewrite!(grade, custom, missing at host);
-sequence_rewrite!(evidence, evidence { count missing = 1; });
-sequence_rewrite!(group_without_canon, missing);
-sequence_rewrite!(lookup_first, missing);
-sequence_rewrite!(adaptive, missing);
+sequence_rewrite!(evidence, evidence from authored("sequence-rewrites syntax fixture") { count missing = 1; });

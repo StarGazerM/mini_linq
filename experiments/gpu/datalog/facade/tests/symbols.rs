@@ -5,8 +5,13 @@ struct TestSymbol(u32);
 
 struct TestCodec;
 impl gpu_datalog_runtime::SymbolCodec<TestSymbol> for TestCodec {
-    fn code(value: &TestSymbol) -> u32 { value.0 }
-    fn decode(code: u32) -> TestSymbol { TestSymbol(code) }
+    fn code(value: &TestSymbol) -> u32 {
+        value.0
+    }
+    // DECODE P: diagnostic final datalog answers reconstruct TestSymbol handles for host assertions.
+    fn decode(code: u32) -> TestSymbol {
+        TestSymbol(code)
+    }
 }
 
 fn sym(value: &str) -> TestSymbol {
@@ -17,12 +22,17 @@ fn sym(value: &str) -> TestSymbol {
     }
 }
 
-type Answers = (BTreeSet<(TestSymbol,)>, BTreeSet<(TestSymbol,)>, BTreeSet<(TestSymbol, TestSymbol, TestSymbol, TestSymbol, TestSymbol)>);
+type Answers = (
+    BTreeSet<(TestSymbol,)>,
+    BTreeSet<(TestSymbol,)>,
+    BTreeSet<(TestSymbol, TestSymbol, TestSymbol, TestSymbol, TestSymbol)>,
+    BTreeSet<(TestSymbol, TestSymbol)>,
+);
 
 macro_rules! engine {
     ($name:ident, {$($pipeline:tt)*}) => {
         fn $name(labels: Vec<(TestSymbol, TestSymbol)>, wide: Vec<(TestSymbol, TestSymbol, TestSymbol, TestSymbol, TestSymbol)>) -> Answers {
-            let (guarded, selected, copied) = cq_datalog::datalog! {
+            let (guarded, selected, copied, constant) = cq_datalog::datalog! {
                 pipeline { $($pipeline)* }
                 struct Symbols;
                 relation Label(t: TestSymbol, value: TestSymbol) = (labels);
@@ -30,28 +40,41 @@ macro_rules! engine {
                 relation Guarded(value: TestSymbol);
                 relation Selected(value: TestSymbol);
                 relation Copied(a: TestSymbol, b: TestSymbol, c: TestSymbol, d: TestSymbol, e: TestSymbol);
-                output Guarded, Selected, Copied;
-                Guarded(*value) :- Label(t, value), if *t == sym("x");
+                relation Constant(t: TestSymbol, value: TestSymbol);
+                output Guarded, Selected, Copied, Constant;
+                Guarded(*value) :- Label(t, value), where t == sym("x");
                 Selected(*value) :- Label(sym("x"), value);
                 Copied(*a, *b, *c, *d, *e) :- Wide(a, b, c, d, e);
+                Constant(*t, sym("x")) :- Label(t, value);
             };
-            (guarded.collect(), selected.collect(), copied.collect())
+            (guarded.collect(), selected.collect(), copied.collect(), constant.collect())
         }
     };
 }
 
+use cq_gpu_datalog::bind_inputs as resident_inputs;
+
 engine!(cpu, {});
 engine!(gpu, {
-    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(TestSymbol => TestCodec))];
+    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(TestSymbol => [0] TestCodec), ratio(8))];
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
-        structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+        structures = [resident_inputs, ::cq_gpu_sequence::bind_runs];
         sequence = ::mini_linq::passes::sequence;
-        decompose = [::cq_gpu_sequence::plan];
+        stage = ::cq_gpu_sequence::stage;
+        decompose = [::cq_gpu_sequence::decompose(codecs [
+            CodecToken {
+                codec_id: Some(0),
+                codec: Some(TestCodec),
+                ordered: true,
+                levels: [[host], [host, device], [host, device, block], [host, device, block, lane]],
+            }
+        ])];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
+    round = [::cq_gpu_datalog::bind_round(binding = 5)];
     print = ::cq_gpu_datalog::print_rounds;
 });
 

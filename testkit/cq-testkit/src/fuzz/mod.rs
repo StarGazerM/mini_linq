@@ -1,14 +1,21 @@
-//! Seeded abstract queries and independent MiniLinq/SQL printers.
+//! Seeded abstract queries, independent MiniLinq/SQL printers, and the G3
+//! reference interpreter (`Case::reference`).
 //!
-//! This module never compiles or executes generated MiniLinq. The total lane
-//! has SQL semantics over bounded integers; partial terms and finite Rust
-//! generators use executable written-order refinement. Generators stay in the
-//! existing binding schedule, including dependency-aware minimization and scope
-//! checks. Coverage counts properties once per case.
+//! This module never compiles or executes generated MiniLinq. Both lanes obey
+//! the total-Rust premise: bounded arithmetic has independent SQL semantics,
+//! while opaque Rust operations and finite generators use an executable written
+//! reference. Placement depends only on free variables, not written-order
+//! chains. Coverage counts properties once per case.
 
+mod data;
 mod model;
+mod profile;
+mod reference;
+mod report;
 mod sql;
 pub use model::*;
+pub use profile::Profile;
+pub use report::{RouteCoverage, failure_report};
 
 /// Every feature tag emitted by the built-in generator, including size bins.
 /// Custom abstract models may emit additional size bins.
@@ -35,8 +42,8 @@ pub const FEATURE_TAGS: &[&str] = &[
     "for-inclusive-range",
     "for-duplicates",
     "for-empty",
-    "for-iterator-panic",
-    "partial-for",
+    "for-mapped",
+    "rust-for",
     "nested-for",
     "computed-head",
     "repeated-head-variable",
@@ -62,16 +69,16 @@ pub const FEATURE_TAGS: &[&str] = &[
     "expression-multiply",
     "expression-remainder",
     "expression-negate",
-    "partial-divide",
-    "partial-remainder",
-    "partial-overflow-add",
-    "partial-overflow-subtract",
-    "partial-overflow-multiply",
-    "partial-unwrap",
-    "partial-guard",
-    "partial-let",
-    "partial-argument",
-    "partial-head",
+    "rust-divide",
+    "rust-remainder",
+    "rust-bounded-add",
+    "rust-bounded-subtract",
+    "rust-bounded-multiply",
+    "rust-unwrap",
+    "rust-guard",
+    "rust-let",
+    "rust-argument",
+    "rust-head",
     "relational-constraint",
     "relational-parameter",
     "relational-eq",
@@ -83,7 +90,7 @@ pub const FEATURE_TAGS: &[&str] = &[
     "relational-between",
     "relational-in",
     "relational-or",
-    "partial-term",
+    "rust-term",
     "cases",
     "atoms=1",
     "atoms=2",
@@ -99,5 +106,38 @@ pub const FEATURE_TAGS: &[&str] = &[
     "head-arity=3",
     "relation-arity=1",
     "relation-arity=2",
+    "type-bigint",
+    "type-uinteger",
+    "declared-key",
+    "multi-column-key",
+    "unsorted-key",
+    "raw-identifier",
+    "negation",
+    "negation-self",
+    "negation-variable",
+    "negation-constant",
+    "negation-wildcard",
+    "contradictory-constraints",
+    "one-point-range",
+    "empty-range",
+    "closed-capture",
+    "closed-let",
+    "closed-guard",
+    "head-constant",
+    "aggregate",
+    "fold-count",
+    "fold-sum",
+    "fold-sum-capture",
+    "fold-min",
+    "fold-max",
+    "shape-empty",
+    "shape-single",
+    "shape-all-duplicates",
+    "shape-one-key",
+    "shape-distinct",
+    "shape-large",
+    "extreme-values",
+    "negative-values",
+    "low32-collision",
     "relation-arity=3",
 ];

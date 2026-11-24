@@ -98,7 +98,13 @@ pub struct Answers {
 #[device]
 #[inline(always)]
 unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
-    unsafe { (decode_u32(offsets, key as u64), decode_u32(offsets, key as u64 + 1)) }
+    // DECODE V: both FOR directory offsets are reconstructed before join expansion; P6 use plain index directories.
+    unsafe {
+        (
+            decode_u32(offsets, key as u64),
+            decode_u32(offsets, key as u64 + 1),
+        )
+    }
 }
 
 /// Exact membership of `value` in ascending u32 `column` over [begin, end).
@@ -108,12 +114,14 @@ unsafe fn contains_u32(column: ColumnView, begin: u32, end: u32, value: u32) -> 
     let (mut low, mut high) = (begin, end);
     while low < high {
         let middle = low + (high - low) / 2;
+        // DECODE V: binary membership reconstructs each midpoint before comparison; P6 compare encoded keys.
         if unsafe { decode_u32(column, middle as u64) } < value {
             low = middle + 1;
         } else {
             high = middle;
         }
     }
+    // DECODE V: final membership reconstructs the candidate before equality; P6 retain code-domain operands.
     low < end && unsafe { decode_u32(column, low as u64) } == value
 }
 
@@ -143,7 +151,9 @@ unsafe fn checked_scan(value: u32, meta: *mut u32) -> (u32, u32) {
 #[inline(always)]
 unsafe fn emit(out: Answers, destination: u32, order: u32, supplier: u32, nation: u32) {
     if destination < out.capacity {
-        let key = ((order as u64) << out.order_shift) | ((supplier as u64) << out.supplier_shift) | nation as u64;
+        let key = ((order as u64) << out.order_shift)
+            | ((supplier as u64) << out.supplier_shift)
+            | nation as u64;
         unsafe { *out.keys.add(destination as usize) = key };
     }
 }
@@ -165,6 +175,7 @@ pub mod reference {
         let stride = thread::gridDim_x() * 256;
         while row < rows {
             unsafe {
+                // DECODE V: full key column expands before radix sorting; P6 sort encoded keys or use plain index runs.
                 *keys.add(row as usize) = decode_u32(key, row as u64);
                 *order.add(row as usize) = row;
             }
@@ -180,12 +191,19 @@ pub mod reference {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn selected_keys_and_rows(key: ColumnView, selected: *const u32, rows: u32, keys: *mut u32, order: *mut u32) {
+    pub fn selected_keys_and_rows(
+        key: ColumnView,
+        selected: *const u32,
+        rows: u32,
+        keys: *mut u32,
+        order: *mut u32,
+    ) {
         let mut i = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while i < rows {
             unsafe {
                 let row = *selected.add(i as usize);
+                // DECODE V: selected keys expand before the next sorting pass; P6 preserve recorded code representations.
                 *keys.add(i as usize) = decode_u32(key, row as u64);
                 *order.add(i as usize) = row;
             }
@@ -201,12 +219,18 @@ pub mod reference {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
+    // DECODE V: column decoder materializes all index keys before sort; P6 keep keys encoded.
     pub fn decode_column(key: ColumnView, selected: *const u32, rows: u32, out: *mut u32) {
         let mut i = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while i < rows {
             unsafe {
-                let row = if selected.is_null() { i } else { *selected.add(i as usize) };
+                let row = if selected.is_null() {
+                    i
+                } else {
+                    *selected.add(i as usize)
+                };
+                // DECODE V: gathered key reconstruction feeds lexicographic sort; P6 compare retained codes.
                 *out.add(i as usize) = decode_u32(key, row as u64);
             }
             i = match i.checked_add(stride) {
@@ -227,6 +251,7 @@ pub mod reference {
         let stride = thread::gridDim_x() * 256;
         while row < rows {
             unsafe {
+                // DECODE V: date/region selection decodes before relational comparison; P6 translate range constants.
                 let value = decode(column, row as u64) as i32;
                 *flags.add(row as usize) = (value >= start && value < end) as u32;
             }
@@ -251,13 +276,16 @@ pub mod reference {
         let tid = thread::threadIdx_x();
         unsafe {
             let count = DeviceAtomicU32::from_ptr(meta.add(META_SEGMENTS));
+            // DECODE V: compressed region directory endpoint controls further expansion; P6 use plain index directories.
             let region_rows = decode_u32(ix.region_offsets, ix.region_domain as u64);
             let mut row = tid;
             while row < region_rows {
+                // DECODE V: region ID FOR inverse precedes the nation join; P6 retain plain/code-domain index keys.
                 let region = decode_u32(ix.region_id, row as u64);
                 let (first, last) = range(ix.nation_offsets, region);
                 let mut nation_row = first;
                 while nation_row < last {
+                    // DECODE V: nation ID FOR inverse precedes the customer join; P6 avoid compressed index payload probes.
                     let nation = decode_u32(ix.nation_id, nation_row as u64);
                     let (begin, end) = range(ix.customer_offsets, nation);
                     if end > begin {
@@ -336,8 +364,10 @@ pub mod reference {
                 let mut nation = 0u32;
                 if position < driver_rows {
                     let segment = owner(segments.offsets, segment_count, position) as usize;
-                    let customer_row = *segments.begin.add(segment) + (position - *segments.offsets.add(segment));
+                    let customer_row =
+                        *segments.begin.add(segment) + (position - *segments.offsets.add(segment));
                     nation = *segments.nation.add(segment);
+                    // DECODE V: customer ID FOR inverse precedes the orders join; P6 retain index keys without expansion.
                     let customer = decode_u32(ix.customer_id, customer_row as u64);
                     let (order_begin, order_end) = range(ix.order_offsets, customer);
                     begin = order_begin;
@@ -366,6 +396,7 @@ pub mod reference {
                         if q < orders && q >= order_base {
                             let parent = owner(p1_offset, 256, q) as usize;
                             let order_row = *p1_begin.add(parent) + (q - *p1_offset.add(parent));
+                            // DECODE V: order ID FOR inverse precedes the lineitem join; P6 avoid compressed random-access index payloads.
                             order = decode_u32(ix.order_id, order_row as u64);
                             let (line_begin, line_end) = range(ix.line_offsets, order);
                             begin = line_begin;
@@ -404,16 +435,20 @@ pub mod reference {
                             if q < lines && q >= line_base {
                                 let parent = owner(p2_offset, 1024, q) as usize;
                                 let line_row = *p2_begin.add(parent) + (q - *p2_offset.add(parent));
+                                // DECODE V: supplier ID FOR inverse precedes membership probing; P6 compare retained encoded keys.
                                 let s = decode_u32(ix.line_supplier, line_row as u64);
                                 order[item] = *p2_order.add(parent);
                                 supplier[item] = s;
                                 nation[item] = *p2_nation.add(parent);
-                                let (supplier_begin, supplier_end) = range(ix.supplier_offsets, nation[item]);
-                                found[item] = contains_u32(ix.supplier_id, supplier_begin, supplier_end, s);
+                                let (supplier_begin, supplier_end) =
+                                    range(ix.supplier_offsets, nation[item]);
+                                found[item] =
+                                    contains_u32(ix.supplier_id, supplier_begin, supplier_end, s);
                             }
                             item += 1;
                         }
-                        let hits = found[0] as u32 + found[1] as u32 + found[2] as u32 + found[3] as u32;
+                        let hits =
+                            found[0] as u32 + found[1] as u32 + found[2] as u32 + found[3] as u32;
                         let (offset, block_total) = checked_scan(hits, meta);
                         if tid == 0 {
                             *base_slot = if block_total > 0 {

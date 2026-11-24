@@ -2,7 +2,9 @@
 //!
 //! Each stage has its own checked language: Source, Strata, Incremental,
 //! Storage and Round. The terminal printer executes ordinary CQ holes against
-//! borrowed hosts and admits each candidate through canonical set insertion.
+//! borrowed hosts and admits each candidate by an anti-join with its
+//! relation's canonical layout (an ordinary all-column-keyed layout) and
+//! insert-if-absent into that layout's NEW version for the round.
 //! Datalog owns its pipeline configuration without changing core CQ planning.
 //!
 //! Consumers declare direct `mini-linq` and `cq-storage` dependencies, just as
@@ -40,25 +42,25 @@
 //!
 //! Each rule hole records `consumer canonical`: its result belongs to exactly
 //! one checked admission owner for its head relation. Frozen-key holes have
-//! their own canonical key-set consumer. Storage certificates establish
-//! `host_set H discharged` for certified positive hosts: canonical EDBs,
-//! admitted IDB all/delta rows, and their maintained layouts. Certificates may
-//! cover a subset of hosts; an uncertified host receives no discharged fact.
-//! Provider types are not whitelisted. Checked scan substitutions preserve the
-//! certificate for the renamed input.
-//! Round checks owners and host provenance directly from the supplied records;
-//! it never regenerates Fork's output to justify these facts. Opaque providers
-//! must still obey their recorded collection, membership and maintenance laws.
+//! their own canonical key-set consumer. Every CQ input is unconditionally a
+//! set of distinct complete rows. Raw IO deduplicates before this boundary;
+//! Datalog binding inserts each input set into its relation's layouts.
+//! Round checks admission owners, host origins and layout maintenance directly
+//! from the supplied records; it never regenerates Fork's output to justify
+//! these obligations. Opaque providers must still obey their recorded
+//! collection, membership and maintenance laws.
 //!
 //! Raw CQ entry remains fact-free; Fork records facts in the selected lower
 //! argument packet. `Hole.lower` records that invocation's ordinal, and Round
 //! checks its parsed context exactly equals `Hole.facts`. Fork's explicit
-//! `lower = N` argument selects a custom lowering alias by ordinal; otherwise
-//! the queue must have one path ending in `lower`.
-//! Checked scan renaming updates both facts and the packet, and facts naming
-//! non-read inputs are rejected before erasure.
-//! Once recorded in Physical, they travel in an exact explicit
-//! `context { consumer = canonical, host_set H discharged, ... };` envelope.
+//! `lower = N` argument selects a custom lowering invocation by ordinal;
+//! custom flat queues must declare that owner explicitly.
+//! The named CQ `plan` phase is recorded as `Hole.plan`; custom flat fork
+//! queues supply `plan = N`. Authored Datalog order requires that owner with
+//! empty planner arguments; incompatible advice is rejected, never skipped.
+//! Checked scan renaming updates declared relational evidence while preserving
+//! consumer context. Once recorded in Physical, that context travels in an exact
+//! explicit `context { consumer = canonical };` envelope.
 //! Reentering a factful CQ IR requires that envelope: missing or extra facts
 //! are rejected, and matching pass arguments do not replace it. Per-hole
 //! rewrites and both pull and push terminals preserve this checked boundary.
@@ -72,7 +74,7 @@
 //! Frozen-key holes are excluded. The task-local collector uses `HashTable<usize>`
 //! indices into an owned `Vec`, shares the admission hasher, preserves first
 //! occurrence order, and returns that vector without row cloning or CQ
-//! `__cq_seen` state. The collector alone does not eliminate retained pull
+//! result canonicalization. The collector alone does not eliminate retained pull
 //! result materialization; checked push selection streams into it directly.
 //! These checked realization records erase without changing the CQ or context
 //! facts. The optimization is never the canonical owner: cross-task duplicates
@@ -86,8 +88,44 @@
 //! argument. The `hoist-invariants` Cargo feature enables this policy by default;
 //! ordinary CPU builds retain the unmodified scheduling policy.
 //!
+//! Per-rule join orders use CQ `plan(order(...))` selectors on labelled rules.
+//! A rule is labelled as `Label: head :- body;`. The incremental pass accepts
+//! `plan(Label, order(R, S@2, ...));` for every version of a rule and
+//! `plan(Label, delta(R@k), order(...));` to override one semi-naive version.
+//! Selectors use original rule-body clause numbers, before delta or layout
+//! renaming. Named whole atoms run first; unnamed atoms retain written order.
+//! Only the first contiguous positive prefix may be named. Unadvised versions
+//! keep `driver(..)` and their original CQ planning behavior.
+//!
+//! Step entries use the same CQ syntax: `R@k(bound_columns)` is a lookup,
+//! a partial read introducing one variable is a Fine subatom, and `R@k` is
+//! the full read. Every named partial occurrence needs an explicit full read.
+//! For example `plan(Step, order(R@0, S@1(y), S@1, T@2));`.
+//! Add exact intersection sites with
+//! `plan(Step, order(...), smallest(S@1, T@2));`; multiple `smallest(...)`
+//! sites are accepted. This requires a direct `cq-rewrites` dependency.
+//! Step/site advice preserves occurrences with CQ `no_reduce`, and runs the
+//! ordinary WF-VO, selected CK-Le, PH-Smallest and PH-KeyProjection checks.
+//! Unsupported backend decisions fail rather than falling back silently.
+//! GPU experiments preserve these orders with `cq_gpu_sequence::decompose`
+//! in the decomposition phase; Sequence does not replan relational decisions.
+//!
+//! Admission placement (ADM-InPlan): a planned CPU hole automatically
+//! anti-joins its candidates with the head's committed canonical layout inside
+//! its plan (`!C(x̄)`) when recorded fan-out follows the written head-binding
+//! level. CQ schedules that negation after the actual bindings, even if reads
+//! reorder. Otherwise the committed probe stays at admission. In-plan
+//! admission keeps the round-local insert-if-absent.
+//! `plan(Label, known(admit));` explicitly keeps the committed probe at admission;
+//! `plan(Label, known(at(level k)));` pins the in-plan read after the
+//! k-th positive read (1-based, at or after the read binding the last head
+//! variable; needs a planning invocation). `known(..)` combines with
+//! `delta(..)`, `order(..)` and `smallest(..)`, and `order` is optional when
+//! it is given. GPU Datalog records `admit` for every hole and rejects
+//! `known(at(..))`.
+//!
 //! Select streaming push holes with
-//! `cq = pipeline { print = ::cq_datalog::passes::print_push; };`.
+//! `cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; };`.
 //! Rule answers are passed directly to canonical admission, and negation keys
 //! directly to their key-set provider, without a printer-owned result buffer.
 //! The default registry recognizes both pull and push terminals; custom paths
@@ -105,21 +143,21 @@
 //! before requiring exact erased correspondence; it never changes the registry.
 //! Parallel and phase-timed execution retain their explicit candidate storage.
 //!
-//! Datalog defaults to unkeyed Fx hashing for layout maps, IDB membership,
-//! EDB canonicalization, and negation key sets. Checked context facts eliminate
+//! Datalog defaults to unkeyed Fx hashing for layout maps and key sets (the
+//! canonical layouts included) and negation key sets. Checked context facts eliminate
 //! dedup representations in the generated rule holes, so the default queue
 //! installs no CQ dedup retype rewrite.
 //! This assumes trusted inputs: Fx is not collision-attack resistant.
-//! For adversarial input, select keyed hashing at both Datalog boundaries:
+//! For adversarial input, select keyed hashing at the Storage boundary; Storage
+//! records negation key-set providers, which fork copies into Round:
 //! ```ignore
 //! pipeline {
 //!     storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
-//!     round = [cq_datalog_hasher::hasher_round(keyed)];
 //! }
 //! ```
-//! Explicit `hasher(fx)` and `hasher_round(fx)` remain available. Do not add
-//! `retype(dedup => ...)` to the discharged hole pipeline: it has no dedup
-//! representation to retype. MiniLinq core defaults are unchanged.
+//! Explicit `hasher(fx)` remains available. CQ canonical
+//! boundaries use sort strategies rather than retypable set providers; discharged
+//! holes require no additional canonicalization strategy.
 //!
 //! Round evaluation waves can be selected with a direct `cq-datalog-schedule`
 //! dependency and `round = [cq_datalog_schedule::schedule(by_head)]`.
@@ -135,8 +173,12 @@
 //! cq_datalog::passes::print_rounds }; <strata program> }`.
 //! For authored Incremental text, enter [`passes::storage!`] instead.
 //! Every direct entry accepts `arguments { ... }; pipeline { ... }; <IR>`.
-//! Storage records full and delta layouts separately.
-//! Full layouts receive per-admitted-row insertions. Each demanded delta
+//! Storage records full and delta layouts separately; a derived, returned or
+//! negated relation's canonical layout is one of its full layouts keyed by
+//! every column, any other input names an ordinary read layout, and every layout
+//! keyed by all columns is a payload-free `HashSet` by default.
+//! Full layouts, the canonical one included, receive per-admitted-row
+//! insertions. Each demanded delta
 //! layout is batch-built once at seed publication and once at every subsequent
 //! publication, replacing the previous run even when the new delta is empty.
 //! The next round's holes share that immutable grouped host rather than
@@ -159,16 +201,20 @@
 //! Literals in positive atoms use CQ's filtered-relation occurrences, including
 //! string literals against `String` columns. All heads, including recursive
 //! heads, accept Rust expressions and body `let` bindings (for example
-//! `Path(*x, *z, *length + 1)` with a preceding `if *length < 10` guard).
+//! `Path(*x, *z, *length + 1)` with a preceding `where length < 10` predicate).
 //! A `String` head constant is written `"java.lang.String".to_owned()`, while
 //! an `&'static str` column can return a literal directly.
+//! Relational selections use `where` with bare query variables, for example
+//! `where x == y`, `where x >= 2`, or `where x != constants.excluded`.
+//! Closed Rust operands are evaluated once on the host. Row-dependent calls,
+//! arithmetic, and string methods remain opaque Rust `if` expressions.
 //! Bodies also accept `for pattern in expression`, using an irrefutable Rust
 //! pattern and a pure finite `IntoIterator`, for example
-//! `Reach(next) :- Reach(x), if *x < 4, for next in [*x + 1, *x + 1];`.
+//! `Reach(next) :- Reach(x), where x < 4, for next in [*x + 1, *x + 1];`.
 //! Generated bindings are available to later clauses and heads, as with `let`;
-//! duplicates collapse at Boolean insertion. Generator clauses preserve the
-//! written opaque Rust clause order. A panic while constructing or advancing
-//! an iterator produces no denoted result.
+//! duplicates collapse at Boolean insertion. Rust expressions are pure and
+//! total by premise and are placed wherever their free variables are bound;
+//! they do not impose a written-order chain.
 //! Refutable patterns use `if let pattern = expression`, for example
 //! `Value(x) :- Optional(o), if let Some(x) = *o;`. A failed match drops the
 //! valuation; a successful match makes every pattern binding available to
@@ -177,8 +223,8 @@
 //! This is Datalog-only sugar for `for (bindings, ...) in match expression {
 //! pattern => Some((bindings, ...)), _ => None }` (using qualified `Option`
 //! variants); no bindings use `Some(())` and `for ()`. It inherits generators'
-//! written-order and placement constraints. A panic in the expression is
-//! bottom, not a failed match. The default surface pass lowers it before the
+//! purity, totality, and free-variable placement premises. The default surface
+//! pass lowers it before the
 //! Source contract; Source and every subsequent checked IR contain only the
 //! ordinary `for` form.
 //! Termination is the caller's responsibility: copying positive-atom columns
@@ -210,17 +256,28 @@
 //!
 //! # Oracle and performance commands
 //!
-//! Run from this feature workspace, one command at a time:
+//! Run from the repository root, one command at a time. Select the sequential
+//! Datalog consumer group explicitly rather than the entire shared workspace:
 //!
-//! ```text
-//! cargo test --workspace --locked
+//! ```sh
+//! packages="-p cq-datalog -p cq-datalog-configuration -p cq-datalog-macros
+//! -p cq-datalog-support -p cq-datalog-surface-if-let -p cq-datalog-stratify
+//! -p cq-datalog-incremental -p cq-datalog-storage -p cq-datalog-hasher
+//! -p cq-datalog-schedule -p cq-datalog-fork -p cq-datalog-print-rounds
+//! -p cq-datalog-print -p cq-datalog-testkit -p cq-datalog-test-passes
+//! -p cq-lang-datalog-source -p cq-lang-datalog-strata -p cq-lang-datalog-incremental
+//! -p cq-lang-datalog-storage -p cq-lang-datalog-round -p datalog-oracle
+//! -p oracle-shared -p oracle-ascent -p oracle-mini -p oracle-mini-keyed
+//! -p datalog-doop -p doop-shared -p doop-ascent -p doop-mini -p doop-mini-keyed
+//! -p datalog-ddisasm"
+//! cargo test $packages --locked
 //! cargo run --release --locked -p datalog-oracle -- golden
 //! cargo run --release --locked -p datalog-oracle -- golden --write
 //! cargo run --release --locked -p datalog-oracle --features counters -- counters
 //! cargo run --release --locked -p datalog-oracle -- bench
-//! cargo test --workspace --all-features --locked
+//! cargo test $packages --all-features --locked
 //! cargo test --locked -p cq-datalog --features counters --test counters -- --nocapture
-//! cargo run --release --locked --features counters --example layout_mismatch
+//! cargo run --release --locked -p cq-datalog --features counters --example layout_mismatch
 //! ```
 //!
 //! CSV goldens are generated by sequential Ascent, not by this compiler.
@@ -232,8 +289,8 @@
 //! bundled DuckDB even though the Datalog oracle itself uses sequential Ascent.
 //!
 //! Counters are opt-in; `bench` rejects counters-enabled builds. Counters describe
-//! the ordinary CQ runtime: Datalog-owned fast-hashed full-layout insertions,
-//! delta-run batch builds, and canonical-set writes are not counted as core
+//! the ordinary CQ runtime: Datalog-owned fast-hashed full-layout insertions
+//! (canonical layouts included) and delta-run batch builds are not counted as core
 //! index builds. Compatible borrowed keys probe both grouped host kinds
 //! natively; counter regressions require zero per-hole fallback builds.
 //! `layout_mismatch` measures native host probing versus a fallback for the
@@ -244,7 +301,7 @@
 //! with a timing run.
 //! Rule holes retain their projected heads; widening them is unnecessary.
 //! Checked `consumer canonical` facts assign the returned set boundary to
-//! admission, eliminating the per-hole `__cq_seen` set and unnecessary
+//! admission, eliminating unnecessary per-hole result canonicalization and
 //! `return canon`. Discharged host facts also let CQ infer uniqueness from
 //! canonical inputs. Internal canonicalization needed by intermediate operators
 //! remains; this is not an instruction to erase every deduplication operation.
@@ -273,6 +330,8 @@
 
 pub use cq_datalog_configuration::DatalogConfiguration;
 pub use cq_datalog_macros::datalog;
+#[cfg(feature = "planner-calibration")]
+pub use cq_cost::calibration;
 pub use cq_lang_datalog_incremental as incremental;
 pub use cq_lang_datalog_round as round;
 pub use cq_lang_datalog_source as source;
@@ -319,7 +378,7 @@ pub mod __codegen {
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {
     pub use cq_datalog_macros::{
-        fork, incremental, print_rounds, storage, stratify, surface_if_let,
+        fork, incremental, print_rounds, smallest_before, storage, stratify, surface_if_let,
     };
     pub use own_push::push_into as print_push;
 }

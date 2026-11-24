@@ -20,7 +20,6 @@ pub fn binary(r: &[Edge], s: &[Edge], t: &[Edge]) -> Rows {
     collect(triangle! {
         r,s,t;
         plan = cq_planners::order(written, coarse);
-        structures = [cq_rewrites::retype(dedup => cq_storage::counters::DistinctSet<_>)];
     })
 }
 
@@ -29,7 +28,6 @@ pub fn generic(r: &[Edge], s: &[Edge], t: &[Edge]) -> Rows {
         r,s,t;
         plan = cq_planners::order(written, fine);
         physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
-        structures = [cq_rewrites::retype(dedup => cq_storage::counters::DistinctSet<_>)];
     })
 }
 

@@ -1,0 +1,15 @@
+==WARNING== Note: Running with uncontrolled GPU caches. Profiling results may be inconsistent.
+==WARNING== Note: Running with unmodified GPU clocks. If not controlled otherwise, profiling results may be inconsistent.
+==PROF== Connected to process 3568167 (/data/mini_linq/experiments/storage-bench/gpu/bench-profile)
+==PROF== Disconnected from process 3568167
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_read.sum","byte","46,496,768"
+"0","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_write.sum","byte","1,379,968"
+"1","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_read.sum","byte","24,848,128"
+"1","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_write.sum","byte","5,741,056"
+"2","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_read.sum","byte","22,170,752"
+"2","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_write.sum","byte","357,248"
+"3","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_read.sum","byte","22,146,560"
+"3","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_write.sum","byte","47,744"
+"4","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_read.sum","byte","26,104,960"
+"4","3568167","bench-profile","127.0.0.1","q6k(View, View, View, View, unsigned long, unsigned long long *)","1","7","(256, 1, 1)","(1024, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_write.sum","byte","138,368"

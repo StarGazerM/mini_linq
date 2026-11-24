@@ -2,137 +2,13 @@
 //! Expansions are coarse: exactly one full correlated row after each lookup.
 //! CK-Le checks this authored schedule before checked RA simplification may
 //! erase an expansion's unobservable columns under canonical answer semantics.
+//! Rust steps retain their source payloads and depend only on their free
+//! variables; neither source order nor earlier unrelated expansions constrain them.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{cq, vo};
 use cq::symbol_name;
-
-// Formal rule CK-Le: Check occurrence phases and column ownership independently of scheduling.
-pub(super) fn check(normal: &cq::Program, target: &vo::Program) -> syn::Result<()> {
-    if normal != &target.cq {
-        return Err(syn::Error::new_spanned(
-            target,
-            "LE must preserve normalized CQ",
-        ));
-    }
-    let analysis = vo::contract::check(target)?;
-    fn scope(
-        body: &cq::CommaList<cq::BodyItem>,
-        steps: &[vo::Step],
-        analysis: &vo::Analysis,
-        context: &BTreeSet<String>,
-    ) -> syn::Result<()> {
-        let mut written = context.clone();
-        let mut ownership = BTreeMap::new();
-        let outer = body.iter().position(|item| {
-            matches!(item, cq::BodyItem::Positive { .. } | cq::BodyItem::Block(_))
-        });
-        for (clause, item) in body.iter().enumerate() {
-            match item {
-                cq::BodyItem::Positive { atom } => {
-                    let columns: BTreeSet<_> = atom.variables().map(symbol_name).collect();
-                    ownership.insert(
-                        clause,
-                        columns
-                            .difference(&written)
-                            .cloned()
-                            .collect::<BTreeSet<_>>(),
-                    );
-                    written.extend(columns);
-                }
-                cq::BodyItem::Let(_) | cq::BodyItem::For(_) => written.extend(
-                    item.rust_step()
-                        .expect("Rust binding")
-                        .bindings
-                        .iter()
-                        .map(symbol_name),
-                ),
-                cq::BodyItem::Block(block) => {
-                    written.extend(block.analyze(&written).interface.into_keys())
-                }
-                _ => (),
-            }
-        }
-        let first = steps.iter().find_map(|step| match step {
-            vo::Step::Atom(a, _) => Some(a.clause()),
-            vo::Step::Block(b, _) => Some(b.source.clause()),
-            _ => None,
-        });
-        if first != outer {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "LE must retain the written outer stream",
-            ));
-        }
-        let mut phases: BTreeMap<usize, usize> = BTreeMap::new();
-        for (index, step) in steps.iter().enumerate() {
-            match step {
-                vo::Step::Atom(atom, _) => {
-                    let phase = phases.entry(atom.clause()).or_default();
-                    let stream = Some(atom.clause()) == outer;
-                    let full = stream || *phase == 1;
-                    if *phase >= if stream { 1 } else { 2 }
-                        || (full && atom.variables().count() != atom.columns.len())
-                        || (!full && !analysis.introduces[index].is_empty())
-                        || (full
-                            && analysis.introduces[index]
-                                .iter()
-                                .cloned()
-                                .collect::<BTreeSet<_>>()
-                                != ownership[&atom.clause()])
-                    {
-                        return Err(syn::Error::new_spanned(
-                            atom,
-                            "LE requires a non-introducing lookup followed by one coarse expansion with written column ownership",
-                        ));
-                    }
-                    *phase += 1;
-                }
-                vo::Step::Block(block, _) => {
-                    let cq::BodyItem::Block(source) = &body[block.source.clause()] else {
-                        unreachable!("checked VO block")
-                    };
-                    let bound = analysis.bound_before[index].iter().cloned().collect();
-                    let facts = source.analyze(&bound);
-                    let context = if facts.rust {
-                        bound
-                    } else {
-                        facts.free.into_keys().collect()
-                    };
-                    for (branch, (source, facts)) in block.branches.iter().zip(
-                        source
-                            .branches
-                            .iter()
-                            .zip(&analysis.branches[&block.source.clause()]),
-                    ) {
-                        scope(&source.body, &branch.steps, facts, &context)?;
-                    }
-                }
-                _ => (),
-            }
-        }
-        for (&clause, atom) in &analysis.atoms {
-            if body[clause].atom().is_none() {
-                continue;
-            }
-            if phases.get(&clause).copied() != Some(if Some(clause) == outer { 1 } else { 2 }) {
-                return Err(syn::Error::new_spanned(
-                    atom,
-                    "LE occurrence is missing its lookup or expansion",
-                ));
-            }
-        }
-        // WF-VO independently establishes all first-use and Rust Before obligations,
-        // full correlated rows, block interfaces, and fallback ancestry.
-        Ok(())
-    }
-    scope(
-        &normal.query.body,
-        &target.valuation.steps,
-        &analysis,
-        &BTreeSet::new(),
-    )
-}
+use cq_order::le::check;
 
 struct Atom {
     full: vo::Subatom,
@@ -162,17 +38,23 @@ impl Scope {
             if atom.lookup || (!atom.key.is_empty() && atom.key.is_disjoint(&self.bound)) {
                 continue;
             }
-            let mut partial = atom.full.clone();
-            partial.columns = partial
-                .columns
-                .iter()
-                .map(|column| match column {
+            let partial = vo::Subatom {
+                relation: atom.full.relation.clone(),
+                at: Default::default(),
+                clause: atom.full.clause.clone(),
+                paren: Default::default(),
+                columns: atom.full.columns.iter().map(|column| match column {
                     vo::Column::Variable(v) if self.bound.contains(&symbol_name(v)) => {
-                        column.clone()
+                        vo::Column::Variable(v.clone())
                     }
                     _ => vo::Column::Dropped(Default::default()),
-                })
-                .collect();
+                }).collect(),
+            };
+            // An empty preliminary probe cannot constrain a later introduction:
+            // that occurrence's expansion already establishes nonemptiness.
+            if partial.variables().next().is_none() && !atom.provides.is_empty() {
+                continue;
+            }
             self.steps.push(vo::Step::Atom(partial, Default::default()));
             atom.lookup = true;
         }
@@ -184,11 +66,31 @@ impl Scope {
         }
         let key = self.atoms[&clause].key.clone();
         self.demand(&key);
+        // Demand may skip an unrelated connected ear (for example a guard
+        // demanding a disconnected aggregate). I3 still requires finishing
+        // ready connected growth before starting that disconnected component.
+        if !self.atoms[&clause].provides.is_subset(&self.bound)
+            && self.atoms[&clause].key.is_disjoint(&self.bound)
+            && self.atoms[&clause].provides.is_disjoint(&self.bound)
+        {
+            while let Some(connected) = self.atoms.iter().find_map(|(&pending, atom)| {
+                (!atom.expanded
+                    && atom.key.is_subset(&self.bound)
+                    && !atom.provides.is_subset(&self.bound)
+                    && (!atom.key.is_disjoint(&self.bound)
+                        || !atom.provides.is_disjoint(&self.bound)))
+                .then_some(pending)
+            }) {
+                self.expand(connected);
+            }
+        }
         self.lookups();
         let atom = self.atoms.get_mut(&clause).expect("pending atom");
         self.steps
             .push(vo::Step::Atom(atom.full.clone(), Default::default()));
         atom.expanded = true;
+        // The full expansion also discharges an omitted empty lookup.
+        atom.lookup = true;
         self.bound.extend(atom.provides.iter().cloned());
         self.lookups();
     }
@@ -207,9 +109,9 @@ impl Scope {
     }
 }
 
-// Formal rule Plan-Le: Emit ready ear lookups and postpone coarse expansions to demand or Before boundaries.
-pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
-    let analysis = vo::contract::check(source)?;
+// Formal rule Plan-Le: Emit ready ear lookups and postpone coarse expansions to demand, without bypassing ready connected expansions.
+pub(super) fn compile(cq: &cq::Program, source: &vo::Program) -> syn::Result<vo::Program> {
+    let analysis = vo::order::analyze(cq, source)?;
     fn scope(
         body: &cq::CommaList<cq::BodyItem>,
         steps: &[vo::Step],
@@ -223,11 +125,10 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
             .cloned()
             .collect();
         let graph = cq::hypergraph::Analysis::of_body(body, &context);
-        let outer = steps.iter().find_map(|step| match step {
-            vo::Step::Atom(a, _) => Some(a.clause()),
-            vo::Step::Block(b, _) => Some(b.source.clause()),
-            _ => None,
-        });
+        // A drained zero-column guard may precede the stream, but does not
+        // replace the written outer occurrence or own an expansion phase.
+        let outer = body.iter().position(|item|
+            matches!(item, cq::BodyItem::Positive { .. } | cq::BodyItem::Block(_)));
         let mut state = Scope {
             atoms: BTreeMap::new(),
             ears: Vec::new(),
@@ -241,10 +142,20 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                     continue;
                 }
                 let bound: BTreeSet<_> = analysis.bound_before[index].iter().cloned().collect();
+                let cq::BodyItem::Positive { atom: occurrence } = &body[atom.clause()] else {
+                    unreachable!("VO atom names a positive occurrence")
+                };
                 state.atoms.insert(
                     atom.clause(),
                     Atom {
-                        full: atom.clone(),
+                        full: vo::Subatom {
+                            relation: occurrence.relation.clone(),
+                            at: Default::default(),
+                            clause: atom.clause.clone(),
+                            paren: Default::default(),
+                            columns: occurrence.variables().cloned()
+                                .map(vo::Column::Variable).collect(),
+                        },
                         key: atom
                             .variables()
                             .map(|(_, v)| symbol_name(v))
@@ -257,6 +168,7 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                 );
             }
         }
+        // Formal rule O-LeEarOrder: Visit GYO absorption children first, then remaining inner occurrences in written order.
         // GYO ears first, followed by the Masks tree's cyclic-core clauses.
         for step in &graph.gyo_steps {
             if let cq::hypergraph::GyoStep::Absorb { child, .. } = step {
@@ -275,7 +187,8 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                 state.ears.push(clause);
             }
         }
-        let mut rust_clause = 0;
+        let mut placed_rust = BTreeSet::new();
+        // Formal rule O-LeDemand: Walk the unrestricted written chain; expand written owners of demanded columns recursively before each step.
         for (index, step) in steps.iter().enumerate() {
             let mut step = step.clone();
             match &mut step {
@@ -303,21 +216,20 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                     let (clause, rust) = body
                         .iter()
                         .enumerate()
-                        .skip(rust_clause)
-                        .find_map(|(c, item)| item.rust_step().map(|r| (c, r)))
-                        .expect("checked Rust chain");
-                    rust_clause = clause + 1;
+                        .find_map(|(clause, item)| {
+                            let identical = match (&step, item) {
+                                (vo::Step::Guard(a, _), cq::BodyItem::Filter(b)) => a == b,
+                                (vo::Step::Let(a, _), cq::BodyItem::Let(b)) => a == b,
+                                (vo::Step::For(a, _), cq::BodyItem::For(b)) => a == b,
+                                _ => false,
+                            };
+                            (identical && !placed_rust.contains(&clause))
+                                .then(|| (clause, item.rust_step().expect("Rust step")))
+                        })
+                        .expect("checked Rust expression");
+                    placed_rust.insert(clause);
                     let environment = analysis.bound_before[index].iter().cloned().collect();
                     state.demand(&rust.free_variables.dependencies(&environment));
-                    let before: Vec<_> = state
-                        .atoms
-                        .keys()
-                        .copied()
-                        .filter(|c| *c < clause)
-                        .collect();
-                    for clause in before {
-                        state.expand(clause);
-                    }
                     state.bound.extend(rust.bindings.iter().map(symbol_name));
                 }
                 vo::Step::Block(block, _) => {
@@ -342,10 +254,12 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                     state.started = true;
                 }
                 vo::Step::Reduce(..) => unreachable!("LE precedes reduction"),
+                vo::Step::Restrict(..) => unreachable!("LE precedes O-Restrict"),
             }
             state.steps.push(step);
             state.lookups();
         }
+        // Formal rule O-LeExit: Expand remaining occurrences in written order at scope exit.
         let remaining: Vec<_> = state.atoms.keys().copied().collect();
         for clause in remaining {
             state.expand(clause);
@@ -353,7 +267,116 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
         state.steps
     }
     let mut target = source.clone();
-    target.valuation.steps = scope(&source.cq.query.body, &source.valuation.steps, &analysis);
-    check(&source.cq, &target)?;
+    target.valuation.steps = scope(&cq.query.body, &source.valuation.steps, &analysis);
+    // Drain retained checks; empty preliminary probes of later introducers
+    // are omitted by the phase producer, not interpreted as root streams.
+    cq_order::drain_ready_checks(cq, &mut target)?;
+    check(cq, &target)?;
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(tokens: proc_macro2::TokenStream) -> (cq::Program, vo::Program) {
+        syn::parse::Parser::parse2(|input: syn::parse::ParseStream| {
+            let cq = input.parse()?;
+            let vo = vo::Program::parse(input, &cq)?;
+            Ok((cq, vo))
+        }, tokens).unwrap()
+    }
+
+    #[test]
+    fn disconnected_guard_demand_finishes_ready_connected_expansions_first() {
+        let (cq, source) = fixture(quote::quote! {
+            struct MaximumRevenue;
+            relation Revenue(supplier:i32,revenue:i32);
+            relation Supplier(supplier:i32,phone:i32);
+            relation Phone(phone:i32,label:i32);
+            relation Maximum(maximum:i32);
+            relation answer(supplier:i32,label:i32,revenue:i32);
+            answer(supplier,label,revenue) :-
+                Revenue(supplier,revenue), Supplier(supplier,phone),
+                Phone(phone,label), Maximum(maximum), if revenue == maximum;
+            valuation {
+                Revenue@0(supplier,revenue);
+                Supplier@1(supplier,phone);
+                Phone@2(phone,label);
+                Maximum@3(maximum);
+                if revenue == maximum;
+            }
+        });
+        vo::contract::check(&cq, &source).unwrap();
+        let target = compile(&cq, &source).unwrap();
+        let analysis = vo::contract::check(&cq, &target).unwrap();
+        let introducing: Vec<_> = target.valuation.steps.iter()
+            .zip(&analysis.introduces)
+            .filter_map(|(step, introduced)| match step {
+                vo::Step::Atom(atom, _) if !introduced.is_empty() => Some(atom.clause()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(introducing, [0, 1, 2, 3]);
+        assert!(target.valuation.steps.iter().all(|step|
+            !matches!(step, vo::Step::Atom(atom, _) if atom.variables().next().is_none())));
+        check(&cq, &target).unwrap();
+    }
+
+    #[test]
+    fn ready_membership_expansion_precedes_an_introducing_let() {
+        let (cq, source) = fixture(quote::quote! {
+            struct Q;
+            relation R(x:i32); relation S(x:i32);
+            relation answer(x:i32,y:i32);
+            answer(x,y) :- R(x), let y:i32 = value(x), S(x);
+            valuation { R@0(x); let y:i32 = value(x); S@2(x); }
+        });
+        let target = compile(&cq, &source).unwrap();
+        assert!(matches!(&target.valuation.steps[0], vo::Step::Atom(a, _) if a.clause() == 0));
+        assert!(matches!(&target.valuation.steps[1], vo::Step::Atom(a, _) if a.clause() == 2));
+        assert!(matches!(&target.valuation.steps[2], vo::Step::Atom(a, _) if a.clause() == 2));
+        assert!(matches!(&target.valuation.steps[3], vo::Step::Let(..)));
+        check(&cq, &target).unwrap();
+    }
+
+    #[test]
+    fn reordered_rust_payloads_keep_dependencies_and_duplicate_occurrences() {
+        let (cq, source) = fixture(quote::quote! {
+            struct Q;
+            relation R(x:i32); relation S(y:i32);
+            relation answer(x:i32,y:i32,z:i32,w:i32);
+            answer(x,y,z,w) :- R(x), S(y), if keep(y),
+                let z:i32 = *y + 1, for w in values(z), if keep(x), if keep(x);
+            valuation {
+                R@0(x);
+                if keep(x);
+                if keep(x);
+                S@1(y);
+                let z:i32 = *y + 1;
+                for w in values(z);
+                if keep(y);
+            }
+        });
+        let target = compile(&cq, &source).unwrap();
+        check(&cq, &target).unwrap();
+        let analysis = vo::contract::check(&cq, &target).unwrap();
+        let guards: Vec<_> = target
+            .valuation
+            .steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| matches!(step, vo::Step::Guard(..)).then_some(index))
+            .collect();
+        assert_eq!(guards.len(), 3);
+        for &index in &guards[..2] {
+            assert!(analysis.bound_before[index].iter().any(|name| name == "x"));
+            assert!(!analysis.bound_before[index].iter().any(|name| name == "y"));
+        }
+        assert!(
+            analysis.bound_before[guards[2]]
+                .iter()
+                .any(|name| name == "y")
+        );
+    }
 }

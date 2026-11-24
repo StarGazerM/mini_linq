@@ -16,7 +16,7 @@ pub fn check(scenario: Scenario) {
         struct CorrelatedParameter;
         relation A(x: i32, payload: i32);
         relation answer(x: i32);
-        answer(*x) :- A(x, payload), if *x > limit;
+        answer(*x) :- A(x, payload), where x > limit;
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

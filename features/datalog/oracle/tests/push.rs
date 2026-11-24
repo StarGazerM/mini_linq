@@ -6,7 +6,7 @@ oracle_shared::oracle_programs!(
     mini,
     ascent::ascent,
     oracle_shared::oracle_input,
-    pipeline { cq = pipeline { print = ::cq_datalog::passes::print_push; }; }
+    pipeline { cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; }; }
 );
 
 macro_rules! cases {

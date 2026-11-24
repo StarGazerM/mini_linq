@@ -14,16 +14,25 @@ mini/mini-par now use Fx; mini-keyed/mini-par-keyed use keyed aHash.
 The checked-in hasher CSV/JSON files retain historical dadaed6 measurements:
 there mini/mini-par meant aHash and mini-fx/mini-par-fx meant opt-in Fx.
 This script produces new evidence and does not relabel those historical files.
+Timing samples validate all logical counts and actual semantic tuples against
+one persistent Ascent reference per dataset: full first, then 1000 seeded rows.
 """
 import argparse
 import csv
 from datetime import datetime, timezone
+import json
+import hashlib
 import os
 from pathlib import Path
 import platform
 import re
 import statistics
 import subprocess
+import sys
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+from bench_check import Checker
 
 APPS = ("cassandra", "avrora", "lusearch", "xalan", "tomcat", "zxing")
 
@@ -47,14 +56,30 @@ def main():
         "repetitions=3\norder=AB,BA,AB\nthreads=1,15\n"
         "engines=mini:fx,mini-keyed:keyed cq_storage providers,mini-par:fx,mini-par-keyed:keyed cq_storage providers\n"
         "affinity=OS scheduled; no pinning\nfeatures=no counters or phase/hole timing\n")
-    environment = dict(os.environ, RAYON_NUM_THREADS="15")
+    with Checker() as checker:
+        sweep(binary, cache, output, checker)
 
-    def invoke(app, label, engine=None):
+
+def sweep(binary, cache, output, checker):
+    digest = hashlib.sha256()
+    with binary.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    identity = digest.hexdigest()
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("BENCH_CHECK_")}
+    environment["RAYON_NUM_THREADS"] = "15"
+
+    def invoke(app, label, engine=None, plan=None):
         command = [str(binary), str(cache / app), "--threads", "15"]
         command += ["--engine", engine] if engine else ["--check"]
+        run_environment = environment.copy()
+        if plan is not None:
+            run_environment.update(checker.env(plan))
+            run_environment["BENCH_CHECK_WITNESS"] = str(output / f"{label}.witness.json")
         with (output / f"{label}.stdout").open("w") as stdout, \
                 (output / f"{label}.stderr").open("w") as stderr:
-            subprocess.run(command, env=environment, stdout=stdout, stderr=stderr, check=True)
+            subprocess.run(command, env=run_environment, stdout=stdout, stderr=stderr, check=True)
         text = (output / f"{label}.stdout").read_text()
         if engine is None:
             for name, threads in (("mini", 1), ("mini-keyed", 1),
@@ -73,6 +98,14 @@ def main():
         invoke(app, f"check-{app}")
         print(f"exactness {app}: Fx and keyed, sequential and 15 workers, all 26 relations", flush=True)
     measurements = {}
+    references = {}
+    for app in APPS:
+        reference = f"raw-doop:26:{cache / app}"
+        label = f"reference-{app}"
+        invoke(app, label, "ascent",
+               plan={"mode": "full", "seed": 20261103, "sample_size": 1000, "sample": 0})
+        checker.register_witness(reference, output / f"{label}.witness.json")
+        references[app] = reference
     with (output / "samples.csv").open("w", newline="") as samples:
         writer = csv.writer(samples)
         writer.writerow(("app", "engine", "threads", "repetition", "compute_seconds", "rss_bytes"))
@@ -81,7 +114,23 @@ def main():
                 pair = (base + "-keyed", base)
                 for repetition in range(3):
                     for engine in pair if repetition % 2 == 0 else reversed(pair):
-                        seconds, rss = invoke(app, f"{app}-{engine}-r{repetition}", engine)
+                        label = f"{app}-{engine}-r{repetition}"
+                        key = f"{identity}:{app}:{engine}:threads={threads}"
+                        plan = checker.plan(key, references[app], repetition)
+                        seconds, rss = invoke(app, label, engine, plan)
+                        start = time.monotonic()
+                        evidence = checker.check(key, references[app], repetition,
+                                                 output / f"{label}.witness.json")
+                        checker_seconds = time.monotonic() - start
+                        producer = re.search(r"bench_check_witness_seconds=([0-9.]+)",
+                                             (output / f"{label}.stdout").read_text())
+                        if producer is None:
+                            raise RuntimeError(f"missing witness timing: {label}")
+                        producer_seconds = float(producer[1])
+                        (output / f"{label}.validation.json").write_text(json.dumps({
+                            "evidence": evidence, "plan": plan,
+                            "producer_seconds": producer_seconds, "checker_seconds": checker_seconds,
+                            "validation_seconds": producer_seconds + checker_seconds}, indent=2) + "\n")
                         measurements.setdefault((app, engine, threads), []).append(seconds)
                         writer.writerow((app, engine, threads, repetition, seconds, rss))
                         samples.flush()

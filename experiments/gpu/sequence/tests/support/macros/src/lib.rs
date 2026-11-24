@@ -1,12 +1,19 @@
 use proc_macro::TokenStream;
 use quote::ToTokens;
 
+include!("../../stack.rs");
+
 /// Expand an authored checked Sequence fixture without planning decisions.
+/// Authored fixtures skip the `stage` pass, so bind target Structures here.
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
-    let program = syn::parse_macro_input!(input as cq_lang_sequence::Program);
-    let result = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
-        .and_then(|analysis| cq_gpu_sequence::translate(&program, &analysis));
+    let Stack { physical, structures, program } = syn::parse_macro_input!(input as Stack);
+    let result = cq_gpu_sequence_core::bind_structures(&physical, &structures)
+        .and_then(|structures| {
+            let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program)?;
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine())?;
+            cq_gpu_sequence::translate(&physical, &structures, &program, &analysis)
+        });
     match result {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
@@ -21,7 +28,7 @@ mod h05_program;
 #[path = "../../h05_plans.rs"]
 mod h05_plans;
 
-fn fixture(name: syn::Ident) -> syn::Result<cq_lang_sequence::Program> {
+fn fixture(name: syn::Ident) -> syn::Result<Stack> {
     match name.to_string().as_str() {
         "A" => Ok(h05_plans::a()),
         "B" => Ok(h05_plans::b()),
@@ -38,12 +45,13 @@ fn fixture(name: syn::Ident) -> syn::Result<cq_lang_sequence::Program> {
 pub fn planned_h05(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
     let result = (|| {
-        let authored = fixture(name)?;
-        let source = cq_sequence_lowering::compile(&authored.structures)?;
+        let Stack { physical, structures, program: _ } = fixture(name)?;
+        let source = cq_sequence_lowering::compile(&physical, &structures)?;
+        let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source)?;
         let machine = cq_gpu_sequence::machine();
-        let planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
-        let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
-        cq_gpu_sequence::translate(&planned.program, &analysis)
+        let planned = cq_sequence_plan::decompose(&physical, &structures, &source, &machine, &cq_gpu_sequence::catalog())?;
+        let analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
+        cq_gpu_sequence::translate(&planned.physical, &planned.structures, &planned.program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -57,11 +65,12 @@ pub fn h05_physical_reference(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
     let result = (|| {
         let authored = fixture(name)?;
-        let structures = cq_structure_selection::compile(&authored.structures.physical)?;
-        let program = cq_sequence_lowering::compile(&structures)?;
+        let physical = authored.physical;
+        let structures = cq_structure_selection::compile(&physical)?;
+        let program = cq_sequence_lowering::compile(&physical, &structures)?;
         let machine = cq_sequence_pull::machine();
-        let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
-        cq_sequence_pull::translate(&program, &analysis)
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &machine)?;
+        cq_sequence_pull::translate(&physical, &structures, &program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -75,9 +84,10 @@ pub fn h05_physical_reference(input: TokenStream) -> TokenStream {
 pub fn h05(input: TokenStream) -> TokenStream {
     let capacity = syn::parse_macro_input!(input as syn::LitInt);
     let result = (|| {
-        let program = h05_program::program_with_capacity(capacity.base10_parse()?);
-        let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
-        cq_gpu_sequence::translate(&program, &analysis)
+        let Stack { physical, structures, program } = h05_program::program_with_capacity(capacity.base10_parse()?);
+        let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program)?;
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine())?;
+        cq_gpu_sequence::translate(&physical, &structures, &program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -93,11 +103,12 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
     let capacity = syn::parse_macro_input!(input as syn::LitInt);
     let result = (|| {
         let gpu = h05_program::program_with_capacity(capacity.base10_parse()?);
-        let structures = cq_structure_selection::compile(&gpu.structures.physical)?;
-        let program = cq_sequence_lowering::compile(&structures)?;
+        let physical = gpu.physical;
+        let structures = cq_structure_selection::compile(&physical)?;
+        let program = cq_sequence_lowering::compile(&physical, &structures)?;
         let machine = cq_sequence_pull::machine();
-        let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
-        cq_sequence_pull::translate(&program, &analysis)
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &machine)?;
+        cq_sequence_pull::translate(&physical, &structures, &program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -108,39 +119,66 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
 #[path = "../../run_holes.rs"]
 mod run_holes;
 
+enum Terminal {
+    Arena,
+    Head { frontier: bool },
+}
+
 fn arena_hole(
     name: &syn::Ident,
     output: cq_lang_sequence::OutputProtocol,
+    request: Terminal,
 ) -> syn::Result<syn::Expr> {
-    let mut structures = run_holes::fixture(&name.to_string());
-    let normalized = cq_gpu_sequence_core::constants::compile(&structures.physical)?;
-    if normalized != structures.physical {
-        let before = cq_lang_structures::physical::contract::check(&structures.physical)?;
-        let inputs: std::collections::BTreeMap<_, _> = structures.structures.entries.iter()
+    let run_holes::StructuresStack { mut physical, mut structures } = run_holes::fixture(&name.to_string());
+    let normalized = cq_gpu_sequence_core::constants::compile(&physical)?;
+    if normalized != physical {
+        let before = cq_lang_structures::physical::contract::check(&physical)?;
+        let inputs: std::collections::BTreeMap<_, _> = structures
+            .structures
+            .entries
+            .iter()
             .filter_map(|entry| match &entry.structure {
-                cq_lang_structures::Structure::Host { reader, keyed, .. } if reader == "scan" =>
-                    Some((before.hosts[&entry.name.to_string()].clone(), keyed.ty.clone())),
+                cq_lang_structures::Structure::Host { reader, keyed, .. }
+                    if matches!(reader, cq_lang_structures::ReaderRef::Scan) =>
+                {
+                    Some((
+                        before.hosts[&entry.name.to_string()].clone(),
+                        keyed.provider.clone(),
+                    ))
+                }
                 _ => None,
-            }).collect();
+            })
+            .collect();
         structures = cq_structure_selection::compile(&normalized)?;
-        let after = cq_lang_structures::contract::check(&structures)?;
+        let after = cq_lang_structures::contract::check(&normalized, &structures)?;
         for entry in &mut structures.structures.entries {
-            if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure {
-                if reader == "scan" {
-                    if let Some(ty) = inputs.get(&after.physical.hosts[&entry.name.to_string()]) {
-                        keyed.ty = ty.clone();
+            if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure
+            {
+                if matches!(reader, cq_lang_structures::ReaderRef::Scan) {
+                    if let Some(provider) =
+                        inputs.get(&after.physical.hosts[&entry.name.to_string()])
+                    {
+                        keyed.provider = provider.clone();
                     }
                 }
             }
         }
+        structures
+            .structures
+            .declare(&cq_gpu_sequence_core::providers::declarations())?;
+        physical = normalized;
     }
-    let structures = cq_gpu_sequence_core::runs::bind(&structures)?;
-    let source = cq_sequence_lowering::compile(&structures)?;
+    let structures = cq_gpu_sequence_core::runs::bind(&physical, &structures)?;
+    let source = cq_sequence_lowering::compile(&physical, &structures)?;
+    let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source)?;
     let machine = cq_gpu_sequence::machine();
-    let mut planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
+    let mut planned = cq_sequence_plan::decompose(&physical, &structures, &source, &machine, &cq_gpu_sequence::catalog())?;
     let terminal = planned.program.sequence.definitions.last_mut().unwrap();
     let cq_lang_sequence::Term::Store { capacity, .. } = &mut terminal.term else {
-        return Err(syn::Error::new_spanned(name, "expected a planned terminal store"));
+        return Err(syn::Error::new_spanned(
+            name,
+            "expected a planned terminal store",
+        ));
     };
     if matches!(output, cq_lang_sequence::OutputProtocol::Reserve) {
         // Keep the fixed-reservation fixture deliberately under-sized so fanout
@@ -148,8 +186,23 @@ fn arena_hole(
         *capacity = Some(1);
     }
     planned.program.sequence.output = Some(output);
-    let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
+    if matches!(request, Terminal::Head { .. }) {
+        // Exercise the head request with the same root selection and shared
+        // expansion that a spread arena dispatch uses without the request.
+        planned.program.sequence.roots = cq_lang_sequence::Roots::Spread;
+    }
+    let mut analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
+    if let Terminal::Head { frontier } = request {
+        if frontier {
+            cq_lang_sequence::gpu::request_frontier(&planned.program, &mut analysis)?;
+        }
+        return cq_gpu_sequence_core::translate_arena_head(
+            &planned.physical, &planned.structures, &planned.program, analysis, &syn::parse_quote!(&mut arena),
+        );
+    }
     cq_gpu_sequence_core::translate_arena(
+        &planned.physical,
+        &planned.structures,
         &planned.program,
         &analysis,
         &syn::parse_quote!(&mut arena),
@@ -160,7 +213,7 @@ fn arena_hole(
 #[proc_macro]
 pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, Terminal::Arena) {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -170,11 +223,12 @@ pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn arena_hole_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve) {
-        Ok(expression) => syn::LitStr::new(
-            &expression.into_token_stream().to_string(),
-            name.span(),
-        ).into_token_stream().into(),
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, Terminal::Arena) {
+        Ok(expression) => {
+            syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
+                .into_token_stream()
+                .into()
+        }
         Err(error) => error.into_compile_error().into(),
     }
 }
@@ -183,7 +237,7 @@ pub fn arena_hole_source(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, Terminal::Arena) {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -193,11 +247,33 @@ pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn arena_hole_previous_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious) {
-        Ok(expression) => syn::LitStr::new(
-            &expression.into_token_stream().to_string(),
-            name.span(),
-        ).into_token_stream().into(),
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, Terminal::Arena) {
+        Ok(expression) => {
+            syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
+                .into_token_stream()
+                .into()
+        }
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Exercise the binding-requested terminal with the supplied output protocol.
+#[proc_macro]
+pub fn planned_head_hole(input: TokenStream) -> TokenStream {
+    use syn::parse::Parser;
+    let parse = |tokens: syn::parse::ParseStream<'_>| {
+        mod kw { syn::custom_keyword!(frontier); }
+        let frontier = tokens.peek(kw::frontier);
+        if frontier {
+            tokens.parse::<kw::frontier>()?;
+            tokens.parse::<syn::Token![;]>()?;
+        }
+        let output = tokens.parse::<cq_lang_sequence::OutputProtocol>()?;
+        let name = tokens.parse::<syn::Ident>()?;
+        arena_hole(&name, output, Terminal::Head { frontier })
+    };
+    match parse.parse(input) {
+        Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
 }

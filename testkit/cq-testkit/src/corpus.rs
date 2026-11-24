@@ -2,7 +2,7 @@
 //!
 //! Texts are byte-preserving copies, not outputs recomputed by a compiler.
 //! Parsed accessors only parse; callers can separately run language contracts.
-//! IX and Structures are suffix fragments paired with RA and Physical.
+//! VO, IX and Structures are fragments paired with explicit source programs.
 
 pub use crate::cases::{CASES, Case};
 
@@ -11,12 +11,13 @@ pub use crate::cases::{CASES, Case};
 pub struct Scenario {
     pub name: &'static str,
     pub cq: &'static str,
+    /// Valuation fragment parsed against an explicit CQ program.
     pub vo: &'static str,
     pub ra: &'static str,
     /// Index-demand suffix to append to `ra`.
     pub ix: &'static str,
     pub physical: &'static str,
-    /// Storage-choice suffix to append to `physical`.
+    /// Storage-choice suffix parsed against an explicit Physical program.
     pub structures: &'static str,
 }
 
@@ -25,8 +26,9 @@ impl Scenario {
         syn::parse_str(self.cq)
     }
 
-    pub fn parse_vo(&self) -> syn::Result<crate::vo::Program> {
-        syn::parse_str(self.vo)
+    pub fn parse_vo(&self, cq: &crate::cq::Program) -> syn::Result<crate::vo::Program> {
+        use syn::parse::Parser;
+        (|input: syn::parse::ParseStream<'_>| crate::vo::Program::parse(input, cq)).parse_str(self.vo)
     }
 
     pub fn parse_ra(&self) -> syn::Result<crate::ra::Program> {
@@ -41,8 +43,9 @@ impl Scenario {
         syn::parse_str(self.physical)
     }
 
-    pub fn parse_structures(&self) -> syn::Result<crate::structures::Program> {
-        syn::parse_str(&format!("{}\n{}", self.physical, self.structures))
+    pub fn parse_structures(&self, physical: &crate::physical::Program) -> syn::Result<crate::structures::Program> {
+        use syn::parse::Parser;
+        (|input: syn::parse::ParseStream<'_>| crate::structures::Program::parse(input, physical)).parse_str(self.structures)
     }
 
     /// Find authored data for this scenario, including alternative plans.
@@ -64,6 +67,16 @@ impl Scenario {
             .chain(crate::blocks::CASES)
             .find(|case| case.name == name)
     }
+}
+
+/// Parse a test capture of the distinct Physical and Structures stack entries.
+pub fn parse_structures_capture(text: &str) -> syn::Result<(crate::physical::Program, crate::structures::Program)> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let structures = crate::structures::Program::parse(input, &physical)?;
+        Ok((physical, structures))
+    }).parse_str(text)
 }
 
 macro_rules! scenario {

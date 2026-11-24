@@ -134,13 +134,23 @@ pub fn selection_constants(select: &syntax::algebra::Select) -> BTreeMap<String,
     constants
 }
 
+/// Constants whose reconstructed references can outlive the host evaluation
+/// scope. Closed Rust values remain in the stored payload: unlike literals,
+/// their backing storage may be a temporary created for this query.
+pub fn reconstructible_constants(select: &syntax::algebra::Select) -> BTreeMap<String, Term> {
+    selection_constants(select)
+        .into_iter()
+        .filter(|(_, value)| matches!(value, Term::Literal(_)))
+        .collect()
+}
+
 /// Formal rule STR-Existential: A projected full-key index can replace payload
 /// enumeration with membership when every observed column is a key or constant.
-pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
-    let required = required_columns(&program.physical, &analysis.physical);
+pub(super) fn check(physical: &crate::physical::Program, program: &Program, analysis: &Analysis) -> syn::Result<()> {
+    // Formal rule STR-E-Filtered: Check shared projections, permitted readers, proven constants and downstream coverage.
+    let required = required_columns(physical, &analysis.physical);
     for (name, filtered) in &analysis.filtered {
-        let definition = program
-            .physical
+        let definition = physical
             .program
             .definitions
             .iter()
@@ -164,7 +174,11 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .map(Vec::as_slice)
             .unwrap_or_default();
         if analysis.physical.modes[name] != ModeKind::Let
-            || (analysis.physical.scanned.contains(name) || analysis.retained.contains_key(name))
+            || (analysis.physical.scanned.contains(name)
+                // Only a canon result's rows record (its canonical index) may
+                // accompany filtered storage, and only while it is not held.
+                || analysis.retained.contains_key(name)
+                    && (analysis.rows_held(name) || !analysis.physical.canon.contains(name)))
                 && !multiple
             || built.len() != 1 && !multiple
             || built
@@ -195,8 +209,7 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .into_iter()
             .flatten()
         {
-            let reader = program
-                .physical
+            let reader = physical
                 .program
                 .definitions
                 .iter()
@@ -215,7 +228,9 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 );
             }
         }
-        let expected = select.map(|s| selection_constants(s)).unwrap_or_default();
+        let expected = select
+            .map(|select| reconstructible_constants(select))
+            .unwrap_or_default();
         let mut constants = BTreeMap::new();
         for binding in &filtered.constants {
             let column = symbol_name(&binding.column);
@@ -292,10 +307,10 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     Ok(())
 }
 
-pub(super) fn layouts(program: &Program, analysis: &Analysis) -> BTreeMap<String, Vec<String>> {
-    let required = required_columns(&program.physical, &analysis.physical);
+pub(super) fn layouts(physical: &crate::physical::Program, _program: &Program, analysis: &Analysis) -> BTreeMap<String, Vec<String>> {
+    let required = required_columns(physical, &analysis.physical);
     let mut layouts: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for definition in &program.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         let input_layout = |input: &Ident| layouts[&symbol_name(input)].clone();
         let mut columns = match &definition.operator {
@@ -363,25 +378,30 @@ mod tests {
 
     #[test]
     fn guard_output_drops_dead_columns_without_changing_its_input_domain() {
-        let source: Program = syn::parse_quote! {
+        let physical: physical::Program = syn::parse_quote! {
             physical {
-                relation R(a:i32, label:String);
-                r = pipe rename R@0 { a -> a, label -> label };
-                selected = let guard r if (label.contains("green"));
-                projected = pipe canon project selected keep {a};
+                relation R(a:i32, label:StringCode);
+                r = pipe rename R { a -> a, label -> label };
+                selected = let guard r if (accept(label));
+                projected = let canon project selected keep {a};
                 return projected as answer(a);
             }
-            structures {
-                r host scan = Reader [];
-                selected rows = Rows;
-                projected canon = Canon;
-            }
         };
-        let facts = crate::contract::check(&source).unwrap();
+        let source = syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream<'_>| Program::parse(input, &physical),
+            quote::quote! {
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                r host scan = @reader as Reader [];
+                selected rows = @rows as Rows;
+                projected rows = @sort as ::cq_storage::dedup::Sort; projected canon = rows;
+            }
+            },
+        ).unwrap();
+        let facts = crate::contract::check(&physical, &source).unwrap();
         assert_eq!(facts.layouts["r"], ["a", "label"]);
         assert_eq!(facts.layouts["selected"], ["a"]);
         assert_eq!(facts.physical.headings["selected"], ["a", "label"]);
-        let needed = required_columns(&source.physical, &facts.physical);
+        let needed = required_columns(&physical, &facts.physical);
         assert!(needed["r"].contains("label"));
         assert!(!needed["selected"].contains("label"));
     }
