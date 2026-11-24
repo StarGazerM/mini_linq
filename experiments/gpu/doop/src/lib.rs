@@ -28,7 +28,11 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
 /// The engine with its round printer: `print_rounds`, or with hand-written
 /// rule holes under the `manual-joins` feature.
 macro_rules! engine {
-    ($($print:tt)*) => {
+    () => { engine!(@emit [] []); };
+    ($kind:ident ($($label:literal => $path:path),+ $(,)?)) => {
+        engine!(@emit [, legacy($($label),+)] [($kind($($label => $path),+))]);
+    };
+    (@emit [$($legacy:tt)*] [$($hooks:tt)*]) => {
         doop_shared::doop_engine!(run, pipeline {
             incremental = ::cq_datalog::passes::incremental(
                 driver(delta_first);
@@ -50,8 +54,8 @@ macro_rules! engine {
                 physical = [::cq_gpu_sequence::capture_constants];
                 structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
                 sequence = ::mini_linq::passes::sequence;
-                // Each arena hole reuses only its last validated count as a capacity hint;
-                // root tiles are sized at launch to fill the device (GPU-RootSpread).
+                // Grouped heads reuse a phase hint; other holes keep their own growth slack.
+                // Root tiles are sized at launch to fill the device (GPU-RootSpread).
                 // With relational heads (c1b75718) spread measured 0.953x [0.923, 0.960]
                 // of no spread on Cassandra (P6b).
                 decompose = [
@@ -71,26 +75,26 @@ macro_rules! engine {
                 print = ::cq_gpu_sequence::translate_arena;
             };
             terminals = [::cq_gpu_sequence::translate_arena => batch];
-            round = [::cq_gpu_datalog::bind_round(binding = 5)];
-            print = $($print)*;
+            round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor $($legacy)*)];
+            print = ::cq_gpu_datalog::print_rounds $($hooks)*;
         });
     };
 }
 
 #[cfg(not(any(feature = "manual-joins", feature = "capture-joins")))]
-engine!(::cq_gpu_datalog::print_rounds);
+engine!();
 
 #[cfg(all(feature = "manual-joins", not(feature = "capture-joins")))]
-engine!(::cq_gpu_datalog::print_rounds(manual(
+engine!(manual(
     "VPT_Assign@0" => crate::manual_assign::assign_delta,
     "VPT_Assign@1" => crate::manual_assign::points_delta,
     "VPT_LoadArray@3" => crate::manual::vpt_load_array_delta_index
-)));
+));
 
 // The offline oracle always comes from a generated kernel, even if both
 // features are enabled.
 #[cfg(feature = "capture-joins")]
-engine!(::cq_gpu_datalog::print_rounds(observe(
+engine!(observe(
     "VPT_LoadArray@3" => crate::capture::observe,
     "VPT_SpecialCall@3" => crate::capture::observe,
     "VPT_LoadField@3" => crate::capture::observe,
@@ -107,4 +111,4 @@ engine!(::cq_gpu_datalog::print_rounds(observe(
     "VPT_AssignLocal@0" => crate::capture::observe,
     "VPT_LoadField@0" => crate::capture::observe,
     "VPT_SpecialCall@0" => crate::capture::observe,
-)));
+));

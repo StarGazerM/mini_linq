@@ -15,12 +15,12 @@ oracle_shared::oracle_programs!(
             structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
             sequence = ::mini_linq::passes::sequence;
             stage = ::cq_gpu_sequence::stage;
-            decompose = [::cq_gpu_sequence::decompose];
+            decompose = [::cq_gpu_sequence::decompose, ::cq_sequence_rewrites::output(reserve_previous)];
             grade = ::cq_gpu_sequence::machine_grade;
             print = ::cq_gpu_sequence::translate_arena;
         };
         terminals = [::cq_gpu_sequence::translate_arena => batch];
-        round = [::cq_gpu_datalog::bind_round(binding = 5)];
+        round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor)];
         print = ::cq_gpu_datalog::print_rounds;
     }
 );
@@ -104,6 +104,64 @@ fn resident_if_let_preserves_declared_scalar_metadata() {
     };
     assert_eq!(r.collect::<Vec<(i32, i32)>>(), edges);
     assert_eq!(s.collect::<Vec<(i32, i32)>>(), edges);
+}
+
+#[test]
+fn legacy_observer_runs_once_alongside_a_grouped_head() {
+    use gpu_datalog_runtime::{Result, capture::RowSource};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OBSERVATIONS: AtomicUsize = AtomicUsize::new(0);
+    fn observe(label: &str, _: usize, round: usize, reads: &[&str], sources: &[&dyn RowSource])
+        -> Result<impl FnOnce(usize) -> Result<()> + use<>>
+    {
+        assert_eq!(label, "Observed@seed");
+        assert_eq!(round, 0);
+        assert_eq!(reads.len(), sources.len());
+        assert_eq!(sources[0].len(), 1);
+        Ok(|candidates| {
+            assert_eq!(candidates, 1);
+            OBSERVATIONS.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+    }
+
+    let many: Vec<_> = (0..4096i32).map(|x| (x,)).collect();
+    let one = vec![(4096i32,)];
+    let (a, b) = cq_datalog::datalog! {
+        pipeline {
+            incremental = ::cq_datalog::passes::incremental(driver(delta_first););
+            storage_rewrites = [::cq_gpu_datalog::device_storage];
+            cq = pipeline {
+                physical = [::cq_gpu_sequence::capture_constants];
+                structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+                sequence = ::mini_linq::passes::sequence;
+                stage = ::cq_gpu_sequence::stage;
+                decompose = [::cq_gpu_sequence::decompose, ::cq_sequence_rewrites::output(reserve_previous)];
+                grade = ::cq_gpu_sequence::machine_grade;
+                print = ::cq_gpu_sequence::translate_arena;
+            };
+            terminals = [::cq_gpu_sequence::translate_arena => batch];
+            round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor, legacy("Observed@seed"))];
+            print = ::cq_gpu_datalog::print_rounds(observe("Observed@seed" => observe));
+        }
+        struct MixedHeads;
+        relation Many(x:i32) = (&many);
+        relation One(x:i32) = (&one);
+        relation A(x:i32);
+        relation B(x:i32);
+        output A, B;
+        A(*x) :- Many(x);
+        Observed: B(*x) :- One(x);
+        A(*x) :- B(x);
+        B(*x) :- A(x);
+    };
+    assert_eq!(OBSERVATIONS.load(Ordering::Relaxed), 1);
+    let expected: Vec<_> = (0..=4096i32).map(|x| (x,)).collect();
+    for mut rows in [a.collect::<Vec<_>>(), b.collect::<Vec<_>>()] {
+        rows.sort_unstable();
+        assert_eq!(rows, expected);
+    }
 }
 
 /// GPU-ExpansionShare: one seed reaches four hubs, each with 50,000

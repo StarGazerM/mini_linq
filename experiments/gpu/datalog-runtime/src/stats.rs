@@ -31,6 +31,27 @@ fn device_memory(pool: &crate::Pool) -> (usize, usize) {
     (free, total)
 }
 
+/// Whether a stratum boundary should hand cached memory back to the driver.
+///
+/// Trimming the pool to zero costs a driver round trip (tens of ms on large
+/// pools) and the next stratum regrows it allocation by allocation, so the
+/// boundary releases only when the pool reserves more than half the device.
+/// `GPU_DATALOG_STRATUM_RELEASE=always|never` overrides the policy.
+pub fn release_at_stratum_boundary(pool: &crate::Pool) -> bool {
+    static MODE: std::sync::LazyLock<Option<bool>> = std::sync::LazyLock::new(|| {
+        match std::env::var("GPU_DATALOG_STRATUM_RELEASE").as_deref() {
+            Ok("always") => Some(true),
+            Ok("never") => Some(false),
+            _ => None,
+        }
+    });
+    if let Some(forced) = *MODE {
+        return forced;
+    }
+    let (_, total) = device_memory(pool);
+    total == 0 || pool.memory_stats().reserved_bytes.saturating_mul(2) > total
+}
+
 /// Step-level memory diagnostics under `GPU_DATALOG_TRACE_MEMORY`: one line
 /// before each admission or publication operation allocates, with the pool
 /// counters and the driver's free bytes. The last line before a failure names

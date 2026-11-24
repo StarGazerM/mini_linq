@@ -467,7 +467,7 @@ pub struct HoleHooks {
 
 /// `rule@delta` of a rule version: its rule label (or head relation) and the
 /// delta occurrence it drives, `seed` for a seed version.
-fn version_label(program: &Program, variant: usize, head: usize) -> String {
+pub(crate) fn version_label(program: &Program, variant: usize, head: usize) -> String {
     let variant = &program.storage.incremental.variants[variant];
     let label = program.storage.incremental.strata.source.labels[variant.rule]
         .as_ref()
@@ -597,10 +597,17 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
                 }
             });
             let label = version_label(program, rule.variant, rule.head);
-            if let Some(path) = hooks.observe.get(&label) {
+            let observer = hooks.observe.get(&label);
+            let manual = hooks.manual.get(&label);
+            if (observer.is_some() || manual.is_some()) && crate::bindings::head_argument(&program.holes[rule.hole]) {
+                return Err(syn::Error::new_spanned(rule, format!(
+                    "hole hook `{label}` requires a legacy batch; include \"{label}\" in bind_round's legacy(...) exclusions"
+                )));
+            }
+            if let Some(path) = observer {
                 observed.insert(rule.hole, (path, label.clone(), scan.clone()));
             }
-            if let Some(path) = hooks.manual.get(&label) {
+            if let Some(path) = manual {
                 replaced.insert(rule.hole, (path, scan));
             }
             if let Some(scan) = &rule.scan {
@@ -660,11 +667,17 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             let invocation = hole.invocation_pipeline()?.start(cq.to_token_stream())?;
             let arena = &device.relations[owners[index]].arena;
             let declared = parameters.iter().map(|(parameter, _, ty)| quote!(#parameter: &#ty));
+            let batch = quote!(::gpu_datalog_runtime::CandidateBatch);
+            let result = if crate::bindings::head_argument(hole) {
+                quote!(::core::option::Option<#batch>)
+            } else {
+                batch
+            };
             hole_items.push(quote!(
                 fn #function(
                     __cq_gpu_arena: &mut #arena,
                     #scan_parameter #(#declared,)*
-                ) -> ::gpu_datalog_runtime::CandidateBatch {
+                ) -> #result {
                     #invocation
                 }
             ));
@@ -857,9 +870,9 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
         };
         let (stratum_runner, seed_runner, step_runner) = (runner(0), runner(1), runner(2));
-        let seed = phase(program, &full_states, index, round::schedule::SEED, &holes)?;
+        let (seed_groups, seed) = phase(program, &full_states, index, round::schedule::SEED, &holes)?;
         let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
-        let step = phase(program, &full_states, index, round::schedule::STEP, &holes)?;
+        let (step_groups, step) = phase(program, &full_states, index, round::schedule::STEP, &holes)?;
         let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
         let lengths = stratum
             .termination
@@ -901,13 +914,16 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             #stratum_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> {
                 #(#arenas)*
                 #(#keys)*
+                #seed_groups #step_groups
                 let mut __cq_gpu_round = 0usize;
                 #seed
                 #rounds
                 Ok(())
             })?;
-            ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
-            #trim
+            if ::gpu_datalog_runtime::release_at_stratum_boundary(&__cq_gpu_pool) {
+                ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
+                #trim
+            }
             #released
         }));
     }
@@ -985,13 +1001,71 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     }))
 }
 
+/// Validate all active heads against one stream snapshot. A capacity miss is
+/// replayable; arithmetic/kernel failure is not. No publication takes place
+/// between the first launch and the last successful attempt.
+fn head_attempts(
+    group: &Ident,
+    slots: &BTreeMap<usize, usize>,
+    phase: &str,
+    functions: &[TokenStream],
+    launches: &[TokenStream],
+    replays: &[TokenStream],
+) -> TokenStream {
+    let heads = slots.len();
+    let phase_index = usize::from(phase == round::schedule::STEP);
+    let begin = slots.iter().map(|(&head, &slot)| {
+        let arena = local("arena", head);
+        let packing = local("packing", head);
+        quote!(#arena.begin_head(&#group, #slot, #packing.clone(), #phase_index)?;)
+    });
+    let validate = slots.iter().map(|(&head, &slot)| {
+        let arena = local("arena", head);
+        let candidates = local("candidates", head);
+        quote! {
+            if __cq_gpu_active[#slot] {
+                if __cq_gpu_words[2 * #slot + 1] != 0 {
+                    return Err("Sequence device count or fold overflow".into());
+                }
+                let rows = __cq_gpu_words[2 * #slot] as usize;
+                if rows > #arena.head_capacity() {
+                    // Discard Some(batch) fallback results of this attempt too.
+                    #candidates.clear();
+                    #arena.retry_head(rows)?;
+                    if __cq_gpu_trace_rounds { __cq_gpu_head_replays += 1; }
+                    __cq_gpu_previous[#slot] = 0;
+                } else {
+                    // SAFETY: same-stream dispatches initialized the prefix,
+                    // and both total count and failure have been checked.
+                    let batch = unsafe { #arena.finish_head(rows)? };
+                    if !batch.is_empty() { #candidates.push(batch); }
+                    __cq_gpu_active[#slot] = false;
+                }
+            }
+        }
+    });
+    quote!({
+        #(#begin)*
+        let mut __cq_gpu_active = [true; #heads];
+        let mut __cq_gpu_previous = [0usize; #heads];
+        #(#functions)*
+        #(#launches)*
+        loop {
+            let __cq_gpu_words = #group.read()?;
+            #(#validate)*
+            if !__cq_gpu_active.contains(&true) { break; }
+            #(#replays)*
+        }
+    })
+}
+
 fn phase(
     program: &Program,
     full_states: &FullStates,
     index: usize,
     phase: &str,
     holes: &[TokenStream],
-) -> syn::Result<TokenStream> {
+) -> syn::Result<(TokenStream, TokenStream)> {
     let context = &program.context;
     let device = device(program);
     let stratum = &context.strata[index];
@@ -1009,27 +1083,17 @@ fn phase(
         );
         quote!(let mut #candidates: #ty = #init;)
     });
-    // Recorded earliest safe publication wave per member in this phase; a
-    // phase without waves admits and publishes every member after its holes.
-    let after = |relation: usize| {
-        schedule
-            .publication
-            .iter()
-            .find(|entry| entry.phase == phase && entry.relation == relation)
-            .map(|entry| entry.wave)
-    };
-    let mut published = std::collections::BTreeSet::new();
+    let mut groups = TokenStream::new();
     let mut steps = Vec::new();
-    for (global, wave) in schedule.waves.iter().enumerate() {
-        if wave.phase != phase {
-            continue;
-        }
-        // One device stream supplies both intra-wave order and inter-wave barriers.
+    for (point, epoch) in crate::bindings::epochs(stratum, schedule, phase).into_iter().enumerate() {
+        let mut slots = BTreeMap::new();
+        let mut functions = Vec::new();
         let mut launches = Vec::new();
-        for &rule_index in &wave.holes {
+        let mut replays = Vec::new();
+        for rule_index in epoch.rules {
             let rule = &rules[rule_index];
             let candidates = local("candidates", rule.head);
-            let deliver = quote!(#candidates.push(__cq_gpu_batch););
+            let head = crate::bindings::head_argument(&program.holes[rule.hole]);
             let arena = local("arena", rule.head);
             let invocation = &holes[rule.hole];
             let hole = rule.hole;
@@ -1088,7 +1152,37 @@ fn phase(
             };
             // `GPU_DATALOG_PROFILE` names a hole by its rule, changing occurrence and index.
             let profile_label = format!("{}#{hole}", version_label(program, rule.variant, rule.head));
-            launches.push(quote!({
+            let trace_batch = quote! {
+                if __cq_gpu_trace_memory {
+                    ::std::eprintln!("gpu_datalog_hole_result\tstratum={}\tphase={}\thole={}\trows={}\tcapacity={}\tbytes={}",
+                        #index, #phase, #hole, __cq_gpu_batch.len(), __cq_gpu_batch.reserved_capacity(), __cq_gpu_batch.allocated_bytes());
+                }
+            };
+            let deliver = if head {
+                let packing = local("packing", rule.head);
+                quote! {
+                    if let Some(__cq_gpu_batch) = __cq_gpu_batch {
+                        #trace_batch
+                        #candidates.push(__cq_gpu_batch);
+                    } else if __cq_gpu_trace_memory || ::gpu_datalog_runtime::trace_kernels() {
+                        let count = __cq_gpu_arena.trace_head_count()?;
+                        let rows = count.checked_sub(*__cq_gpu_last).ok_or("Sequence device cursor wrapped")?;
+                        *__cq_gpu_last = count;
+                        let capacity = __cq_gpu_arena.head_capacity();
+                        if __cq_gpu_trace_memory {
+                            ::std::eprintln!("gpu_datalog_hole_result\tstratum={}\tphase={}\thole={}\trows={}\tcapacity={}\tbytes={}",
+                                #index, #phase, #hole, rows, capacity, capacity * (#packing.word_bits() as usize / 8));
+                        }
+                        if ::gpu_datalog_runtime::trace_kernels() {
+                            ::std::eprintln!("gpu_datalog_head_dispatch\tstratum={}\tphase={}\tround={}\thole={}\thead={}\tcapacity={}\tcandidates={}",
+                                #index, #phase, __cq_gpu_round, #hole, #head_name, capacity, rows);
+                        }
+                    }
+                }
+            } else {
+                quote!(#trace_batch #candidates.push(__cq_gpu_batch);)
+            };
+            let launch = quote!({
                 if ::gpu_datalog_runtime::profiling() {
                     ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index, "holes", #profile_label);
                 }
@@ -1098,33 +1192,45 @@ fn phase(
                     ::std::eprintln!("gpu_datalog_hole\tstratum={}\tphase={}\thole={}\thead={}\tcurrent_bytes={}\treserved_bytes={}\tarena_bytes={}",
                         #index, #phase, #hole, #head_name, memory.current_bytes, memory.reserved_bytes, #arena.allocated_bytes());
                 }
-                // GPU-ReservePrevious: the capacity hint is this Round hole's own.
+                // Sequence-ineligible fallback still owns its per-hole hint.
                 let __cq_gpu_arena = #arena.hole(#hole);
                 #counter_scope
                 let __cq_gpu_batch = #invocation;
                 #counter_report
-                if __cq_gpu_trace_memory {
-                    ::std::eprintln!("gpu_datalog_hole_result\tstratum={}\tphase={}\thole={}\trows={}\tcapacity={}\tbytes={}",
-                        #index, #phase, #hole, __cq_gpu_batch.len(), __cq_gpu_batch.reserved_capacity(), __cq_gpu_batch.allocated_bytes());
-                }
                 #deliver
-            }));
-        }
-        steps.push(quote!({ #(#launches)* }));
-        for transaction in &stratum.publication {
-            if after(transaction.relation) == Some(global) {
-                published.insert(transaction.relation);
-                steps.push(admit_publish(program, full_states, index, transaction, phase)?);
+            });
+            if head {
+                let next = slots.len();
+                let slot = *slots.entry(rule.head).or_insert(next);
+                // Share one body (and one expansion of its kernels) across
+                // the original and retry call sites.
+                let function = local("launch", hole);
+                let arena_ty = &device.relations[rule.head].arena;
+                let batches_ty = &device.relations[rule.head].candidates;
+                functions.push(quote! {
+                    let #function = |#arena: &mut #arena_ty, #candidates: &mut #batches_ty, __cq_gpu_last: &mut usize| -> ::gpu_datalog_runtime::Result<()> {
+                        #launch
+                        Ok(())
+                    };
+                });
+                let call = quote!(#function(&mut #arena, &mut #candidates, &mut __cq_gpu_previous[#slot])?;);
+                replays.push(quote!(if __cq_gpu_active[#slot] { #call }));
+                launches.push(call);
+            } else {
+                launches.push(launch);
             }
         }
-    }
-    for transaction in &stratum.publication {
-        if !published.contains(&transaction.relation) {
-            ensure(
-                after(transaction.relation).is_none(),
-                schedule,
-                "publication placement names a wave outside its phase",
-            )?;
+        if slots.is_empty() {
+            steps.push(quote!({ #(#launches)* }));
+        } else {
+            let group = format_ident!("__cq_gpu_{}_group_{}", phase, point);
+            let heads = slots.len();
+            groups.extend(quote! {
+                let #group = ::gpu_datalog_runtime::HeadCursors::new(__cq_gpu_pool.clone(), #heads)?;
+            });
+            steps.push(head_attempts(&group, &slots, phase, &functions, &launches, &replays));
+        }
+        for transaction in epoch.publications {
             steps.push(admit_publish(program, full_states, index, transaction, phase)?);
         }
     }
@@ -1142,22 +1248,23 @@ fn phase(
         &stratum.members,
         &format!("stratum={index}/{phase}/after"),
     );
-    Ok(quote!(
+    Ok((groups, quote!(
         #before
         let __cq_gpu_readbacks_before = if __cq_gpu_trace_rounds {
             ::gpu_datalog_runtime::readback_count()
         } else { 0 };
+        let mut __cq_gpu_head_replays = 0usize;
         #(#batches)* #(#steps)*
         #after
         if __cq_gpu_trace_rounds {
             ::std::eprintln!(
-                "gpu_datalog_round\tstratum={}\tphase={}\tround={}\treadbacks={}",
-                #index, #phase, __cq_gpu_round,
+                "gpu_datalog_round\tstratum={}\tphase={}\tround={}\thead_replays={}\treadbacks={}",
+                #index, #phase, __cq_gpu_round, __cq_gpu_head_replays,
                 ::gpu_datalog_runtime::readback_count() - __cq_gpu_readbacks_before,
             );
         }
         __cq_gpu_round += 1;
-    ))
+    )))
 }
 
 #[cfg(test)]

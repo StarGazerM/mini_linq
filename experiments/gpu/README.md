@@ -591,7 +591,7 @@ pipeline {
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
-    round = [::cq_gpu_datalog::bind_round(binding = 5)];
+    round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor)];
     print = ::cq_gpu_datalog::print_rounds;
 }
 ```
@@ -680,7 +680,14 @@ than silently discarded.
 printing. Its zero-based invocation ordinal names the binding rewrite after
 plan, index demands, lower, capture constants, and select in this queue.
 Update that ordinal when inserting preceding phases; aliases do not change
-ownership. The printer rejects missing owners or modified packets.
+ownership. `head_cursor` opts the batch terminal into a grouped arena argument
+for heads whose producers may replay on unchanged inputs. With
+`head_cursor, legacy("rule@delta", ...)`, the named versions and their
+head/phase peers remain on per-hole reservations. Use this for hand-written
+holes and observed versions: neither a replacement kernel nor a capture
+callback is replayed as part of a grouped head. Without `head_cursor`, all
+terminals receive the ordinary arena argument. The printer rejects hooks
+on grouped versions, missing owners, and altered binding records.
 `device_storage(ratio(8))` overrides the geometric maintenance ratio; omission
 records four. The ratio is printed in Storage and passed to every run state.
 
@@ -693,13 +700,21 @@ canonical layout, appends it to every full layout, builds NEW from it and
 moves NEW to the delta; outputs read the canonical layout once. All programs on one thread share
 `gpu_datalog_runtime::thread_pool()` (device 0), so the runtime's thread-local
 caches never pin a finished program's pool.
-Candidate batches are released after admission. Admission reads the batches
-one sort portion at a time and never copies the bag whole. Multistream
-execution retains component-scoped arenas per lane/head and hole-local
-previous-count hints; an arena keeps a slot for the next round only up to
-1 GiB. Completed strata release cached Sequence scratch and wholly unused
-pool chunks. Layout states and views retain their published owners; trimming
-never invalidates live device views.
+Candidate batches are released after admission. Admission sorts one portion at
+a time, reading contiguous input directly and permuting it if required.
+Under GPU-HeadCursor, eligible rules writing the same head share one buffer,
+a cursor and a sticky failure flag. Heads publishing together validate in
+one readback. A short head replays before any of those publications. For a
+retry and for the next hint in that phase, reserve 1.5 times the observed
+count (round up), with at most 64 MiB of extra rows. Headroom alone never
+pushes a reusable slot over the 1 GiB retention limit. Each attempt can use
+the entire slot it leases; only the validated prefix is published.
+`GPU_DATALOG_TRACE_ROUNDS=1` reports `head_replays` (heads retried, not
+kernel launches) alongside `readbacks`. Ungrouped terminals keep hole-local hints.
+Completed strata release cached Sequence scratch. Only non-final strata
+consider returning wholly unused pool chunks to the driver under
+`release_at_stratum_boundary`. Layout states and views retain their published
+owners; trimming never invalidates live device views.
 
 Memory comes from two tiers (`gpu_device_columns::TieredMemoryResource`):
 blocks under 64 MiB are suballocated from the pool, larger ones are single

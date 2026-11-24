@@ -1572,10 +1572,10 @@ are not addresses into a fictitious contiguous item allocation.
  {\mathsf{lookup}(k)=\biguplus_j\mathrm{unpack}_p(\rho_j[\mathrm{range}_p(k)])\quad
   \mathsf{member}(k)=\bigvee_j\rho_j[\mathrm{range}_p(k)]\neq\emptyset}
 \end{mathpar}
-An arena terminal publishes the hole's head rows, packed by the arena encoding
+An arena terminal writes the hole's head rows, packed by the arena encoding
 its publication storage records (\textsc{GPU-PublicationStorage}), into a
-caller-owned device buffer and returns it with its length. It is a candidate
-bag: canonicalization belongs to admission (\textsc{DL-DeviceRuns}). Sizing
+caller-owned device buffer. The validated prefix is returned at the dispatch
+or head publication barrier; canonicalization belongs to admission (\textsc{DL-DeviceRuns}). Sizing
 follows the dispatch's recorded output protocol, so a batch is never truncated.
 \begin{mathpar}
 \Rule{GPU-Arena}{\mathsf{run}_{\rm gpu}(t)\text{ as T-Gpu}\quad
@@ -1593,15 +1593,13 @@ change the result.
  \text{all uses ordered on the producing stream}}
  {\text{omitting the terminal fence preserves }\textsc{GPU-Arena}}
 \end{mathpar}
-The recorded output protocol \code{reserve\_previous}, accepted only by the arena
-terminal, starts each invocation of a hole with a capacity hint: at least the
-last validated count of that hole (zero at first use), raised toward twice the
-hole's highest validated count as long as that stays within a small byte
-budget (measured on scala: 1,806 of 20,285 attempts were shortfalls with the
-last count alone, 423 with this hint). Holes whose heads share one
-candidate arena keep separate counts, selected by the recorded Round hole
-index. A keys-only attempt uses its leased arena slot's full row capacity,
-which is at least that hint. The hint is an
+Outside GPU-HeadCursor, the arena terminal's \code{reserve\_previous}
+protocol uses a hint for the selected Round hole. It starts at zero. After a
+successful invocation, the hint is the larger of (i) the last validated count
+plus half that count, with the extra rows limited to 256 MiB, and (ii) twice
+the highest validated count, limited to 8 MiB of rows. Grouped heads instead
+keep a hint per head and phase, as described below. A keys-only attempt uses
+the entire capacity of the leased slot, which is at least the hint. This is an
 initial capacity, not a bound: the kernel counts every candidate and writes
 only in bounds; an arithmetic failure aborts (BE-Abort); a capacity shortfall
 discards the attempt and reruns it with the full required capacity against the
@@ -1611,6 +1609,30 @@ published, so the batch equals the Count protocol's.
 \Rule{GPU-ReservePrevious}{\text{inputs immutable during the invocation}\quad
  \text{count}\le\text{capacity checked before publication}}
  {\text{published batch}=\text{the }\mathsf{count}\text{ protocol's batch}}
+\end{mathpar}
+
+Round may assign a head's producers to a common reservation when their inputs
+remain unchanged through the publication barrier and any replay. Sequence
+refines only a final raw arena dispatch with \code{reserve\_previous}, local
+fold completion, and no range-offset or other intermediate consumer.
+Dispatch-local claim cursors are still reset by the last block; the head's
+cursor and sticky failure bit are not. A failed count (including a wrapped
+reservation) rejects the whole attempt before admission. Heads due at the
+same publication point read their cursor/failure pairs in one transfer. Only
+a head that exceeds its capacity replays its producers, from zero on the
+same inputs with capacity at least the observed total. On success its cursor
+resets. Retry capacity and the next hint for that head and phase allow bounded
+headroom over the observed total, and all available rows in the leased slot
+are writable. Spare rows are never part of the published prefix.
+Intermediate stores and ungrouped terminals retain their own protocol.
+\begin{mathpar}
+\Rule{GPU-HeadCursor}{H=\text{head at a checked publication point}\quad
+ B_i=\text{candidate bag of producer }i\text{ on unchanged inputs}\quad
+ C_H=\text{shared capacity}}
+ {\text{each reservation claims disjoint positions in }[0,N_H),\
+ N_H=\sum_i|B_i|;\quad
+ \neg\mathsf{failure}_H\ \land\ N_H\le C_H
+ \Rightarrow \mathsf{prefix}(H,N_H)=_{\rm bag}\biguplus_i B_i}
 \end{mathpar}
 
 \paragraph{Closed host captures.}

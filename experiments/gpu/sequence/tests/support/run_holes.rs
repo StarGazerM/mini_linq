@@ -14,6 +14,11 @@ impl syn::parse::Parse for StructuresStack {
 
 pub fn fixture(name: &str) -> StructuresStack {
     match name {
+        "gated_native_linear" => {
+            let mut program = fixture("native_linear");
+            program.physical.program.captures.items.push(syn::parse_quote!(if (publish)));
+            program
+        },
         "native_local_word" => {
             let mut program = fixture("native_linear");
             for entry in &mut program.structures.structures.entries {

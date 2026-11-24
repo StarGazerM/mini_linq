@@ -1912,6 +1912,17 @@ impl Kernel<'_, '_> {
                             #payload
                         },
                     })?;
+                // A helper can see failure while traversing dead enclosing levels,
+                // before it has copied its stolen descriptor. Let its owner release
+                // the slot even when the helper leaves through the failure path.
+                let abort_reader = self.share.as_ref().map(|share| {
+                    let headers = share.headers;
+                    quote! {
+                        if __tid == 0 && __resume != u32::MAX {
+                            ::cq_gpu_sequence_runtime::share::copied(__meta.add(#headers), __resume_slot);
+                        }
+                    }
+                });
                 // The block's own lookup and range scan of this level.
                 let scan = quote! {
                     #lookup
@@ -1922,9 +1933,15 @@ impl Kernel<'_, '_> {
                     *#offsets.add(__tid) = __offset;
                     if __tid == 0 { *#offsets.add(256) = __children; }
                     ::cuda_device::thread::sync_threads();
-                    if __tid == 0 { *__abort_slot = *__meta.add(2); }
+                    if __tid == 0 {
+                        *__abort_slot = ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(2))
+                            .load(::cuda_device::atomic::AtomicOrdering::Relaxed);
+                    }
                     ::cuda_device::thread::sync_threads();
-                    if *__abort_slot != 0 { return; }
+                    if *__abort_slot != 0 {
+                        #abort_reader
+                        break '__cq_dispatch;
+                    }
                     #count_children
                 };
                 // The run a run provider's expansion reads is part of its state.
@@ -2300,7 +2317,7 @@ impl Kernel<'_, '_> {
             let (__prefix,__total) = ::cq_gpu_sequence_runtime::device::checked_scan(#count, __scratch, __meta.add(2));
             if __tid == 0 {
                 let __base = if __total == 0 { 0 } else {
-                    ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta).fetch_add(__total, ::cuda_device::atomic::AtomicOrdering::Relaxed)
+                    ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__output_cursor).fetch_add(__total, ::cuda_device::atomic::AtomicOrdering::Relaxed)
                 };
                 if __base.checked_add(__total).is_none() {
                     ::cq_gpu_sequence_runtime::device::flag_overflow(__meta.add(2));
@@ -2516,7 +2533,7 @@ pub(crate) fn translate_impl(
     )
 }
 
-fn translate_observed(
+pub(crate) fn translate_observed(
     physical: &cq_lang_structures::physical::Program,
     structures: &cq_lang_structures::Program,
     program: &Program,
@@ -2602,6 +2619,7 @@ fn translate_with_metadata(
     let mut launches = Vec::new();
     let mut program_preparations = Vec::new();
     let mut output = None;
+    let mut head_terminal = false;
     let final_name = analysis
         .output
         .as_ref()
@@ -3391,6 +3409,13 @@ fn translate_with_metadata(
             .gpu
             .as_ref()
             .ok_or_else(|| error("GPU dispatch lacks checked launch refinement"))?;
+        let head = execution.synchronization == [cq_lang_sequence::gpu::Synchronization::HeadCursor];
+        if head {
+            if expansion_counters {
+                return Err(error("GPU-HeadCursor is incompatible with per-hole expansion counters"));
+            }
+            head_terminal = true;
+        }
         let launch = realization.launches[dispatch_index];
         if execution.block_threads != 256 {
             return Err(error(
@@ -3534,7 +3559,7 @@ fn translate_with_metadata(
         let mut dispatch_share: Option<ShareSites> = None;
         // GPU-RootSelect: the select kernel's per-row test, its chain domain,
         // and the row planner's parameter uses for that test.
-        let mut root_select: Option<(TokenStream, syn::Ident)> = None;
+        let mut root_select: Option<(TokenStream, syn::Ident, syn::Ident)> = None;
         let mut select_uses = BTreeSet::new();
         for (chain_index, chain) in chains.iter().enumerate() {
             let domain = format_ident!("__cq_domain_{chain_index}");
@@ -3665,7 +3690,7 @@ fn translate_with_metadata(
                     parameters.push(abi_parameter(id.clone(), syn::parse_quote!(*const u32)));
                     arguments.push(abi_argument(id.clone(), quote!(#id.ptr() as *const u32)));
                 }
-                root_select = Some((test, domain.clone()));
+                root_select = Some((test, domain.clone(), enabled.clone()));
                 quote! {
                     let __position = *__cq_select.add(__position as usize) as u64;
                     #source
@@ -3844,7 +3869,7 @@ fn translate_with_metadata(
                             __partition_end=1u64;
                         }
                         #partition
-                        if *__abort_slot != 0 { return; }
+                        if *__abort_slot != 0 { break '__cq_dispatch; }
                         ::cuda_device::thread::sync_threads();
                         if __tid==0 { ::cq_gpu_sequence_runtime::share::busy(__meta.add(#busy), u32::MAX); }
                     }
@@ -3917,6 +3942,24 @@ fn translate_with_metadata(
             });
             let finished = RESIDENT_FINISHED;
             let result_words = RESIDENT_RESULT;
+            let publish = if head {
+                // Every failing scan, reservation, or fold sets dispatch word 2.
+                // Only the last block forwards it. Success must never clear
+                // a sticky failure from an earlier dispatch at this head.
+                quote! {
+                    if __tid == 0 && ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(2))
+                        .load(::cuda_device::atomic::AtomicOrdering::Relaxed) != 0 {
+                        ::cq_gpu_sequence_runtime::device::flag_overflow(__output_cursor.add(1));
+                    }
+                }
+            } else {
+                quote! {
+                    if __tid<#result_words {
+                        *__meta_result.add(__tid)=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__tid))
+                            .fetch_add(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
+                    }
+                }
+            };
             (
                 Some(abi_parameter(format_ident!("__meta_result"), syn::parse_quote!(*mut u32))),
                 quote! {
@@ -3930,10 +3973,7 @@ fn translate_with_metadata(
                     ::cuda_device::thread::sync_threads();
                     if *__tile_slot!=0 {
                         ::cuda_device::threadfence();
-                        if __tid<#result_words {
-                            *__meta_result.add(__tid)=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__tid))
-                                .fetch_add(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
-                        }
+                        #publish
                         ::cuda_device::thread::sync_threads();
                         let mut __word=__tid;
                         while __word<#used_words #share_used {
@@ -3999,6 +4039,13 @@ fn translate_with_metadata(
             uses.insert(parameter.0.to_string());
             dispatch_parameters.push(parameter);
         }
+        let private_cursor = if head {
+            uses.insert("__output_cursor".into());
+            dispatch_parameters.push(abi_parameter(format_ident!("__output_cursor"), syn::parse_quote!(*mut u32)));
+            None
+        } else {
+            Some(quote!(let __output_cursor = __meta;))
+        };
         dispatch_parameters.extend(tail.clone());
         // GPU-ExpansionShare: the claim broadcast word, the descriptor stride
         // and the block-uniform resume state (`__resume` names the site a
@@ -4044,16 +4091,18 @@ fn translate_with_metadata(
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
         }, dispatch_parameters, uses, quote! {
                 unsafe {
+                    #private_cursor
                     #prologue
                     #share_abort
-                    #(#bodies)*
+                    // Overflow stops work, not the last-block publication/reset.
+                    '__cq_dispatch: { #(#bodies)* }
                     #resident_epilogue
                 }
         }, &compiler.rows, launch, shared_u32)?;
         kernels.push(dispatch_abi.definition());
         // GPU-RootSelect: the select kernel (one warp-aggregated append per
         // warp of kept root positions) and its launch before the dispatch.
-        let select_launch = if let Some((test, domain)) = &root_select {
+        let select_launch = if let Some((test, domain, enabled)) = &root_select {
             let name = format_ident!("__cq_sequence_select_{index}_{module_name}");
             let mut declarations = parameters.clone();
             let mut call_arguments = arguments.clone();
@@ -4100,25 +4149,43 @@ fn translate_with_metadata(
                 #[kernel]
                 #[launch_bounds(256)]
                 #[launch_contract(domain=1,block=(256,1,1))]
-            }, declarations, kernel_uses, body, &compiler.rows, Launch::InvocationOccupancy, 0)?;
+            }, declarations, kernel_uses, body, &compiler.rows, launch, 0)?;
             kernels.push(abi.definition());
-            let probe = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,256,0)));
-            let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(__cq_select_grid,256,0)));
-            let call = abi.call(quote!(__cq_pool.stream()), quote!(&__cq_select_prepared), quote!(__cq_select_grid), call_arguments)?;
-            quote! {
-                let __cq_select = unsafe { ::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(), (#domain as usize).max(1))? };
-                let __cq_select_count = ::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(), 1)?;
-                {
+            let preparation = if launch == Launch::InvocationOccupancy {
+                let probe = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,256,0)));
+                let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(__cq_select_grid,256,0)));
+                quote! {
                     let __cq_select_probe = #probe?;
                     let __cq_select_grid = ::cq_gpu_runtime::launch_grid_for_kernel(
-                        __cq_select_probe.function(), (#domain as usize).div_ceil(256).max(1), 256, 0)?;
+                        __cq_select_probe.function(), __cq_select_rows.div_ceil(256), 256, 0)?;
                     let __cq_select_prepared = #prepare?;
+                }
+            } else {
+                let cache = format_ident!("__cq_launch_cache_{}", program_preparations.len());
+                let cached = abi.cached(&cache);
+                program_preparations.push(abi.program_helpers(&module_name));
+                quote! {
+                    let __cq_select_prepared = #cached?;
+                    let __cq_select_grid = __cq_select_rows.div_ceil(256)
+                        .min(__cq_select_prepared.resident_blocks() as usize) as u32;
+                }
+            };
+            let call = abi.call(quote!(__cq_pool.stream()), quote!(&__cq_select_prepared), quote!(__cq_select_grid), call_arguments)?;
+            quote! {
+                let __cq_select_rows = if #enabled { #domain as usize } else { 0 };
+                let __cq_select = unsafe { ::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(), __cq_select_rows)? };
+                let __cq_select_count = ::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(), 1)?;
+                if __cq_select_rows != 0 {
+                    #preparation
                     #call?;
                 }
             }
         } else {
             quote!()
         };
+        // Keep positions through every retry, but not through subsequent
+        // dispatches. Buffer destruction is ordered after use on the pool stream.
+        let release_select = root_select.as_ref().map(|_| quote!(drop((__cq_select, __cq_select_count));));
         let combine_kernel = format_ident!("__cq_sequence_combine_{index}_{module_name}");
         let combine_abi = if whole_reduction {
             let mut combine_uses = output_uses;
@@ -4146,12 +4213,13 @@ fn translate_with_metadata(
                 #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
             }, [parameters.clone(), outputs, tail].concat(), combine_uses, quote! {
                     unsafe {
+                        let __output_cursor = __meta;
                         let __tid=::cuda_device::thread::threadIdx_x() as usize;
                         let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
                         let __scratch=__shared.cast::<u32>();
                         let __reservation=__shared.add(32).cast::<u32>();
                         let __abort_slot=__shared.add(40).cast::<u32>();
-                        #(#combine_bodies)*
+                        '__cq_dispatch: { #(#combine_bodies)* }
                     }
             }, &compiler.rows, if launch == Launch::InvocationOccupancy {
                 Launch::InvocationOccupancy
@@ -4266,7 +4334,9 @@ fn translate_with_metadata(
         } else {
             quote!(let #output_keys=unsafe {::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),__cq_capacity*#key_width*__cq_key_lanes)?};)
         };
-        let key_pointer = if arena.is_some() && final_output {
+        let key_pointer = if head {
+            quote!(#output_keys)
+        } else if arena.is_some() && final_output {
             quote!(#output_keys.buffer().ptr())
         } else {
             quote!(#output_keys.ptr())
@@ -4387,6 +4457,7 @@ fn translate_with_metadata(
                 } else {
                     quote!(let __cq_counts=#store_meta.to_host()?;)
                 }),
+                cq_lang_sequence::gpu::Synchronization::HeadCursor => Some(quote!()),
                 cq_lang_sequence::gpu::Synchronization::RangeOffsets => None,
             })
             .ok_or_else(|| {
@@ -4399,7 +4470,7 @@ fn translate_with_metadata(
             partials_pointer,
             meta_setup,
             meta_allocation,
-            meta_pointers,
+            mut meta_pointers,
             meta_value,
         ) = if resident {
             (
@@ -4426,6 +4497,9 @@ fn translate_with_metadata(
                 quote!(#store_meta),
             )
         };
+        if head {
+            meta_pointers.push(abi_argument(format_ident!("__output_cursor"), quote!(__cq_head_cursor)));
+        }
         let expansion_stages = generator.expansion_stages;
         let allocate_expansions = expansion_counters.then(|| {
             quote! {
@@ -4461,22 +4535,29 @@ fn translate_with_metadata(
                 }
             }
         });
-        launches.push(quote! {
-            #packing_setup
-            #(#host_domains)*
-            #select_launch
-            #launch_setup
-            #partials_setup
-            #meta_setup
+        // Dispatch ABI and body are shared. Only the owner of capacity and
+        // completion changes: the round validates grouped heads after all
+        // their holes launch; ordinary stores complete the attempt here.
+        let attempt = quote! {
+            #allocate_expansions
+            #dispatch_call?;
+            #combine_launch
+        };
+        let head_target = head.then(|| {
+            quote! {
+                let (#output_keys, __cq_capacity, __cq_head_cursor) =
+                    __cq_arena.head_target(&__cq_arena_packing)?;
+                if __cq_capacity > u32::MAX as usize { return Err("Sequence output exceeds u32 positions".into()); }
+            }
+        });
+        let publication_launch = if head { attempt } else { quote! {
             let mut __cq_capacity=#initial;
             let (#stores #output_keys,#store_meta,#store_length)=loop {
                 if __cq_capacity>u32::MAX as usize {return Err("Sequence output exceeds u32 positions".into());}
                 #allocations
                 #key_allocation
                 #meta_allocation
-                #allocate_expansions
-                #dispatch_call?;
-                #combine_launch
+                #attempt
                 #count_readback
                 #record_readback
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}
@@ -4492,9 +4573,25 @@ fn translate_with_metadata(
             };
             #remember_count
             #record_flat
+        } };
+        launches.push(quote! {
+            #packing_setup
+            #(#host_domains)*
+            #head_target
+            #select_launch
+            #launch_setup
+            #partials_setup
+            #meta_setup
+            #publication_launch
+            #release_select
         });
         if final_output {
-            output = Some(if arena.is_some() {
+            output = Some(if head {
+                quote! {
+                    __cq_arena.retain_head_owners(__cq_run_owners);
+                    let __cq_result = ::core::option::Option::<::gpu_datalog_runtime::CandidateBatch>::None;
+                }
+            } else if arena.is_some() {
                 quote! {
                     let __cq_result = unsafe { #output_keys.finish(#store_length, __cq_run_owners)? };
                 }
@@ -4688,7 +4785,11 @@ fn translate_with_metadata(
         .map(|(expression, packing)| packing.setup(expression));
     let empty = arena
         .zip(arena_packing.as_ref())
-        .map(|(expression, packing)| packing.empty(expression))
+        .map(|(expression, packing)| if head_terminal {
+            quote!(Ok(::core::option::Option::None))
+        } else {
+            packing.empty(expression)
+        })
         .unwrap_or_else(|| {
             quote!(::cq_gpu_runtime::DeviceColumns::empty(
                 ::gpu_datalog_runtime::thread_pool()?

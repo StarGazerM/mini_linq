@@ -145,9 +145,129 @@ fn packet(
     quote!(providers { #(#providers)* } #(#bindings)*)
 }
 
+/// A publication is a barrier even when it does not publish the current head:
+/// a replay may still read one of the full or delta hosts it replaces. Keep
+/// the same cut of the checked schedule for both planning and printing.
+pub(crate) struct Epoch<'a> {
+    pub rules: Vec<usize>,
+    pub publications: Vec<&'a round::Publication>,
+}
+
+pub(crate) fn epochs<'a>(
+    stratum: &'a round::Stratum,
+    schedule: &round::schedule::StratumSchedule,
+    phase: &str,
+) -> Vec<Epoch<'a>> {
+    let after: BTreeMap<_, _> = schedule.publication.iter()
+        .filter(|placement| placement.phase == phase)
+        .map(|placement| (placement.relation, placement.wave))
+        .collect();
+    let mut epochs = Vec::new();
+    let mut rules = Vec::new();
+    for (global, wave) in schedule.waves.iter().enumerate().filter(|(_, wave)| wave.phase == phase) {
+        rules.extend_from_slice(&wave.holes);
+        let publications: Vec<_> = stratum.publication.iter()
+            .filter(|p| after.get(&p.relation) == Some(&global))
+            .collect();
+        if !publications.is_empty() {
+            epochs.push(Epoch { rules: std::mem::take(&mut rules), publications });
+        }
+    }
+    let publications: Vec<_> = stratum.publication.iter()
+        .filter(|p| !after.contains_key(&p.relation)).collect();
+    if !rules.is_empty() || !publications.is_empty() {
+        epochs.push(Epoch { rules, publications });
+    }
+    epochs
+}
+
+/// A nested function may call an enclosing item, but that does not imply the
+/// call is safe to evaluate twice. Replay only ordinary relational expressions
+/// over the checked snapshot, not arbitrary Rust captures, calls or blocks.
+fn replay_safe(cq: &round::cq::Program) -> bool {
+    fn scalar(expr: &syn::Expr, bound: &BTreeSet<String>) -> bool {
+        use syn::Expr;
+        match expr {
+            Expr::Path(path) => path.path.get_ident()
+                .is_some_and(|name| bound.contains(&cq_syntax::symbol_name(name))),
+            Expr::Lit(_) | Expr::Infer(_) => true,
+            Expr::Paren(expr) => scalar(&expr.expr, bound),
+            Expr::Group(expr) => scalar(&expr.expr, bound),
+            Expr::Cast(expr) => scalar(&expr.expr, bound),
+            Expr::Unary(expr) => scalar(&expr.expr, bound),
+            Expr::Binary(expr) => {
+                use syn::BinOp::*;
+                matches!(expr.op, Add(_) | Sub(_) | Mul(_) | Div(_) | Rem(_) | And(_) | Or(_) |
+                    BitXor(_) | BitAnd(_) | BitOr(_) | Shl(_) | Shr(_) | Eq(_) | Lt(_) | Le(_) |
+                    Ne(_) | Ge(_) | Gt(_)) && scalar(&expr.left, bound) && scalar(&expr.right, bound)
+            }
+            _ => false,
+        }
+    }
+    use round::cq::BodyItem;
+    if !cq.query.captures.items.is_empty() || crate::print::reads_environment(cq) {
+        return false;
+    }
+    let mut bound = BTreeSet::new();
+    for item in &cq.query.body {
+        match item {
+            BodyItem::Positive { atom } => {
+                if !atom.args.iter().all(|arg| cq_syntax::rust::variable(arg).is_some() || scalar(arg, &bound)) {
+                    return false;
+                }
+                bound.extend(atom.args.iter().filter_map(cq_syntax::rust::variable).map(cq_syntax::symbol_name));
+            }
+            BodyItem::Negation(n) if n.atom.args.iter().all(|arg| scalar(arg, &bound)) => {}
+            BodyItem::Filter(f) if scalar(&f.condition, &bound) => {}
+            _ => return false,
+        }
+    }
+    cq.query.head.args.iter().all(|arg| scalar(arg, &bound))
+}
+
+/// Membership is all-or-none for a head in a phase. In particular an earlier
+/// epoch cannot contribute even a legacy batch to a replayed head.
+fn eligible_heads(program: &Program) -> Vec<Vec<usize>> {
+    let mut eligible = Vec::new();
+    for (stratum, schedule) in program.context.strata.iter().zip(&program.schedule.strata) {
+        for (phase, rules) in [(round::schedule::SEED, &stratum.seeds), (round::schedule::STEP, &stratum.steps)] {
+            let mut members = BTreeMap::<usize, Vec<usize>>::new();
+            for rule in rules {
+                members.entry(rule.head).or_default().push(rule.hole);
+            }
+            for epoch in epochs(stratum, schedule, phase) {
+                for publication in epoch.publications {
+                    let Some(holes) = members.remove(&publication.relation) else { continue };
+                    let local = epoch.rules.iter().filter(|&&i| rules[i].head == publication.relation).count();
+                    if local == holes.len() && holes.iter().all(|&i| replay_safe(&program.holes[i].cq)) {
+                        eligible.push(holes);
+                    }
+                }
+            }
+        }
+    }
+    eligible
+}
+
+fn arena_argument(head: bool) -> TokenStream {
+    if head { quote!(head; &mut *__cq_gpu_arena) } else { quote!(&mut *__cq_gpu_arena) }
+}
+
+pub(crate) fn head_argument(hole: &Hole) -> bool {
+    hole.pipeline.passes.last().is_some_and(|terminal| {
+        terminal.arguments.to_string() == arena_argument(true).to_string()
+    })
+}
+
 /// Record the invocation owner by ordinal, independent of the invoked macro's name.
+/// With `head_cursor`, `legacy("rule@delta", ...)` excludes the entire head
+/// in that version's phase before a terminal ABI is recorded.
 pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    struct Owner(usize);
+    struct Owner {
+        pass: usize,
+        head_cursor: bool,
+        legacy: BTreeMap<String, (proc_macro2::Span, bool)>,
+    }
     impl syn::parse::Parse for Owner {
         fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
             let name: Ident = input.parse()?;
@@ -159,15 +279,56 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
             }
             input.parse::<syn::Token![=]>()?;
             let owner = input.parse::<syn::LitInt>()?.base10_parse()?;
-            Ok(Self(owner))
+            let head_cursor = !input.is_empty();
+            let mut legacy = BTreeMap::new();
+            if head_cursor {
+                input.parse::<syn::Token![,]>()?;
+                let flag: Ident = input.parse()?;
+                ensure(flag == "head_cursor", &flag, "expected head_cursor")?;
+            }
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
+                let flag: Ident = input.parse()?;
+                ensure(flag == "legacy", &flag, "expected legacy(\"rule@delta\", ...)")?;
+                let labels;
+                syn::parenthesized!(labels in input);
+                for label in labels.parse_terminated(|input| input.parse::<syn::LitStr>(), syn::Token![,])? {
+                    let previous = legacy.insert(label.value(), (label.span(), false));
+                    ensure(previous.is_none(), &label, "duplicate legacy rule version")?;
+                }
+            }
+            Ok(Self { pass: owner, head_cursor, legacy })
         }
     }
-    let Owner(owner) = syn::parse2(arguments)?;
+    let Owner { pass: owner, head_cursor, mut legacy } = syn::parse2(arguments)?;
     round::contract::check(source)?;
     crate::storage::check_device(&source.storage)?;
     let mut target = source.clone();
     let inputs = input_providers(&target)?;
-    for hole in &mut target.holes {
+    let mut excluded = BTreeSet::new();
+    if !legacy.is_empty() {
+        for stratum in &source.context.strata {
+            for rule in stratum.seeds.iter().chain(&stratum.steps) {
+                let label = crate::print::version_label(source, rule.variant, rule.head);
+                if let Some((_, matched)) = legacy.get_mut(&label) {
+                    *matched = true;
+                    excluded.insert(rule.hole);
+                }
+            }
+        }
+        if let Some((label, (span, _))) = legacy.iter().find(|(_, (_, matched))| !*matched) {
+            return Err(syn::Error::new(*span, format!("legacy exclusion `{label}` names no rule version")));
+        }
+    }
+    let selected: BTreeSet<_> = if head_cursor && std::env::var_os("CQ_EXPANSION_COUNTERS").is_none() {
+        eligible_heads(source).into_iter()
+            .filter(|head| !head.iter().any(|hole| excluded.contains(hole)))
+            .flatten()
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    for (i, hole) in target.holes.iter_mut().enumerate() {
         ensure(
             hole.interface == HoleInterface::Batch,
             &*hole,
@@ -201,7 +362,7 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
             &terminal.path,
             "GPU batch terminal already has arguments",
         )?;
-        terminal.arguments = quote!(&mut *__cq_gpu_arena);
+        terminal.arguments = arena_argument(selected.contains(&i));
     }
     round::check_rewrite(source, &target)?;
     check(&target)?;
@@ -222,6 +383,19 @@ pub fn check(program: &Program) -> syn::Result<()> {
         }
     }
     let inputs = input_providers(program)?;
+    let marked: BTreeSet<_> = program.holes.iter().enumerate()
+        .filter(|(_, hole)| head_argument(hole)).map(|(i, _)| i).collect();
+    if !marked.is_empty() {
+        let mut valid = BTreeSet::new();
+        if std::env::var_os("CQ_EXPANSION_COUNTERS").is_none() {
+            for head in eligible_heads(program) {
+                if head.iter().all(|hole| marked.contains(hole)) {
+                    valid.extend(head);
+                }
+            }
+        }
+        ensure(valid == marked, program, "head arena argument requires a complete replay-safe head in one publication epoch")?;
+    }
     for hole in &program.holes {
         let owner = hole
             .binding
@@ -252,7 +426,7 @@ pub fn check(program: &Program) -> syn::Result<()> {
         )?;
         ensure(
             hole.pipeline.passes.last().is_some_and(|terminal| {
-                terminal.arguments.to_string() == quote!(&mut *__cq_gpu_arena).to_string()
+                terminal.arguments.to_string() == arena_argument(false).to_string() || head_argument(hole)
             }),
             hole,
             "GPU batch invocation differs from its recorded arena argument",

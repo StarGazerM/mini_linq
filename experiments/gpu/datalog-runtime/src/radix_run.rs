@@ -1325,10 +1325,10 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
 
     /// [`Self::fresh`] over one publication's candidate batches, packed in
     /// `packing`'s relation order; `order` permutes each row into this set's
-    /// column order first. The bag is never copied whole: each sort portion
-    /// is gathered from the batches, permuted, sorted and deduplicated on its
-    /// own, loses the rows earlier portions produced, and is merged into the
-    /// result. A bag of at most one portion is one such step.
+    /// column order first. A sort portion within one batch borrows that native
+    /// range on this stream; only discontiguous or cross-stream portions need
+    /// gathering. Each portion is then permuted as requested, sorted, and
+    /// deduplicated against earlier portions before merging into the result.
     /// # Safety
     /// As [`Self::fresh`], for every batch and for the permuted rows.
     pub unsafe fn fresh_batches(
@@ -1351,26 +1351,39 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         if !self.full_key_set {
             return Err("set admission requires a full-key set constructor".into());
         }
-        let mut pieces = vec![Vec::new()];
-        let mut room = portion;
-        for batch in batches {
-            let mut first = 0;
-            while first < batch.len() {
-                if room == 0 {
-                    pieces.push(Vec::new());
-                    room = portion;
-                }
-                let count = room.min(batch.len() - first);
-                pieces.last_mut().expect("nonempty").push((batch, first, count));
-                first += count;
-                room -= count;
-            }
-        }
+        debug_assert_ne!(portion, 0);
+        // Walk the bag one portion at a time without allocating a host list of
+        // pieces. `first` is the first unconsumed row of the leading batch.
+        let mut batches = batches;
+        let mut first = 0;
         let mut unique: Option<runs::SortedBatch<W>> = None;
-        for piece in &pieces {
-            let rows = crate::arena::concatenate_ranges::<W>(self.pool.clone(), packing, piece)?;
+        loop {
+            let mut room = portion;
+            let mut whole = 0;
+            let mut partial_end = 0;
+            for batch in batches {
+                let start = if whole == 0 { first } else { 0 };
+                let remaining = batch.len() - start;
+                if remaining > room {
+                    partial_end = start + room;
+                    break;
+                }
+                room -= remaining;
+                whole += 1;
+            }
+            let piece = &batches[..whole + usize::from(partial_end != 0)];
+            let ranges = piece.iter().enumerate().map(|(i, batch)| {
+                let start = if i == 0 { first } else { 0 };
+                let end = if i == whole { partial_end } else { batch.len() };
+                (batch, start, end - start)
+            });
+            let rows = crate::arena::gather_ranges::<W>(self.pool.clone(), packing, ranges, true)?;
             let rows = match order {
-                Some((order, threads)) => packing.permute_device(&rows, rows.len(), order, threads)?,
+                Some((order, threads)) => {
+                    let permuted = packing.permute_device(&rows, rows.len(), order, threads)?;
+                    drop(rows); // release any gathered portion before allocating sort scratch
+                    permuted
+                }
                 None => rows,
             };
             // SAFETY: the caller's packing and readiness premises cover every range.
@@ -1385,6 +1398,11 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
                     if next.is_empty() { previous } else { self.set_ops().merge(&previous, &next)? }
                 }
             });
+            batches = &batches[whole..];
+            if batches.is_empty() {
+                break;
+            }
+            first = partial_end;
         }
         let unique = unique.expect("at least one piece");
         if W::BITS == 64 {
@@ -3967,6 +3985,14 @@ mod set_representation_tests {
             assert!(xs.windows(2).all(|p| p[0] < p[1]));
             unsafe { runs::SortedBatch::from_sorted(Buffer::from_host(pool.clone(), xs)?, xs.len()) }
         };
+        let packing = Packing::new(&[8, 8])?;
+        let mut arena = crate::CandidateArena::new(pool.clone());
+        let lease = arena.reserve(packing.clone(), 4)?;
+        // SAFETY: all four packed rows are initialized in relation order.
+        let batch = unsafe {
+            lease.buffer().write_async(&[1 << 8 | 1, 0, 1, 1])?;
+            lease.finish(4, vec![])?
+        };
         for overflow in [2u64, 2 << 8, 8 << 8, 255] { // pages, ranks, major domain, minor domain
             let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 16)?;
             state.pair_cache.index = Some(crate::pair_bitmap::Index::tiny(&pool)?);
@@ -3974,7 +4000,9 @@ mod set_representation_tests {
             let snapshot = state.snapshot()?;
             let keys = sorted(&[0, 1, 1 << 8 | 1])?;
             for _ in 0..2 {
-                assert_eq!(state.uncommitted(keys.clone())?.buffer().to_host()?, [1]);
+                // Grouped publication produces one unsorted batch for this head.
+                let fresh = unsafe { state.fresh_batches(&packing, std::slice::from_ref(&batch), None)? };
+                assert_eq!(fresh.buffer().to_host()?, [1]);
             }
             assert!(state.pair_cache.index.is_some());
             unsafe { state.append_sorted(sorted(&[overflow])?)?; }

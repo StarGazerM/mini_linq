@@ -21,7 +21,7 @@ mod rows;
 mod tiles;
 pub mod runs;
 
-pub use arena::translate_arena;
+pub use arena::{translate_arena, translate_arena_head};
 pub use emit::{translate, translate_with_origins};
 pub use handles::{CaptureHandle, DeviceCaptureBindings};
 

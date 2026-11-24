@@ -8,10 +8,13 @@
 //! counting/reservation and metadata-driven capacity retries remain in effect.
 //! Terminal canon, group, fold, and host-only output are rejected by this terminal;
 //! intermediate publications retain their existing semantics.
+//! `translate_arena(head; &mut arena)` requests GPU-HeadCursor. It returns
+//! `None` after a grouped append (or a closed gate), otherwise `Some(batch)`
+//! from the ordinary arena terminal. The binding owns grouped completion.
 
 pub use cq_gpu_sequence_core::runs::record_representation;
 pub use cq_gpu_sequence_core::{
-    bind_structures, catalog, machine, providers, translate, translate_arena, translate_with_origins,
+    bind_structures, catalog, machine, providers, translate, translate_arena, translate_arena_head, translate_with_origins,
     CaptureHandle, DeviceCaptureBindings,
 };
 pub use cq_gpu_sequence_macros::{

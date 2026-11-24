@@ -190,6 +190,84 @@ fn previous_count_is_only_a_hint_and_retained_batches_stay_immutable() -> Result
 }
 
 #[test]
+fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
+    use gpu_datalog_runtime::{CandidateArena, HeadCursors};
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let group = HeadCursors::new(pool.clone(), 2)?;
+    let mut arena = CandidateArena::new(pool.clone());
+    arena.begin_head(&group, 1, packing.clone(), 0)?;
+    // Exceed both the retained slot's capacity and the sharing threshold.
+    let per_hole = (arena.head_capacity() / 2 + 17).max(50_000);
+    let rows = vec![(0..per_hole).map(|i| vec![-7, i as i128]).collect::<Vec<_>>()];
+    let edge = relation::<(i32, u32), u64>(
+        pool.clone(), packing.clone(), runs(&pool, &packing, &rows)?,
+    )?;
+    // RootSelect must retain the first root and discard the second. The single
+    // hot key leaves enough child batches for idle blocks to steal.
+    let dp = Packing::with_columns(&[Column::I32, Column::I32])?;
+    let delta_rows = vec![vec![vec![-7, -7], vec![8, 9]]];
+    let delta = relation::<(i32, i32), u64>(
+        pool.clone(), dp.clone(), runs(&pool, &dp, &delta_rows)?,
+    )?;
+    let append = |mut arena: &mut CandidateArena, publish: bool| {
+        cq_gpu_sequence_test_macros::planned_head_hole!(reserve_previous gated_native_linear)
+    };
+    if option_env!("CQ_EXPANSION_COUNTERS").is_some() {
+        // Diagnostics need a validated count per hole; even this eligible join
+        // must publish privately instead of appending to the active group.
+        let result = append(&mut arena, true).unwrap();
+        assert_eq!(bag(result.buffer(), result.len(), result.packing())?, rows[0]);
+        assert_eq!(arena.previous_count(), per_hole);
+        assert_eq!(append(&mut arena, false).unwrap().len(), 0);
+        assert_eq!(group.read()?, [0; 4]);
+        return Ok(());
+    }
+    for replay in [false, true] {
+        let before = gpu_datalog_runtime::readback_count();
+        for _ in 0..2 {
+            assert!(append(&mut arena, true).is_none());
+        }
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        assert_eq!(group.read()?, [0, 0, (2 * per_hole) as u32, 0]);
+        assert_eq!(gpu_datalog_runtime::readback_count(), before + 1);
+        if !replay {
+            arena.retry_head(2 * per_hole)?;
+        }
+    }
+    // SAFETY: the replay fit both complete appends, as checked above.
+    let batch = unsafe { arena.finish_head(2 * per_hole)? };
+    let mut expected: Vec<_> = rows[0].iter().chain(&rows[0]).cloned().collect();
+    expected.sort();
+    assert_eq!(bag(batch.buffer(), batch.len(), batch.packing())?, expected);
+    // No active head: a closed gate must not acquire a target or a lease.
+    assert!(append(&mut arena, false).is_none());
+
+    // The same spread join keeps private completion under ordinary reserve.
+    let publish = true;
+    let fallback = cq_gpu_sequence_test_macros::planned_head_hole!(reserve gated_native_linear).unwrap();
+    assert_eq!(bag(fallback.buffer(), fallback.len(), fallback.packing())?, rows[0]);
+
+    arena.begin_head(&group, 1, packing.clone(), 1)?;
+    let (_, _, cursor) = arena.head_target(&packing)?;
+    // SAFETY: seed only the active head's cursor on the writer stream. A
+    // single reservation now wraps without materializing 2^32 candidates.
+    unsafe {
+        cuda_core::simt::memory::memset_d8_async(
+            cursor as u64, 0xff, std::mem::size_of::<u32>(), pool.stream().cu_stream(),
+        )?;
+    }
+    assert!(append(&mut arena, true).is_none());
+    let failed = group.read()?;
+    assert_eq!(failed[3], 1);
+    // A later hole can use the reset dispatch scratch but cannot clear the
+    // head's sticky failure. Do not publish the failed prefix.
+    assert!(append(&mut arena, true).is_none());
+    assert_eq!(group.read()?, [0, 0, failed[2] + per_hole as u32, 1]);
+    Ok(())
+}
+
+#[test]
 fn nonlinear_delta_full_visits_every_full_run() -> Result {
     let pool = Pool::new(0, 0, 0)?;
     let packing = Packing::with_columns(&[Column::I32, Column::I32])?;
