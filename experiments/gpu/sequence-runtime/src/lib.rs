@@ -902,7 +902,7 @@ where
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RangeView {
-    pub offsets: *const i64,
+    pub offsets: *const u32,
     pub payload: *const device::RangePayloadView,
     pub payload_columns: u32,
     pub domain: u32,
@@ -961,7 +961,7 @@ impl RangePayload {
 /// An immutable, duplicate-preserving sorted range index. A keyed lookup is
 /// [offsets[key], offsets[key+1]); an empty key denotes [0,len) without a directory.
 pub struct RangeProvider {
-    offsets: EncodedColumn,
+    offsets: Buffer<u32>,
     payload: Vec<RangePayload>,
     payload_views: Arc<Buffer<device::RangePayloadView>>,
     domain: u32,
@@ -1000,8 +1000,15 @@ impl RangeProvider {
     pub fn pool(&self) -> &Arc<Pool> {
         self.offsets.pool()
     }
-    pub fn offsets(&self) -> &EncodedColumn {
+    pub fn offsets(&self) -> &Buffer<u32> {
         &self.offsets
+    }
+    pub fn offset_bounds(&self) -> Bounds {
+        if self.offsets.len() == 0 {
+            Bounds::Empty
+        } else {
+            Bounds::Inclusive { min: 0, max: i64::from(self.len) }
+        }
     }
     pub fn payload(&self) -> &[RangePayload] {
         &self.payload
@@ -1023,7 +1030,7 @@ impl RangeProvider {
     /// this provider is alive, within the advertised domain/row/column bounds.
     pub unsafe fn view(&self) -> RangeView {
         RangeView {
-            offsets: unsafe { self.offsets.plain_buffer() }.expect("native range directory").ptr(),
+            offsets: self.offsets.ptr(),
             payload: self.payload_views.ptr(),
             payload_columns: self.payload.len() as u32,
             domain: self.domain,
@@ -1125,11 +1132,10 @@ fn with_radix_workspace(
     })
 }
 
-/// Per-provider count owners and descriptor storage. Construct during program
+/// Per-provider payload count owner and descriptor storage. Construct during program
 /// setup; published results retain their owners across later builds.
 pub struct RangeWorkspace {
     row_count: Arc<Buffer<u64>>,
-    offset_count: Arc<Buffer<u64>>,
     payload_views: Arc<Buffer<device::RangePayloadView>>,
     host_views: Vec<device::RangePayloadView>,
     row_value: usize,
@@ -1144,7 +1150,6 @@ impl RangeWorkspace {
             .ok_or("range domain overflow")?;
         Ok(Self {
             row_count: Arc::new(Buffer::from_host(pool.clone(), &[rows as u64])?),
-            offset_count: Arc::new(Buffer::from_host(pool.clone(), &[entries as u64])?),
             payload_views: Arc::new(unsafe {
                 Buffer::uninitialized(pool, descriptor.payload.len())?
             }),
@@ -1299,13 +1304,13 @@ impl<'pool> RangeBuilder<'pool> {
         let row_count = workspace.row_count.clone();
         if descriptor.key.is_empty() {
             let payload = range_payloads(pool, &descriptor.payload, selected, rows, row_count)?;
-            let offsets = self.directory(None, workspace)?;
+            let offsets = self.directory(None, workspace.entries)?;
             return finish(offsets, payload, 0, 0, rows, workspace);
         }
         let first = &descriptor.key[0];
         // Empty selections still own a complete all-zero directory.
         if rows == 0 {
-            let offsets = self.directory(None, workspace)?;
+            let offsets = self.directory(None, workspace.entries)?;
             let payload = range_payloads(pool, &descriptor.payload, None, 0, row_count)?;
             if let Some(selected) = selected {
                 release(stream, selected)?;
@@ -1431,7 +1436,7 @@ impl<'pool> RangeBuilder<'pool> {
                 release(stream, alternate_order)?;
             }
         }
-        let offsets = self.directory(Some(&keys), workspace)?;
+        let offsets = self.directory(Some(&keys), workspace.entries)?;
         let payload = range_payloads(pool, &descriptor.payload, Some(order), rows, row_count)?;
         for buffer in std::iter::once(keys).chain(selected) {
             release(stream, buffer)?;
@@ -1450,13 +1455,12 @@ impl<'pool> RangeBuilder<'pool> {
     fn directory(
         &self,
         sorted: Option<&DeviceBuffer<u32>>,
-        workspace: &RangeWorkspace,
-    ) -> Result<EncodedColumn> {
-        let entries = workspace.entries;
-        let (values, bounds) = match sorted {
+        entries: usize,
+    ) -> Result<Buffer<u32>> {
+        match sorted {
             Some(keys) => {
                 // Every entry, including the end sentinel, has exactly one writer.
-                let values = unsafe { Buffer::<i64>::uninitialized(self.pool.clone(), entries)? };
+                let values = unsafe { Buffer::uninitialized(self.pool.clone(), entries)? };
                 let shape = self.module.prepare_dense_directory(self.range.config(1))?;
                 let threads = entries.div_ceil(kernels::DIRECTORY_TILE) * 32;
                 let blocks = self.range.grid(shape.function(), threads)?;
@@ -1468,19 +1472,15 @@ impl<'pool> RangeBuilder<'pool> {
                     entries as u32,
                     values.ptr(),
                 )?;
-                (values, Bounds::Inclusive { min: 0, max: keys.len() as i64 })
+                Ok(values)
             }
-            None => (
-                Buffer::<i64>::zeroed(self.pool.clone(), entries)?,
-                if entries == 0 { Bounds::Empty } else { Bounds::singleton(0) },
-            ),
-        };
-        EncodedColumn::from_plain_buffer(values, workspace.offset_count.clone(), 0, bounds)
+            None => Buffer::zeroed(self.pool.clone(), entries),
+        }
     }
 }
 
 fn finish(
-    offsets: EncodedColumn,
+    offsets: Buffer<u32>,
     payload: Vec<RangePayload>,
     domain: usize,
     base: i64,

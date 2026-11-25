@@ -1949,7 +1949,7 @@ each row function and the host-bound selection conditions.
   \mathsf{domain}(c)=B\text{ or one recorded measurement}}
 \Rule{GPU-DenseDirectory}{K\in[0,D)^n\text{ sorted}\quad n\le 2^{32}-1\quad 0\le d\le D}
  {\mathsf{offset}[d]=|\{i:k_i<d\}|\quad
-  \mathsf{offset}[0..D]\text{ is published directly in owned native lanes}}
+  \mathsf{offset}[0..D]\text{ is published directly in owned native }\mathtt{u32}\text{ lanes}}
 \Rule{GPU-TerminalGroup}{G=\text{recorded terminal group of the final publication}\quad
  \text{aliases are transparent stores of }G}
  {\mathsf{group}_{\rm gpu}=G.\mathsf{completion}(G.\mathsf{input})}
