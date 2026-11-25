@@ -80,7 +80,7 @@ fn flat_slot(rows: &FlatRows, column: &str) -> usize {
 
 /// Prints the recorded bounds source; no printer state is consulted, so every
 /// packing of one record renders the same domain.
-fn packing_bounds(bounds: &FieldBounds) -> TokenStream {
+pub(crate) fn packing_bounds(bounds: &FieldBounds) -> TokenStream {
     match bounds {
         FieldBounds::Column(ColumnBounds::Resident { sources }) => {
             let values = sources.iter().map(|(host, index)| {
@@ -3034,6 +3034,8 @@ fn translate_with_metadata(
                         &codecs,
                         &compiler.rows.query_captures,
                         geometry,
+                        &analysis.gpu_bindings.realization.auxiliary.as_ref()
+                            .expect("checked auxiliary geometry").group_reduce,
                         &compiler.rows,
                         &analysis.gpu_bindings.bounds,
                         computed_inputs,
@@ -5416,17 +5418,17 @@ mod tests {
         }
     }
 
-    /// Accumulator providers of every emitted runtime fold; `None` is the
-    /// global (keyless) `GlobalFold` path.
-    fn fold_providers(generated: &syn::Expr) -> Vec<Option<syn::Type>> {
-        struct Folds(Vec<Option<syn::Type>>);
+    /// Calls into the recorded provider, in evaluation order. A guarded
+    /// dense fold and its segmented fallback must name the very same type.
+    fn fold_providers(generated: &syn::Expr) -> Vec<(String, Option<syn::Type>)> {
+        struct Folds(Vec<(String, Option<syn::Type>)>);
         impl<'a> syn::visit::Visit<'a> for Folds {
             fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
                 if let syn::Expr::Path(path) = &*call.func
-                    && is_fold_call(&path.path)
+                    && let Some(method) = path.path.segments.last()
+                    && (is_fold_call(&path.path) || method.ident == "dense_frame")
                 {
-                    self.0
-                        .push(path.qself.as_ref().map(|qself| (*qself.ty).clone()));
+                    self.0.push((method.ident.to_string(), path.qself.as_ref().map(|qself| (*qself.ty).clone())));
                 }
                 syn::visit::visit_expr_call(self, call);
             }
@@ -6267,7 +6269,10 @@ mod tests {
             let expression = translate(&physical, &structures, &program, &analysis).unwrap();
             let generated = expression.to_token_stream().to_string();
             let expected = keyed.then(|| structure_analysis.groups["grouped"].ty.clone());
-            assert_eq!(fold_providers(&expression), vec![expected], "{generated}");
+            let calls = if keyed {
+                vec![("dense_frame".into(), expected.clone()), ("fold".into(), expected)]
+            } else { vec![("new".into(), None)] };
+            assert_eq!(fold_providers(&expression), calls, "{generated}");
             let names = idents(expression.to_token_stream());
             assert!(!names.contains("upload_numeric_columns"));
             assert!(!names.contains("from_rows"));
@@ -6304,7 +6309,8 @@ mod tests {
         let names = idents(expression.to_token_stream());
         assert_eq!(
             fold_providers(&expression),
-            vec![Some(crate::grouping::provider().ty)],
+            vec![("dense_frame".into(), Some(crate::grouping::provider().ty)),
+                 ("fold".into(), Some(crate::grouping::provider().ty))],
         );
         assert!(matches!(
             analysis.gpu_publications["groups"].storage,
@@ -6413,7 +6419,7 @@ mod tests {
                 .expect(&generated);
             assert!(upload < reduction, "{generated}");
             assert!(calls.1, "the authored opaque Rust cast must be preserved");
-            assert_eq!(fold_providers(&expression), vec![None], "{generated}");
+            assert_eq!(fold_providers(&expression), vec![("new".into(), None)], "{generated}");
         }
     }
 

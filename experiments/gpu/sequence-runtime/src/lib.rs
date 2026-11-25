@@ -71,9 +71,9 @@ pub struct Auxiliary {
     pub range: Geometry,
     /// Canon element kernels (`gather_lane`, `unpack_field`).
     pub canon: Geometry,
-    /// Group element kernels (`identity`, `gather_key`, `boundaries`).
+    /// Group element kernels, including radix keys and sorted run fragments.
     pub group: Geometry,
-    /// Group `reduce`: one block per group and column.
+    /// Per-block dense keyed partial tables and their combine.
     pub group_reduce: Geometry,
     /// `numeric_bounds` reduction of uploads and measured publications.
     pub bounds: Geometry,
@@ -82,9 +82,9 @@ pub struct Auxiliary {
 impl Auxiliary {
     /// Supported-value table. Every auxiliary kernel's launch contract and
     /// `launch_bounds` fix 256-thread blocks, with matching grid strides and
-    /// tree reductions. Element kernels use no shared memory; `reduce` stages
-    /// 256 i64 lanes (4096 B); `numeric_bounds` writes one partial pair per
-    /// warp. There is deliberately no public default: callers pass the record.
+    /// warp reductions. Element kernels use no dynamic shared memory; dense
+    /// tables have 4096 B of i64 cells. `numeric_bounds` writes one partial
+    /// pair per warp. Callers pass the record; there is no public default.
     pub(crate) const SUPPORTED: Auxiliary = Auxiliary {
         selection: Geometry {
             block_threads: 256,
