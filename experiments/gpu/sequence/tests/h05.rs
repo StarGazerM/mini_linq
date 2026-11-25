@@ -101,7 +101,7 @@ fn every_generated_kernel_fits_the_parameter_area() {
                             "u32" => (4, 4),
                             "usize" | "i64" => (8, 8),
                             "ColumnView" => (40, 8),
-                            "RangeView" => (72, 8),
+                            "RangeView" => (40, 8),
                             other => panic!("unknown emitted ABI type {other}"),
                         },
                         other => panic!("unknown emitted ABI type {}", other.to_token_stream()),
@@ -206,6 +206,11 @@ fn grading_records_two_queries_ranges_membership_and_bounded_publication() {
     assert_eq!(
         analysis.dispatches[1].concatenation,
         OutputProtocol::Bounded
+    );
+    use cq_lang_sequence::gpu::{InitialCapacity::DispatchCount, ReservationSeed};
+    assert_eq!(
+        analysis.dispatches[1].gpu.as_ref().unwrap().capacity,
+        DispatchCount(ReservationSeed::Declared)
     );
     assert_eq!(
         analysis.tilings["result"],
@@ -368,7 +373,23 @@ fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
     let query = functions.queries[1].to_token_stream().to_string();
     assert!(!query.contains("__row"));
     assert!(!query.contains("__stored"));
-    assert!(query.contains("device :: decode ("));
+    #[derive(Default)]
+    struct ChildCodes(std::collections::BTreeSet<String>);
+    impl<'ast> Visit<'ast> for ChildCodes {
+        fn visit_expr_assign(&mut self, assignment: &'ast syn::ExprAssign) {
+            let value = assignment.right.to_token_stream().to_string();
+            if value.contains("device :: range_payload (") && value.contains("__child_position") {
+                assert!(value.contains("* __cq_sequence_provider_view_") && value.contains(". payload . add ("));
+                let code = assignment.left.to_token_stream().to_string();
+                assert!(code.starts_with("__code_"), "child payload must feed a live code column: {code}");
+                self.0.insert(code);
+            }
+            visit::visit_expr_assign(self, assignment);
+        }
+    }
+    let mut codes = ChildCodes::default();
+    codes.visit_block(&functions.queries[1].block);
+    assert_eq!(codes.0.len(), 2, "expected the order and supplier code columns");
     assert!(
         !query.contains("decode_u32"),
         "parent carriers use the recorded i64 ABI"

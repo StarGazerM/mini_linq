@@ -758,6 +758,7 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
         a = store flatten lookup r [a] rows l;
         output count;
     });
+    p.evidence = syn::parse_quote!(evidence from authored("launch fixture") { count L = 1024; });
     grade(&mut p, quote!(a at device;));
     let mut analysis = common::check_grading(&p, &gpu()).unwrap();
     assert_eq!(analysis.dispatches.len(), 1);
@@ -803,9 +804,9 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
         } else {
             vec![gpu::Synchronization::CountAndFailure]
         },
-        capacity: gpu::InitialCapacity::Zero,
+        capacity: gpu::InitialCapacity::DispatchCount(gpu::ReservationSeed::Zero),
         reservation: gpu::Reservation::StripeBatch,
-        chains: vec![gpu::ChainExecution { strips }],
+        chains: vec![gpu::ChainExecution { strips, split_child: None }],
         share: gpu::Share::None,
         meta: gpu::Meta::Fresh,
     });
@@ -816,6 +817,23 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
 fn reject_gpu_launch(p: &Program, analysis: &Analysis) {
     let error = gpu::check(p, analysis).unwrap_err().to_string();
     assert!(error.contains("GPU-Launch:"), "{error}");
+}
+
+#[test]
+fn gpu_reservation_evidence_must_name_the_published_result_bound() {
+    use gpu::{InitialCapacity::DispatchCount, ReservationSeed};
+    let (p, mut analysis) = gpu_launch_fixture(false);
+    let result = analysis.results["a"].clone();
+    analysis.prefix_bounds.get_mut(&result).unwrap().rows = Some(17);
+    for (seed, accepted) in [
+        (ReservationSeed::Evidence(17), true),
+        (ReservationSeed::Evidence(16), false),
+        (ReservationSeed::Zero, false),
+        (ReservationSeed::Declared, false),
+    ] {
+        analysis.dispatches[0].gpu.as_mut().unwrap().capacity = DispatchCount(seed);
+        assert_eq!(gpu::check(&p, &analysis).is_ok(), accepted);
+    }
 }
 
 fn compact_publication_program(union: bool) -> Program {
@@ -1052,9 +1070,28 @@ fn gpu_launch_checker_accepts_recorded_positive_implicit_sizes() {
             analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Tiles { rows };
             gpu::check(&p, &analysis).unwrap();
         }
-        analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One;
-        gpu::check(&p, &analysis).unwrap();
+        analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One { max_rows: 1 };
+        reject_gpu_launch(&p, &analysis);
+        analysis.prefix_bounds.get_mut("l").unwrap().rows = Some(1);
+        if deferred {
+            gpu::check(&p, &analysis).unwrap();
+        } else {
+            reject_gpu_launch(&p, &analysis);
+        }
     }
+}
+
+#[test]
+fn fanout_requires_materialized_children_and_refuses_tile_local_folds() {
+    let (p, mut deferred) = gpu_launch_fixture(true);
+    deferred.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Fanout { rows: 19 };
+    assert!(gpu::check(&p, &deferred).unwrap_err().to_string().contains("GPU-FanoutLegal"));
+
+    let (p, mut materialized) = gpu_launch_fixture(false);
+    let execution = materialized.dispatches[0].gpu.as_mut().unwrap();
+    execution.partition = gpu::Partition::Fanout { rows: 19 };
+    execution.chains[0].strips[1].fold = Some(gpu::FoldScope::Tiles(1));
+    assert!(gpu::check(&p, &materialized).unwrap_err().to_string().contains("GPU-FanoutLegal"));
 }
 
 #[test]
@@ -1213,7 +1250,7 @@ fn frontier_refines_only_the_checked_expanding_arena_terminal() {
         reject_gpu_launch(&p, &invalid);
     };
     refused(|a| a.dispatches[0].gpu.as_mut().unwrap().meta = gpu::Meta::Fresh);
-    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One);
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One { max_rows: 1 });
     refused(|a| a.dispatches[0].gpu.as_mut().unwrap().chains[0].strips.truncate(1));
     refused(|a| a.dispatches[0].gpu.as_mut().unwrap().chains[0].strips[0].fold =
         Some(gpu::FoldScope::Whole));

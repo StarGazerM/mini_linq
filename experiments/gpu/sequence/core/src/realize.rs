@@ -44,12 +44,12 @@ fn partials_geometry() -> BlockGeometry {
     }
 }
 
-/// Shared bytes of one keyed-group reduction block (one block per group).
+/// Capacity of a keyed provider block's shared dense partial table.
 const GROUP_REDUCE_SHARED_BYTES: u32 = 4096;
 
 /// The geometry each runtime auxiliary family is compiled for: element
-/// kernels in blocks of the collective width, the keyed reduction with its
-/// per-group shared buffer.
+/// kernels in blocks of the collective width, dense partials with their
+/// block-private table of occupancy and typed aggregate cells.
 fn auxiliary() -> Auxiliary {
     let elements = BlockGeometry {
         block_threads: crate::BLOCK_THREADS,
@@ -71,8 +71,8 @@ fn auxiliary() -> Auxiliary {
 
 /// Whether the runtime's auxiliary kernels can launch with the recorded
 /// geometry: their templates are compiled for blocks of the collective width;
-/// element kernels use no dynamic shared memory and the keyed reduction its
-/// per-group buffer.
+/// element kernels use no dynamic shared memory and dense reduction uses
+/// the recorded block-private histogram capacity.
 fn supported_auxiliary(record: &Auxiliary) -> bool {
     let elements = |geometry: &BlockGeometry| {
         geometry.block_threads == crate::BLOCK_THREADS && geometry.shared_bytes == 0
@@ -108,7 +108,7 @@ pub(crate) fn select(
         let launches = analysis.dispatches.iter().map(|dispatch| {
             if reusable {
                 match dispatch.gpu.as_ref().expect("graded GPU dispatch").partition {
-                    cq_lang_sequence::gpu::Partition::One => Launch::ProgramOne,
+                    cq_lang_sequence::gpu::Partition::One { .. } => Launch::ProgramOne,
                     _ => Launch::ProgramOccupancy,
                 }
             } else {
@@ -1787,7 +1787,7 @@ pub(crate) fn check(
     }
     for (launch, dispatch) in records.launches.iter().zip(&analysis.dispatches) {
         if *launch == Launch::ProgramOne
-            && !matches!(dispatch.gpu.as_ref().expect("checked GPU dispatch").partition, cq_lang_sequence::gpu::Partition::One)
+            && !matches!(dispatch.gpu.as_ref().expect("checked GPU dispatch").partition, cq_lang_sequence::gpu::Partition::One { .. })
         {
             return Err(error("GPU-ProgramLaunch: one-block preparation requires the one-part partition"));
         }

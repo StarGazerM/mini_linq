@@ -106,6 +106,7 @@ pub fn group(
     codecs: &crate::runs::Codecs,
     captures: &cq_lang_structures::syntax::Captures,
     geometry: &BlockGeometry,
+    dense_geometry: &BlockGeometry,
     rows: &crate::rows::Rows,
     bounds: &std::collections::BTreeMap<String, cq_lang_sequence::gpu::bindings::ColumnBounds>,
     computed_inputs: &BTreeSet<(String, usize)>,
@@ -141,6 +142,8 @@ pub fn group(
                 if sources.iter().any(|source| !computed_inputs.contains(source)))
     }).collect();
     let fold = match (keys, provider) {
+        // The recorded provider owns frame admission. Missing measured
+        // enclosures postpone that decision until the live keys are measured.
         (0, None) => quote!(::cq_gpu_sequence_runtime::group::fold),
         (0, Some(_)) => {
             return Err(syn::Error::new_spanned(
@@ -157,6 +160,12 @@ pub fn group(
         }
     };
     let mut arguments = columns.iter().cloned().map(Some).collect::<Vec<_>>();
+    let enclosures: Vec<_> = columns.iter().map(|key| match bounds.get(key) {
+        Some(b @ cq_lang_sequence::gpu::bindings::ColumnBounds::Resident { .. }) =>
+            crate::emit::packing_bounds(&cq_lang_sequence::gpu::publication::FieldBounds::Column(b.clone())),
+        _ => quote!(::cq_gpu_runtime::Bounds::Empty),
+    }).collect();
+    let mut kinds = Vec::new();
     let mut descriptors = Vec::new();
     for aggregate in &group.aggregates {
         let kind = match aggregate.kind {
@@ -165,6 +174,7 @@ pub fn group(
             AggregateKind::Min => 2,
             AggregateKind::Max => 3,
         };
+        kinds.push(kind);
         let ty = &aggregate.ty;
         let optional = kind >= 2;
         descriptors.push(quote!(
@@ -207,21 +217,23 @@ pub fn group(
         uses.insert("values".to_owned());
     }
     let mut writes = Vec::new();
+    let names = (0..width).map(|i| format_ident!("__arg_{i}")).collect::<Vec<_>>();
     for (column, argument) in arguments.iter().enumerate() {
+        let name = &names[column];
         if let Some(argument) = argument {
             // IF-Capture: a capture argument is one host value, passed as a kernel scalar.
             if let Some((parameter, value)) = capture_argument(captures, argument, column) {
                 params.push((parameter.clone(), syn::parse_quote!(i64)));
                 args.push((parameter.clone(), value));
                 uses.insert(parameter.to_string());
-                writes.push(quote!(*values.add(position*#width+#column)=#parameter;));
+                writes.push(quote!(let #name = #parameter;));
                 continue;
             }
             if let Some(input) = &direct {
                 let value = input.columns.get(argument).ok_or_else(|| {
                     syn::Error::new_spanned(group, "GPU resident group argument is absent")
                 })?;
-                writes.push(quote!(*values.add(position*#width+#column)=#value as i64;));
+                writes.push(quote!(let #name = #value as i64;));
                 continue;
             }
             let field = input_columns
@@ -262,11 +274,10 @@ pub fn group(
             );
             // DECODE V: P6 grouped input reconstructs packed FOR fields before relational grouping and aggregation.
             writes.push(quote! {
-                let offset = #offset;
-                *values.add(position*#width+#column)=#base.wrapping_add(offset as i64);
+                let #name = #base.wrapping_add((#offset) as i64);
             });
         } else {
-            writes.push(quote!(*values.add(position*#width+#column)=1i64;));
+            writes.push(quote!(let #name = 1i64;));
         }
     }
     let decoded = decoders(group, &columns, output_columns, output_types, codecs)?;
@@ -299,6 +310,94 @@ pub fn group(
         let __cq_group_live=unsafe {::cq_gpu_sequence_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),#length)?};
     });
     let release_live = filtered.then(|| quote!(drop(__cq_group_live);));
+    let stores = names.iter().enumerate().map(|(column, name)| quote!(*values.add(position*#width+#column)=#name;));
+    let dense = if let Some(provider) = provider {
+        let mut parameters = params.clone();
+        let mut arguments = args.clone();
+        let mut used = uses.clone();
+        for unused in ["values", "live"] {
+            parameters.retain(|(p, _)| p != unused);
+            arguments.retain(|(p, _)| p != unused);
+            used.remove(unused);
+        }
+        for (n, ty, arg) in [
+            ("axes", syn::parse_quote!(*const i64), quote!(__dense.axes())),
+            ("bins", syn::parse_quote!(usize), quote!(__dense.bins())),
+            ("partials", syn::parse_quote!(*mut i64), quote!(__dense.partials())),
+            ("error", syn::parse_quote!(*mut u32), quote!(__dense.error())),
+        ] {
+            parameters.push((format_ident!("{n}"), ty));
+            arguments.push((format_ident!("{n}"), arg));
+            used.insert(n.into());
+        }
+        let stride = kinds.len()+1;
+        let identities = std::iter::once(quote!(0i64)).chain(kinds.iter().map(|kind| match kind {
+            2 => quote!(i64::MAX), 3 => quote!(i64::MIN), _ => quote!(0i64),
+        }));
+        let address = names[..keys].iter().enumerate().map(|(i, name)| quote! {
+            let radix = *axes.add(2*#i+1) as usize;
+            let digit = #name.wrapping_sub(*axes.add(2*#i)) as usize;
+            in_frame &= digit < radix;
+            bin = bin.wrapping_mul(radix).wrapping_add(digit);
+        });
+        let updates = names[keys..].iter().zip(&kinds).enumerate().map(|(i,(name,kind))| quote! {
+            ::cq_gpu_sequence_runtime::group::dense_add(cell.add(1+#i), #kind, #name, error);
+        });
+        let dense_name = format_ident!("{kernel}_dense");
+        let smem = proc_macro2::Literal::u32_unsuffixed(dense_geometry.shared_bytes);
+        let t = proc_macro2::Literal::u32_unsuffixed(dense_geometry.block_threads);
+        let abi = crate::emit::CheckedKernel::lower(&dense_name, quote! {
+            #[kernel] #[launch_bounds(#t)]
+            #[launch_contract(domain=1,block=(#t,1,1),dynamic_shared_range=(#smem,#smem))]
+        }, parameters, used, quote! { unsafe {
+            let lane = ::cuda_device::thread::threadIdx_x() as usize;
+            let shared = ::cuda_device::DynamicSharedArray::<i64,16>::get_raw().cast::<i64>();
+            let cells = bins * #stride;
+            let mut j = lane;
+            while j < cells {
+                *shared.add(j) = [#(#identities),*][j % #stride];
+                j += #t;
+            }
+            ::cuda_device::thread::sync_threads();
+            let mut position = ::cuda_device::thread::index_1d().get() as usize;
+            while position < length {
+                let mut __live = true;
+                #load
+                if __live {
+                    #(#writes)*
+                    let mut bin = 0usize;
+                    let mut in_frame = true;
+                    #(#address)*
+                    if in_frame {
+                        let cell = shared.add(bin * #stride);
+                        ::cq_gpu_sequence_runtime::group::dense_add(cell, 0, 1, error);
+                        #(#updates)*
+                    } else { ::cq_gpu_sequence_runtime::device::flag_overflow(error); }
+                }
+                position += ::cuda_device::thread::gridDim_x() as usize * #t;
+            }
+            ::cuda_device::thread::sync_threads();
+            let mut j = lane;
+            while j < cells {
+                *partials.add(::cuda_device::thread::blockIdx_x() as usize*cells+j) = *shared.add(j);
+                j += #t;
+            }
+        } }, rows, cq_lang_sequence::gpu::realization::Launch::InvocationOccupancy, dense_geometry.shared_bytes)?;
+        let shape = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,#t,#smem)));
+        let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(grid,#t,#smem)));
+        let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid), arguments)?;
+        Some((abi.definition(), quote! {
+            if let Some(frame) = <#provider>::dense_frame(#length, &[#(#enclosures),*], #stride-1, &__cq_auxiliary)? {
+                let shape = #shape?;
+                let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(), (#length).div_ceil(#t), #t, #smem)?;
+                let __dense = ::cq_gpu_sequence_runtime::group::DenseFold::new(__cq_pool.clone(), frame, grid, &__cq_specs)?;
+                let prepared = #prepare?;
+                #call?;
+                unsafe { __dense.finish(__cq_statuses, &__cq_auxiliary)? }
+            } else
+        }))
+    } else { None };
+    let (dense_definition, dense_guard) = dense.unwrap_or_default();
     let abi = crate::emit::CheckedKernel::lower(kernel, quote! {
         #[kernel]
         #[launch_bounds(#threads)]
@@ -310,7 +409,7 @@ pub fn group(
                         let mut __live = true;
                         #load
                         #live_write
-                        if __live { #(#writes)* }
+                        if __live { #(#writes)* #(#stores)* }
                         position+=::cuda_device::thread::gridDim_x() as usize*#threads;
                     }
                 }
@@ -320,8 +419,11 @@ pub fn group(
     let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid),
         args)?;
     Ok((
-        abi.definition(),
+        { let definition = abi.definition(); quote!(#definition #dense_definition) },
         quote! {
+            #status
+            let __cq_specs = [#(#descriptors),*];
+            let __cq_result = (#dense_guard {
             let __cq_group_values=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),#length.checked_mul(#width).ok_or("group allocation overflow")?)?};
             #live_buffer
             if #length!=0 {
@@ -330,13 +432,14 @@ pub fn group(
                 let prepared = #prepare?;
                 #call?;
             }
-            #status
-            let __cq_result=unsafe {#fold(
-                __cq_pool.clone(),&__cq_group_values,#live_argument,#length,&[#(#domain_keys),*],&[#(#descriptors),*],__cq_statuses,&__cq_auxiliary,
-            )?}.with_decoder(
+            let output = unsafe {#fold(
+                __cq_pool.clone(),&__cq_group_values,#live_argument,#length,&[#(#domain_keys),*],&__cq_specs,__cq_statuses,&__cq_auxiliary,
+            )?};
+            #release_live
+            output
+            }).with_decoder(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}
             );
-            #release_live
         },
     ))
 }
@@ -384,7 +487,12 @@ fn decoders(
                 u32::try_from(values[#slot]).map_err(|_| "GPU symbol code exceeds u32")?
             ))
         } else if optional {
-            quote!(if valid[#slot]==0 {None} else {Some(::cq_gpu_runtime::decode_value(values[#slot], &__cq_dictionary)?)})
+            quote!({
+                let value: #ty = if valid[#slot] == 0 { None } else {
+                    Some(::cq_gpu_runtime::decode_value(values[#slot], &__cq_dictionary)?)
+                };
+                value
+            })
         } else {
             quote!(::cq_gpu_runtime::decode_value::<#ty>(values[#slot], &__cq_dictionary)?)
         });

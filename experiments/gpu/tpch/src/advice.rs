@@ -43,14 +43,14 @@ pub enum Placement {
     #[default]
     Host,
     Device,
-    /// Keep scalar stage results resident; nullable or host-target results stay host.
+    /// Select the publication protocol of the recorded execution target.
     Automatic,
 }
 
 impl Placement {
-    pub fn resolve(self, target: Target, nullable: bool) -> Self {
+    pub fn resolve(self, target: Target) -> Self {
         match self {
-            Self::Automatic if matches!(target, Target::Device) && !nullable => Self::Device,
+            Self::Automatic if matches!(target, Target::Device) => Self::Device,
             Self::Automatic => Self::Host,
             explicit => explicit,
         }
@@ -624,8 +624,7 @@ pub fn hand_membership(
         .collect())
 }
 
-/// Share only legal placement/catalog discovery with decomposition. The root,
-/// expansion boundaries, tile/items and output protocol are authored here.
+/// Apply the authored geometry as an overlay on the checked decomposition.
 pub fn hand_schedule(
     physical: &cq_lang_physical::Program,
     structures: &cq_lang_structures::Program,
@@ -646,11 +645,17 @@ pub fn hand_schedule(
         program: source.clone(),
         trace: Vec::new(),
     };
+    fn geometry_target(step: &Advice) -> Option<&syn::Ident> {
+        match step {
+            Advice::Tile { name, .. } | Advice::Partition { name, .. } | Advice::Segment { name, .. } =>
+                Some(name),
+            _ => None,
+        }
+    }
+    let mut geometry = Vec::new();
     for step in suggested.trace {
-        if matches!(
-            step,
-            Advice::Tile { .. } | Advice::Partition { .. } | Advice::Segment { .. }
-        ) {
+        if geometry_target(&step).is_some() {
+            geometry.push(step);
             continue;
         }
         (planned.physical, planned.structures, planned.program) =
@@ -778,7 +783,13 @@ pub fn hand_schedule(
             });
         }
     }
-    schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Count));
+    // Formal rule DR-ScheduleOverlay: keep geometry for targets the recipe
+    // does not schedule. Replay it before authored steps, in planner order.
+    let authored: std::collections::BTreeSet<_> =
+        schedule.iter().filter_map(geometry_target).collect();
+    geometry.retain(|step| !authored.contains(geometry_target(step).expect("geometry target")));
+    schedule.splice(..0, geometry);
+    schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Reserve));
     for step in schedule {
         (planned.physical, planned.structures, planned.program) =
             step.apply(&planned.physical, &planned.structures, &planned.program)?;

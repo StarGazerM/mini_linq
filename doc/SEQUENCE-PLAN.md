@@ -398,6 +398,7 @@ preparation owned by the target's `gpu::realization::Realization.launches`:
 | Range-offset completion | `OffsetScan::DeviceExclusive`; CUB device-wide scan and parallel overflow check before consumers, with per-pool module/workspace reuse | exact (was serial one-block finalize) |
 | Whole-input fold | `FoldCompletion::BlockPartials`; distributed block partials followed by stream-ordered combine | exact (was one-block finalize) |
 | Host metadata synchronization | `Synchronization::{CountAndFailure,HeadCursor,RangeOffsets}`: check an individual dispatch, check a group of heads at their publication point, or read a completed range total. Replay consumes the recorded check. | checked |
+| Ordinary GPU output reservation | `InitialCapacity::DispatchCount` records the cold seed (declared capacity, conditional prefix bound, zero or machine rows); the context-bound compiled module retains the last validated physical count per dispatch. A short attempt publishes nothing and replays with the required count. | GPU-DispatchReservation |
 | Datalog candidate reservation | An eligible `reserve_previous` terminal reserves directly in the head's buffer. Counts persist across producers until the recorded publication barrier; heads publishing together share one metadata download. | GPU-HeadCursor |
 
 Historical measurement before the cutover (H05 automatic, SF10, `nsys`, 2026-10-28): dispatch 27
@@ -640,9 +641,8 @@ Decision procedure (bounded enumeration, no search):
    `segment(d, n, items m)` rewrite pairs an inner-flatten store with an
    outer tile (BE-Offsets and BE-Partition), shared by the library and macro.
 3. Output: preserve every recorded protocol, including `count` inserted by
-   lowering. Only when output is absent, fill `count` when the final length
-   is a function of input lengths (no `compact`/`canon` on the final chain),
-   else `reserve`; `bounded(n)` only when a capacity is authored.
+   lowering. Only when output is absent, fill `bounded` for an authored
+   capacity, `reserve` for a GPU machine or variable output, otherwise `count`.
 4. Obligations: validate each reported codec/canon/provider obligation
    against catalog capabilities at its level. Structures already records
    provider and canon types; planning does not replace them or introduce

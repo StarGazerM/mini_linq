@@ -590,6 +590,7 @@ dependencies = [
  "cq-load",
  "cq-physical-lowering",
  "cq-planning",
+ "cq-print",
  "cq-relational-lowering",
  "cq-rewrite-passes",
  "cq-sequence-lowering",

@@ -8,6 +8,41 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub use super::bindings::ColumnBounds;
 
+/// Enumerate nullable columns in the order of their presence lanes.
+pub fn presence_slots(nullable: &[bool]) -> impl Iterator<Item = usize> + '_ {
+    nullable.iter().enumerate().filter_map(|(i, &optional)| optional.then_some(i))
+}
+
+pub fn check_presence_slots(nullable: &[bool], slots: &[usize]) -> syn::Result<()> {
+    let mut next = nullable.len();
+    for &slot in slots.iter().rev() {
+        if slot >= next || !nullable[slot] {
+            return Err(syn::Error::new(proc_macro2::Span::call_site(), "DR-NullableLanes: invalid presence slot"));
+        }
+        next = slot;
+    }
+    if slots.len() != nullable.iter().filter(|&&v| v).count() {
+        return Err(syn::Error::new(proc_macro2::Span::call_site(), "DR-NullableLanes: incomplete presence slots"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    #[test]
+    fn resident_nullable_layout() {
+        let nullable = [false, true, true, false];
+        assert_eq!(presence_slots(&nullable).collect::<Vec<_>>(), [1, 2]);
+        assert!(check_presence_slots(&nullable, &[1, 2]).is_ok());
+        for bad in [&[2][..], &[1, 1], &[2, 1], &[1, 3], &[1, 4]] {
+            assert!(check_presence_slots(&nullable, bad).is_err());
+        }
+        assert!(check_presence_slots(&[], &[]).is_ok());
+    }
+}
+
 /// Bounds are a column's recorded provenance domain, or a scalar fold's value range.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FieldBounds {

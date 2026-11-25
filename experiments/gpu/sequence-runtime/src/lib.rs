@@ -17,9 +17,7 @@ use gpu_compress::{Catalog, Domain};
 use gpu_compress_host::Kind;
 pub use gpu_device_columns::{MemoryResource, OutputCount};
 use rccl_cub::DoubleBuffer;
-use rccl_thrust::{
-    arithmetic_range, gather, lower_bound, select_flagged, sort_columns_lexicographic,
-};
+use rccl_thrust::{arithmetic_range, gather, select_flagged, sort_columns_lexicographic};
 use std::{cell::RefCell, sync::Arc};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -71,9 +69,9 @@ pub struct Auxiliary {
     pub range: Geometry,
     /// Canon element kernels (`gather_lane`, `unpack_field`).
     pub canon: Geometry,
-    /// Group element kernels (`identity`, `gather_key`, `boundaries`).
+    /// Group element kernels, including radix keys and sorted run fragments.
     pub group: Geometry,
-    /// Group `reduce`: one block per group and column.
+    /// Per-block dense keyed partial tables and their combine.
     pub group_reduce: Geometry,
     /// `numeric_bounds` reduction of uploads and measured publications.
     pub bounds: Geometry,
@@ -82,9 +80,9 @@ pub struct Auxiliary {
 impl Auxiliary {
     /// Supported-value table. Every auxiliary kernel's launch contract and
     /// `launch_bounds` fix 256-thread blocks, with matching grid strides and
-    /// tree reductions. Element kernels use no shared memory; `reduce` stages
-    /// 256 i64 lanes (4096 B); `numeric_bounds` writes one partial pair per
-    /// warp. There is deliberately no public default: callers pass the record.
+    /// warp reductions. Element kernels use no dynamic shared memory; dense
+    /// tables have 4096 B of i64 cells. `numeric_bounds` writes one partial
+    /// pair per warp. Callers pass the record; there is no public default.
     pub(crate) const SUPPORTED: Auxiliary = Auxiliary {
         selection: Geometry {
             block_threads: 256,
@@ -904,20 +902,68 @@ where
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RangeView {
-    pub offsets: ColumnView,
-    pub payload: *const ColumnView,
+    pub offsets: *const u32,
+    pub payload: *const device::RangePayloadView,
     pub payload_columns: u32,
     pub domain: u32,
     pub base: i64,
     pub len: u32,
 }
 
+/// One shared base-row map for all immutable payload columns. The pool
+/// outlives the RCCL buffer, whose resource and stream it owns.
+struct RangeOrder {
+    rows: DeviceBuffer<u32>,
+    _pool: Arc<Pool>,
+}
+
+/// Only projections from build-time storage need their own value buffer.
+enum PayloadStorage {
+    Resident {
+        column: Arc<EncodedColumn>,
+        order: Option<std::rc::Rc<RangeOrder>>,
+    },
+    Snapshot(EncodedColumn),
+}
+
+pub struct RangePayload {
+    storage: PayloadStorage,
+    len: usize,
+    bounds: Bounds,
+}
+impl RangePayload {
+    fn view(&self) -> device::RangePayloadView {
+        let (column, order) = match &self.storage {
+            PayloadStorage::Resident { column, order } => (
+                column.as_ref(),
+                order.as_ref().map_or(std::ptr::null(), |order| pointer(&order.rows)),
+            ),
+            PayloadStorage::Snapshot(column) => (column, std::ptr::null()),
+        };
+        device::RangePayloadView { column: unsafe { column.view() }, order }
+    }
+    pub fn bounds(&self) -> Bounds { self.bounds }
+
+    /// Download logical values in occurrence order. This is not a build step.
+    pub fn to_host(&self) -> Result<Vec<i64>> {
+        match &self.storage {
+            PayloadStorage::Snapshot(column) => column.to_host(),
+            PayloadStorage::Resident { column, .. } => {
+                let view = self.view();
+                unsafe {
+                    EncodedColumn::gather_plain(column.pool().clone(), view.column.into(), view.order, self.len)?
+                }.to_host()
+            }
+        }
+    }
+}
+
 /// An immutable, duplicate-preserving sorted range index. A keyed lookup is
 /// [offsets[key], offsets[key+1]); an empty key denotes [0,len) without a directory.
 pub struct RangeProvider {
-    offsets: EncodedColumn,
-    payload: Vec<EncodedColumn>,
-    payload_views: Arc<Buffer<ColumnView>>,
+    offsets: Buffer<u32>,
+    payload: Vec<RangePayload>,
+    payload_views: Arc<Buffer<device::RangePayloadView>>,
     domain: u32,
     base: i64,
     len: u32,
@@ -954,23 +1000,37 @@ impl RangeProvider {
     pub fn pool(&self) -> &Arc<Pool> {
         self.offsets.pool()
     }
-    pub fn offsets(&self) -> &EncodedColumn {
+    pub fn offsets(&self) -> &Buffer<u32> {
         &self.offsets
     }
-    pub fn payload(&self) -> &[EncodedColumn] {
+    pub fn offset_bounds(&self) -> Bounds {
+        if self.offsets.len() == 0 {
+            Bounds::Empty
+        } else {
+            Bounds::Inclusive { min: 0, max: i64::from(self.len) }
+        }
+    }
+    pub fn payload(&self) -> &[RangePayload] {
         &self.payload
     }
     pub fn bytes(&self) -> usize {
         self.offsets.bytes()
             + self.payload_views.bytes()
-            + self.payload.iter().map(EncodedColumn::bytes).sum::<usize>()
+            + self.payload.iter().find_map(|p| match &p.storage {
+                PayloadStorage::Resident { order: Some(order), .. } => Some(order.rows.len() * 4),
+                _ => None,
+            }).unwrap_or(0)
+            + self.payload.iter().map(|p| match &p.storage {
+                PayloadStorage::Snapshot(column) => column.bytes(),
+                PayloadStorage::Resident { .. } => 0,
+            }).sum::<usize>()
     }
     /// # Safety
     /// The returned views may only be read on `self.pool().stream()` while
     /// this provider is alive, within the advertised domain/row/column bounds.
     pub unsafe fn view(&self) -> RangeView {
         RangeView {
-            offsets: unsafe { self.offsets.view() },
+            offsets: self.offsets.ptr(),
             payload: self.payload_views.ptr(),
             payload_columns: self.payload.len() as u32,
             domain: self.domain,
@@ -1072,13 +1132,12 @@ fn with_radix_workspace(
     })
 }
 
-/// Per-provider count owners and descriptor storage. Construct during program
+/// Per-provider payload count owner and descriptor storage. Construct during program
 /// setup; published results retain their owners across later builds.
 pub struct RangeWorkspace {
     row_count: Arc<Buffer<u64>>,
-    offset_count: Arc<Buffer<u64>>,
-    payload_views: Arc<Buffer<ColumnView>>,
-    host_views: Vec<ColumnView>,
+    payload_views: Arc<Buffer<device::RangePayloadView>>,
+    host_views: Vec<device::RangePayloadView>,
     row_value: usize,
     base_rows: usize,
     entries: usize,
@@ -1091,7 +1150,6 @@ impl RangeWorkspace {
             .ok_or("range domain overflow")?;
         Ok(Self {
             row_count: Arc::new(Buffer::from_host(pool.clone(), &[rows as u64])?),
-            offset_count: Arc::new(Buffer::from_host(pool.clone(), &[entries as u64])?),
             payload_views: Arc::new(unsafe {
                 Buffer::uninitialized(pool, descriptor.payload.len())?
             }),
@@ -1232,7 +1290,6 @@ impl<'pool> RangeBuilder<'pool> {
             }
             _ => (base_rows, None),
         };
-        let entries = workspace.entries;
         if rows != workspace.row_value {
             if Arc::strong_count(&workspace.row_count) != 1 {
                 workspace.row_count =
@@ -1245,57 +1302,16 @@ impl<'pool> RangeBuilder<'pool> {
             workspace.row_value = rows;
         }
         let row_count = workspace.row_count.clone();
-        let offset_count = workspace.offset_count.clone();
         if descriptor.key.is_empty() {
-            let source = selected
-                .as_ref()
-                .map_or(std::ptr::null(), |selected| pointer(selected) as *const u32);
-            let payload = descriptor
-                .payload
-                .iter()
-                .map(|payload| unsafe {
-                    // DECODE I: keyless payload publication decodes then FOR-reencodes selected rows; avoidable reorganization, P4 keep index payloads plain.
-                    pack_payload(pool, payload, source, rows, row_count.clone())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let offsets = unsafe {
-                EncodedColumn::from_device_with_bounds(
-                    pool.clone(),
-                    std::ptr::null::<i64>(),
-                    0,
-                    offset_count,
-                    0,
-                    Codec::For,
-                    Bounds::Empty,
-                )?
-            };
-            if let Some(selected) = selected {
-                release(stream, selected)?;
-            }
+            let payload = range_payloads(pool, &descriptor.payload, selected, rows, row_count)?;
+            let offsets = self.directory(None, workspace.entries)?;
             return finish(offsets, payload, 0, 0, rows, workspace);
         }
         let first = &descriptor.key[0];
         // Empty selections still own a complete all-zero directory.
         if rows == 0 {
-            let zeros = Buffer::<i64>::zeroed(pool.clone(), entries)?;
-            let offsets = unsafe {
-                EncodedColumn::from_device_with_bounds(
-                    pool.clone(),
-                    zeros.ptr(),
-                    entries,
-                    offset_count,
-                    0,
-                    Codec::For,
-                    Bounds::singleton(0),
-                )?
-            };
-            let payload = descriptor
-                .payload
-                .iter()
-                .map(|payload| unsafe {
-                    pack_payload(pool, payload, std::ptr::null(), 0, row_count.clone())
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let offsets = self.directory(None, workspace.entries)?;
+            let payload = range_payloads(pool, &descriptor.payload, None, 0, row_count)?;
             if let Some(selected) = selected {
                 release(stream, selected)?;
             }
@@ -1420,42 +1436,13 @@ impl<'pool> RangeBuilder<'pool> {
                 release(stream, alternate_order)?;
             }
         }
-        let mut offsets = temporary::<u64>(pool, entries)?;
-        lower_bound(
-            &exec,
-            &keys,
-            arithmetic_range(0_u32, 1, entries),
-            &mut offsets,
-        )?;
-        let payload = descriptor
-            .payload
-            .iter()
-            .map(|payload| unsafe {
-                // DECODE I: sorted index payload publication decodes then FOR-reencodes rows; avoidable reorganization, P4 keep index runs plain.
-                pack_payload(pool, payload, pointer(&order), rows, row_count.clone())
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let packed_offsets = unsafe {
-            // Lower-bound positions lie in 0..=rows, including empty buckets.
-            EncodedColumn::from_device_with_bounds(
-                pool.clone(),
-                pointer(&offsets) as *const i64,
-                entries,
-                offset_count,
-                0,
-                Codec::For,
-                Bounds::Inclusive {
-                    min: 0,
-                    max: rows as i64,
-                },
-            )?
-        };
-        for buffer in [keys, order].into_iter().chain(selected) {
+        let offsets = self.directory(Some(&keys), workspace.entries)?;
+        let payload = range_payloads(pool, &descriptor.payload, Some(order), rows, row_count)?;
+        for buffer in std::iter::once(keys).chain(selected) {
             release(stream, buffer)?;
         }
-        release(stream, offsets)?;
         finish(
-            packed_offsets,
+            offsets,
             payload,
             first.domain_size,
             key_base(first.column.bounds()),
@@ -1463,11 +1450,38 @@ impl<'pool> RangeBuilder<'pool> {
             workspace,
         )
     }
+
+    /// Formal rule GPU-DenseDirectory: publish lower-bound ranks in their final storage.
+    fn directory(
+        &self,
+        sorted: Option<&DeviceBuffer<u32>>,
+        entries: usize,
+    ) -> Result<Buffer<u32>> {
+        match sorted {
+            Some(keys) => {
+                // Every entry, including the end sentinel, has exactly one writer.
+                let values = unsafe { Buffer::uninitialized(self.pool.clone(), entries)? };
+                let shape = self.module.prepare_dense_directory(self.range.config(1))?;
+                let threads = entries.div_ceil(kernels::DIRECTORY_TILE) * 32;
+                let blocks = self.range.grid(shape.function(), threads)?;
+                self.module.dense_directory(
+                    self.pool.stream(),
+                    &self.module.prepare_dense_directory(self.range.config(blocks))?,
+                    pointer(keys),
+                    keys.len() as u32,
+                    entries as u32,
+                    values.ptr(),
+                )?;
+                Ok(values)
+            }
+            None => Buffer::zeroed(self.pool.clone(), entries),
+        }
+    }
 }
 
 fn finish(
-    offsets: EncodedColumn,
-    payload: Vec<EncodedColumn>,
+    offsets: Buffer<u32>,
+    payload: Vec<RangePayload>,
     domain: usize,
     base: i64,
     len: usize,
@@ -1476,7 +1490,7 @@ fn finish(
     workspace.host_views.clear();
     workspace
         .host_views
-        .extend(payload.iter().map(|column| unsafe { column.view() }));
+        .extend(payload.iter().map(RangePayload::view));
     let views = &workspace.host_views;
     if Arc::strong_count(&workspace.payload_views) != 1 {
         workspace.payload_views = Arc::new(Buffer::from_host_async(offsets.pool().clone(), views)?);
@@ -1498,55 +1512,34 @@ fn finish(
     }
     Ok(provider)
 }
-// DECODE I: payload packing reconstructs source values then emits new FOR frames; avoidable reorganization, P4 keep index runs plain.
-unsafe fn pack_payload(
-    pool: &Arc<Pool>,
-    payload: &PayloadDescriptor,
-    order: *const u32,
-    rows: usize,
-    count: Arc<Buffer<u64>>,
-) -> Result<EncodedColumn> {
-    // A permutation or subset preserves the source enclosure, not necessarily
-    // its extrema. A known empty prefix has no values to enclose.
-    let bounds = if rows == 0 { Bounds::Empty } else { payload.column.bounds() };
-    match payload.kind {
-        PayloadKind::U32 => unsafe {
-            // DECODE I: u32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
-            EncodedColumn::from_gather_source_with_bounds::<_, u32>(
-                pool.clone(),
-                payload.column.view(),
-                order,
-                rows,
-                count,
-                0,
-                bounds,
-            )
-        },
-        PayloadKind::I32 => unsafe {
-            // DECODE I: i32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
-            EncodedColumn::from_gather_source_with_bounds::<_, i32>(
-                pool.clone(),
-                payload.column.view(),
-                order,
-                rows,
-                count,
-                0,
-                bounds,
-            )
-        },
-        PayloadKind::I64 => unsafe {
-            // DECODE I: i64 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
-            EncodedColumn::from_gather_source_with_bounds::<_, i64>(
-                pool.clone(),
-                payload.column.view(),
-                order,
-                rows,
-                count,
-                0,
-                bounds,
-            )
-        },
+
+// Formal rule GPU-RangePayload: source ownership determines the only lawful
+// representation; build-time borrows must become immutable snapshots.
+fn range_payloads(
+    pool: &Arc<Pool>, descriptors: &[PayloadDescriptor], order: Option<DeviceBuffer<u32>>,
+    rows: usize, count: Arc<Buffer<u64>>,
+) -> Result<Vec<RangePayload>> {
+    if descriptors.is_empty() {
+        if let Some(order) = order { release(pool.stream(), order)?; }
+        return Ok(Vec::new());
     }
+    let order = order.map(|rows| std::rc::Rc::new(RangeOrder { rows, _pool: pool.clone() }));
+    descriptors.iter().map(|payload| {
+        let bounds = if rows == 0 { Bounds::Empty } else { payload.column.bounds() };
+        let storage = match &payload.column.owner {
+            ColumnOwner::Encoded(column) => PayloadStorage::Resident {
+                column: column.clone(), order: order.clone(),
+            },
+            ColumnOwner::Rows(_) | ColumnOwner::Packed(_) => {
+                let positions = order.as_ref().map_or(std::ptr::null(), |order| pointer(&order.rows));
+                let values = unsafe {
+                    EncodedColumn::gather_plain(pool.clone(), payload.column.view(), positions, rows)?
+                };
+                PayloadStorage::Snapshot(EncodedColumn::from_plain_buffer(values, count.clone(), 0, bounds)?)
+            }
+        };
+        Ok(RangePayload { storage, len: rows, bounds })
+    }).collect()
 }
 fn key_bits(domain: usize) -> u32 {
     if domain <= 1 {

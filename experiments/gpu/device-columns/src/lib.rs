@@ -20,7 +20,7 @@ pub mod tile;
 use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
 pub use domain::{Domain, DomainView, KeyDomain, RANK_SPARSITY_THRESHOLD};
-pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
+pub use encoding::{decode_value, encode_value, AnswerWord, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
 pub use host_pack::{check_packed_layout, pack_for};
 pub use memory::{Buffer, MemoryResource, Pool, PoolMemoryStats, TieredMemoryResource};
@@ -592,6 +592,23 @@ impl EncodedColumn {
             codec,
             bounds,
         })
+    }
+
+    /// Materialize a live projection as native i64, without computing FOR frames.
+    ///
+    /// # Safety
+    /// On the pool stream, `order` is null (identity) or contains `rows`
+    /// initialized base-row indices, and every addressed source row is live.
+    pub unsafe fn gather_plain(
+        pool: Arc<Pool>, source: SourceView, order: *const u32, rows: usize,
+    ) -> Result<Buffer<i64>> {
+        let output = unsafe { Buffer::uninitialized(pool.clone(), rows)? };
+        if rows != 0 {
+            let module = module(&pool)?;
+            let launch = module.prepare_gather_plain(config(rows))?;
+            unsafe { module.gather_plain(pool.stream(), &launch, source, order, rows as u64, output.ptr())? };
+        }
+        Ok(output)
     }
 
     /// Gather `source[order[i]]` over the count-gated prefix of `rows` and
