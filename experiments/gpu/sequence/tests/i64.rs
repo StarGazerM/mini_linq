@@ -118,7 +118,7 @@ fn membership_case(span: i64) -> cq_gpu_sequence_runtime::Result<()> {
     )?;
     // Exceed the declared cold reservation, fit the validated count, then
     // grow beyond it and shrink again in the same compiled module/context.
-    for count in [2, 2, raw.len(), 1] {
+    for count in [1, 1, 2, raw.len(), 1] {
         let stored = DeviceColumns::from_rows(
             pool.clone(),
             &raw[..count],
@@ -145,7 +145,7 @@ fn membership_case(span: i64) -> cq_gpu_sequence_runtime::Result<()> {
         sequence {
             Edges = store rows l;
             ByA = store rows s;
-            result = store capacity 1 canon compact checked lookup s [a,c]
+            result = store capacity 0 canon compact checked lookup s [a,c]
                 flatten tile 1024 items 4 Edges;
             output count;
         }
