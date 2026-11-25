@@ -1802,6 +1802,10 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  \text{packed fields cover the complete published heading in recorded order}\quad
  \text{each field names its bounds provenance}}
  {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}
+\Rule{GPU-AnswerTransfer}{n=\mathsf{checkedCount}(T)\quad
+ (W_j,[l_j,h_j],f_j)=\mathsf{hostCodec}(\tau_j)\quad v_{ij}=\mathsf{decode}(T_j,i)}
+ {\mathsf{download}(T)=[(f_j(W_j(v_{ij})))_j]_{i<n}
+ \quad\text{reject if any }v_{ij}\notin[l_j,h_j]}
 \end{mathpar}
 Native run and column Host scans require an input schema whose arity and
 recorded logical-type ids match the source relation's ordered declaration;

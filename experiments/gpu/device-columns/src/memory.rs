@@ -145,6 +145,9 @@ pub struct Pool {
     stream: Arc<CudaStream>,
     context: Arc<CudaContext>,
     uploads: Mutex<UploadStaging>,
+    // Cache the largest idle staging buffer across lanes. A download leases
+    // it exclusively, without holding a pool lock across user scalar codecs.
+    downloads: Arc<Mutex<Option<PinnedHostBuffer<u64>>>>,
 }
 impl Pool {
     pub fn new(device: usize, initial: usize, maximum: usize) -> Result<Arc<Self>> {
@@ -157,6 +160,7 @@ impl Pool {
             stream,
             context,
             uploads: Mutex::new(UploadStaging::default()),
+            downloads: Arc::new(Mutex::new(None)),
         }))
     }
     /// A pool on a new non-blocking stream sharing this pool's allocator and
@@ -169,6 +173,7 @@ impl Pool {
             stream: self.context.new_stream()?,
             context: self.context.clone(),
             uploads: Mutex::new(UploadStaging::default()),
+            downloads: self.downloads.clone(),
         }))
     }
     /// Whether two pools allocate from the same memory resource and context,
@@ -585,6 +590,34 @@ impl<T: DeviceCopy> Buffer<T> {
             }
         }
         Ok(values)
+    }
+}
+impl Buffer<u64> {
+    /// Transfer one completed answer batch. Neither a slice into the staging
+    /// area nor a live DMA can escape this call.
+    pub(crate) fn read_answer<R>(&self, consume: impl FnOnce(&[u64]) -> Result<R>) -> Result<R> {
+        let cached = self.pool.downloads.lock().map_err(|_| "download staging lock poisoned")?.take();
+        let mut host = match cached {
+            Some(host) if host.len() >= self.len => host,
+            _ => PinnedHostBuffer::zeroed(self.pool.context(), self.len)?,
+        };
+        let submitted = unsafe {
+            cuda_core::simt::memory::memcpy_dtoh_async(
+                host.as_mut_ptr(), self.cu_deviceptr(), self.bytes(),
+                self.pool.stream().cu_stream(),
+            )
+        };
+        if let Err(error) = self.pool.stream().synchronize() {
+            // Do not free or recycle storage whose DMA completion is unknown.
+            std::mem::forget(host);
+            return Err(error.into());
+        }
+        let result = submitted.map_err(Into::into).and_then(|()| consume(&host.as_slice()[..self.len]));
+        let mut cached = self.pool.downloads.lock().map_err(|_| "download staging lock poisoned")?;
+        if cached.as_ref().is_none_or(|other| other.len() < host.len()) {
+            *cached = Some(host);
+        }
+        result
     }
 }
 impl<T: DeviceCopy> Drop for Buffer<T> {

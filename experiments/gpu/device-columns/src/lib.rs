@@ -20,7 +20,7 @@ pub mod tile;
 use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
 pub use domain::{Domain, DomainView, KeyDomain, RANK_SPARSITY_THRESHOLD};
-pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
+pub use encoding::{decode_value, encode_value, AnswerWord, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
 pub use host_pack::{check_packed_layout, pack_for};
 pub use memory::{Buffer, MemoryResource, Pool, PoolMemoryStats, TieredMemoryResource};
