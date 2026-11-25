@@ -5308,12 +5308,19 @@ mod tests {
             let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             let launch = analysis.dispatches[0].gpu.as_ref().unwrap();
             assert_eq!((&launch.partition, launch.chains[0].split_child), (&partition, child));
-            if child.is_some() {
-                for invalid in [None, Some(0), Some(2)] {
-                    let mut forged = analysis.clone();
-                    forged.dispatches[0].gpu.as_mut().unwrap().chains[0].split_child = invalid;
-                    assert!(cq_lang_sequence::gpu::check(&program, &forged).is_err());
-                }
+            for (alternative, split, legal) in [
+                (Partition::Tiles { rows: 256 }, None, true),
+                (Partition::Tiles { rows: 256 }, Some(1), false),
+                (Partition::Fanout { rows: 256 }, None, true),
+                (Partition::Fanout { rows: 256 }, Some(1), true),
+                (Partition::Fanout { rows: 256 }, Some(0), false),
+                (Partition::Fanout { rows: 256 }, Some(2), false),
+            ] {
+                let mut supplied = analysis.clone();
+                let execution = supplied.dispatches[0].gpu.as_mut().unwrap();
+                execution.partition = alternative;
+                execution.chains[0].split_child = split;
+                assert_eq!(cq_lang_sequence::gpu::check(&program, &supplied).is_ok(), legal);
             }
         }
     }

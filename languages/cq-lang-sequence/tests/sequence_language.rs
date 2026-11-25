@@ -1082,6 +1082,19 @@ fn gpu_launch_checker_accepts_recorded_positive_implicit_sizes() {
 }
 
 #[test]
+fn fanout_requires_materialized_children_and_refuses_tile_local_folds() {
+    let (p, mut deferred) = gpu_launch_fixture(true);
+    deferred.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Fanout { rows: 19 };
+    assert!(gpu::check(&p, &deferred).unwrap_err().to_string().contains("GPU-FanoutLegal"));
+
+    let (p, mut materialized) = gpu_launch_fixture(false);
+    let execution = materialized.dispatches[0].gpu.as_mut().unwrap();
+    execution.partition = gpu::Partition::Fanout { rows: 19 };
+    execution.chains[0].strips[1].fold = Some(gpu::FoldScope::Tiles(1));
+    assert!(gpu::check(&p, &materialized).unwrap_err().to_string().contains("GPU-FanoutLegal"));
+}
+
+#[test]
 fn gpu_launch_checker_rejects_deferred_range_without_offsets() {
     let (p, mut analysis) = gpu_launch_fixture(true);
     analysis.dispatches[0].gpu.as_mut().unwrap().offsets = gpu::OffsetScan::None;

@@ -1477,8 +1477,11 @@ raw-candidate programs; checking accepts any legal recorded alternative.
 \Rule{GPU-DistributeExpansion}{d\text{ has a chain with materialized children}\quad
  \beta(\mathsf{root}(c)).rows=\bot\ \lor\ \beta(\mathsf{root}(c)).rows\le w_d\quad
  \text{no tile-local fold scope}}
- {d.\mathsf{partition}=\mathsf{Fanout}(w_d);\ \text{record the last materialized child }j_c
-   \text{ in each underfilled chain's root loop (before a whole fold combines)}}
+ {\text{select }\mathsf{Fanout}(w_d)\text{ and the last pre-fold materialized child of each underfilled chain}}
+\Rule{GPU-FanoutLegal}{d.\mathsf{partition}=\mathsf{Fanout}(w)\quad w>0\quad
+ \neg\mathsf{tileLocalFold}(d)\quad \exists c.\ m_c>0}
+ {\forall c.\ j_c=\bot\ \lor\ 1\le j_c\le m_c,\quad
+ m_c=\text{number of materialized children in }c\text{'s root loop}}
 \Rule{GPU-ChildSlice}{0<|D_c|\le w_d\quad j_c\text{ recorded}\quad
  i\le j_c\text{ the first scan on this path with } n\ge g \text{ children or }i=j_c\quad
  q=\lfloor n/g\rfloor,\ r=n\bmod g,\ p_b=bq+\min(b,r)}
