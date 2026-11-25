@@ -28,11 +28,15 @@ license to substitute another query or plan.
 The translator must decide nothing (T-Gpu, `doc/formal/backend_ir.tex`
 §"Refinement and the emitter"): kernels, barriers and launch shapes come from
 grading and recorded analysis. The former emitter decisions are now checked
-records: `Partition::{One,Tiles,Spread}` and kernel occupancy for dispatch
+records: `Partition::{One,Tiles,Fanout,Spread}` and kernel occupancy for dispatch
 geometry, `Publication::DeferredRange`, `OffsetScan::DeviceExclusive`,
-`FoldCompletion::BlockPartials`, and recorded metadata synchronization.
-The old literal grid cap and one-block offset/fold completion are historical,
-not open violations. See [Sequence contract §6](../../doc/SEQUENCE-PLAN.md#6-experimentsgpusequence-cuda-translation-replaces-experimentsgpuprinter-at-cutover),
+`FoldCompletion::BlockPartials`, `InitialCapacity` (GPU-DispatchReservation)
+and recorded metadata synchronization. A dispatch without a tile decision is
+no longer launched as one block: `Partition::One { max_rows }` requires
+evidence that the root fits one block pass with no expansion after it
+(GPU-OnePart), and an expanding root that fits one tile records `Fanout`, whose
+resident blocks split disjoint child intervals (GPU-ChildSlice). The old literal
+grid cap and one-block offset/fold completion are historical. See [Sequence contract §6](../../doc/SEQUENCE-PLAN.md#6-experimentsgpusequence-cuda-translation-replaces-experimentsgpuprinter-at-cutover),
 [`realize.rs`](sequence/core/src/realize.rs), and
 [`emit.rs`](sequence/core/src/emit.rs). New decisions must likewise be recorded
 and checked before emission.

@@ -13,6 +13,45 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Sequence/TPC-H: six code-generation performance bugs found by profiling
+  against DuckDB 2.0.1 + Sirius (nsys, ncu, perf; RTX 6000 Ada) are fixed.
+  Plans stay exact; all 26 advised queries match DuckDB at SF1 and SF10.
+  - **No implicit one-block launches** (`GPU-OnePart`,
+    `GPU-DistributeExpansion`, `GPU-ChildSlice`, `GPU-FanoutLegal`,
+    `DR-ScheduleOverlay`). A missing tile decision used to become
+    `Partition::One`; `Partition::One { max_rows }` now needs evidence that
+    the root fits one block pass with no expansion after it. An expanding
+    root that fits one tile records `Partition::Fanout`, and resident blocks
+    split disjoint child intervals. TPC-H hand schedules keep planner
+    geometry for stores they do not author. Advised dispatches: 24 One / 86
+    Tiles -> 0 One / 76 Tiles / 34 Fanout; no Datalog dispatch moved.
+  - **Keyed group fold** (`GPU-KeyedGridFold`): one 256-thread CTA per group
+    per output column is replaced by a dense block-partial histogram for small
+    measured key domains and a row-parallel run-fragment reduction over the
+    sorted order (keys copied from run heads, all aggregates in one launch).
+  - **One execution per output dispatch** (`GPU-DispatchReservation`): the
+    GPU planner defaults to `output reserve`; a dispatch starts from its
+    recorded seed (declared, evidence, reservation or zero) and then from its
+    last validated count, per compiled query and CUDA context, instead of a
+    count-only launch followed by a write launch. Overflow still replays
+    before publishing. Datalog's `reserve_previous` is unchanged.
+  - **Answer transfer** (`GPU-AnswerTransfer`): answer columns are narrowed on
+    device and copied once into pooled pinned memory; the host transposes
+    typed columns without per-row `RowCodec::decode`.
+  - **Nullable values stay on the device** (`DR-NullableLanes`): grouped
+    `Option` results publish value and presence lanes, removing the host
+    islands of h02 stage 1 and h15 stage 2.
+  - **Range construction** (`GPU-RangePayload`, `GPU-DenseDirectory`):
+    resident payloads are read through one retained stable permutation instead
+    of gather + FOR re-encode; dense directories are native `u32`.
+  - Paired SF10 totals (median, ms, base `83b66548` -> this change): h01
+    344.9 -> 4.9, h02 145.5 -> 3.5, h09 158.2 -> 20.9, h21_positive 143.9 ->
+    21.5, h18 80.2 -> 17.4, h20 45.2 -> 13.6, h10 48.5 -> 17.8, h08 18.5 ->
+    7.3; suite sum 1194 -> 199 ms (SF1 127 -> 26.5 ms); geomean 3.2x (SF1
+    2.7x). Every query now beats DuckDB+Sirius warm on the same GPU (SF10
+    geomean 4.1x, SF1 15.9x). `doop-gpu` xalan exact 26/26; fixpoint medians
+    of three 0.4145 s base vs 0.4184 s (overlapping samples).
+
 - GPU Datalog: the checked Round batch terminal now records `UnionProject`
   for binary compositions whose head drops the sole witness. The runtime
   chooses direct expansion or exact grouped union per invocation, including

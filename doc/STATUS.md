@@ -77,6 +77,24 @@ the generated hole under `doop-gpu --features manual-joins` (CHANGELOG).
   item that binds all its columns first. Open: generate this plan shape
   (distinct join keys of a delta, head-only columns expanded last).
 
+**GPU TPC-H code-generation fixes (2026-11-25, on `83b66548` plus this
+change):** profiling against DuckDB 2.0.1 + Sirius found six generated-code
+bugs (implicit one-block dispatches, one CTA per group in keyed folds,
+count-then-write re-execution of every output dispatch, per-row host answer
+decode, nullable host islands, gather+re-encode range builds); all are fixed
+(CHANGELOG).
+- Paired advised medians, base → fixed: SF10 suite sum 1194 → 199 ms
+  (geomean 3.2×), SF1 127 → 26.5 ms (2.7×). Largest: h01 344.9 → 4.9 ms,
+  h02 145.5 → 3.5, h09 158.2 → 20.9, h21_positive 143.9 → 21.5, h18 80.2 →
+  17.4 ms. All 26 queries exact at SF1 and SF10.
+- DuckDB 2.0.1 + Sirius on the same GPU, all referenced tables pinned in GPU
+  memory, warm: every query is now faster on our side (SF10 geomean 4.1×,
+  SF1 15.9×). Sirius's ~12 ms SF1 floor is a 10 ms readahead sleep joined at
+  query retirement (`readahead_scan_manager.cpp:474-514`; removing it with
+  `max_readahead_scans: 0` cut SF1 h06 12 → 3 ms).
+- `doop-gpu` xalan exact 26/26; no Datalog dispatch, launch or share record
+  moved.
+
 **GPU expansion share (2026-11-20, on `a09ff4b6` plus this change):** join
 launches whose first expansion is small and a later one large no longer run
 on one block (CHANGELOG, GPU-ExpansionShare).
