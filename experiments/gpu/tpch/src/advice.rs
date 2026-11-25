@@ -43,14 +43,14 @@ pub enum Placement {
     #[default]
     Host,
     Device,
-    /// Keep scalar stage results resident; nullable or host-target results stay host.
+    /// Select the publication protocol of the recorded execution target.
     Automatic,
 }
 
 impl Placement {
-    pub fn resolve(self, target: Target, nullable: bool) -> Self {
+    pub fn resolve(self, target: Target) -> Self {
         match self {
-            Self::Automatic if matches!(target, Target::Device) && !nullable => Self::Device,
+            Self::Automatic if matches!(target, Target::Device) => Self::Device,
             Self::Automatic => Self::Host,
             explicit => explicit,
         }

@@ -384,7 +384,12 @@ fn decoders(
                 u32::try_from(values[#slot]).map_err(|_| "GPU symbol code exceeds u32")?
             ))
         } else if optional {
-            quote!(if valid[#slot]==0 {None} else {Some(::cq_gpu_runtime::decode_value(values[#slot], &__cq_dictionary)?)})
+            quote!({
+                let value: #ty = if valid[#slot] == 0 { None } else {
+                    Some(::cq_gpu_runtime::decode_value(values[#slot], &__cq_dictionary)?)
+                };
+                value
+            })
         } else {
             quote!(::cq_gpu_runtime::decode_value::<#ty>(values[#slot], &__cq_dictionary)?)
         });

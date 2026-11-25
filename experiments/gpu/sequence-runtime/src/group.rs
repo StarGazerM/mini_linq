@@ -96,6 +96,34 @@ impl<T: gpu_datalog_runtime::Scalar> AggregateRepresentation<true> for Option<T>
     const MAX: i128 = T::MAX;
 }
 
+/// Typed inverse at a nullable stage seam. The machine payload is independent
+/// of presence, so Some(i64::MIN) and Some(i64::MAX) need no special cases.
+pub trait Nullable: Sized {
+    fn from_lanes(value: i64, present: bool) -> Self;
+    fn value_lane(&self) -> i64;
+    fn present(&self) -> bool;
+}
+impl<T: gpu_datalog_runtime::Scalar<Logical = T>> Nullable for Option<T> {
+    #[inline(always)]
+    fn from_lanes(value: i64, present: bool) -> Self {
+        if present { Some(T::decode(value as i128)) } else { None }
+    }
+    #[inline(always)]
+    fn value_lane(&self) -> i64 {
+        self.as_ref().map_or(0, T::encode)
+    }
+    #[inline(always)]
+    fn present(&self) -> bool {
+        self.is_some()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum GroupLane {
+    Value(usize),
+    Presence(usize),
+}
+
 pub fn aggregate<T: AggregateRepresentation<OPTIONAL>, const OPTIONAL: bool>(
     kind: u32,
 ) -> Result<Aggregate> {
@@ -218,18 +246,18 @@ impl<F> GroupedRows<F> {
     pub fn checked_len(&self) -> Result<usize> {
         self.output.checked_len()
     }
-    /// Publish a nonnullable grouped result as resident input columns.
+    /// Publish grouped payload and presence lanes as resident input columns.
     ///
     /// Supplied bounds size the encoder; table bounds are measured logical extrema.
     /// # Safety
-    /// `slots` must describe `Row` in the physical key/aggregate column layout
-    /// and select no nullable aggregate. The decoder is not applied: the grouped
-    /// machine values must already be the row codec's integer representation.
+    /// `slots` must describe `Row` in physical key/aggregate order, selecting
+    /// the presence source for each recorded nullable flag. Group machine
+    /// values must already be the row codec's integer representation.
     /// Each supplied bound must enclose that output column's complete domain;
     /// group keys inherit their input bounds, not the aggregate's value domain.
     pub unsafe fn into_columns<Row: gpu_device_columns::RowCodec<'static>>(
         self,
-        slots: &[usize],
+        slots: &[GroupLane],
         bounds: &[gpu_device_columns::Bounds],
     ) -> Result<cq_gpu_runtime::DeviceColumns<'static, Row>> {
         use gpu_device_columns::{
@@ -238,7 +266,9 @@ impl<F> GroupedRows<F> {
         let output = self.output;
         if Row::WIDTH != slots.len()
             || bounds.len() != slots.len()
-            || slots.iter().any(|&slot| slot >= output.width)
+            || slots.iter().any(|lane| match *lane {
+                GroupLane::Value(i) | GroupLane::Presence(i) => i >= output.width,
+            })
         {
             return Err("grouped publication schema width mismatch".into());
         }
@@ -247,19 +277,20 @@ impl<F> GroupedRows<F> {
         // count plus arithmetic failures. Neither values nor count are read back.
         let rows = output.values.len() / output.width;
         let mut columns = Vec::with_capacity(slots.len());
-        for (&slot, &bounds) in slots.iter().zip(bounds) {
+        for (&lane, &bounds) in slots.iter().zip(bounds) {
+            let (data, presence) = match lane {
+                GroupLane::Value(i) => (output.values.ptr().wrapping_add(if rows == 0 { 0 } else { i }).cast(), false),
+                GroupLane::Presence(i) => (output.valid.ptr().wrapping_add(if rows == 0 { 0 } else { i }).cast(), true),
+            };
             let mut source = SourceView::from(ColumnView {
                 headers: std::ptr::null(),
-                data: output
-                    .values
-                    .ptr()
-                    .wrapping_add(if rows == 0 { 0 } else { slot })
-                    .cast(),
+                data,
                 len: output.values.len() as u64,
                 count: std::ptr::null(),
                 codec: Codec::Plain as u32,
             });
             source.stride = output.width as u64;
+            if presence { source.packed = gpu_device_columns::SOURCE_BYTES; }
             columns.push(unsafe {
                 EncodedColumn::from_gather_source_pending::<_, i64>(
                     pool.clone(),
@@ -1075,6 +1106,21 @@ mod publication_tests {
             |values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) },
         );
         assert_eq!(rows.to_host()?, vec![(vec![0, 0], vec![1, 0])]);
+        let bounds = [
+            gpu_device_columns::Bounds::Inclusive { min: i64::MIN, max: i64::MAX },
+            gpu_device_columns::Bounds::Inclusive { min: 0, max: 1 },
+        ];
+        let slots = [GroupLane::Value(1), GroupLane::Presence(1)];
+        let published = unsafe { rows.into_columns::<(i64, bool)>(&slots, &bounds)? };
+        assert_eq!(published.to_host()?, [(0, false)]);
+        for value in [i64::MIN, i64::MAX] {
+            let mut fold = GlobalFold::new(pool.clone(), 1, &[count, min])?;
+            fold.partials = Buffer::from_host(pool.clone(), &[1, value])?;
+            fold.present = Buffer::from_host(pool.clone(), &[1, 1])?;
+            let output = unsafe { fold.finish(Vec::new(), combine)? }.with_decoder(());
+            let published = unsafe { output.into_columns::<(i64, bool)>(&slots, &bounds)? };
+            assert_eq!(published.to_host()?, [(value, true)]);
+        }
         let mut overflow = GlobalFold::new(pool.clone(), 2, &[sum])?;
         overflow.partials = Buffer::from_host(pool.clone(), &[i64::MAX, 1])?;
         let rows = unsafe { overflow.finish(Vec::new(), combine)? }
@@ -1156,7 +1202,7 @@ mod publication_tests {
             };
             let published = unsafe {
                 grouped.with_decoder(()).into_columns::<(i64, i64)>(
-                    &[1, 0],
+                    &[GroupLane::Value(1), GroupLane::Value(0)],
                     &[
                         gpu_device_columns::Bounds::Inclusive {
                             min: i64::MIN,

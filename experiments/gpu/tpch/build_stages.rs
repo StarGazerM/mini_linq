@@ -27,6 +27,28 @@ pub fn compile(
     let mut publication_facts: Vec<crate::Publication> = Vec::new();
     let mut host_uploads = BTreeMap::new();
     let mut host_references = BTreeMap::new();
+    // Formal rule DR-Publication: an automatic transfer boundary depends on
+    // every consumer, not just on the producer's target.
+    let mut pipelines: Vec<_> = (0..program.stages.len()).map(|index| {
+        if let Some(pipeline) = override_pipeline { return pipeline.clone(); }
+        let mut pipeline = if mode == "automatic" {
+            advice::Pipeline::automatic()
+        } else {
+            advice::Pipeline::staged(query, index)
+        };
+        pipeline.publication = advice::Placement::Automatic;
+        pipeline
+    }).collect();
+    for (index, stage) in program.stages.iter().enumerate() {
+        if matches!(pipelines[index].target, advice::Target::Host) {
+            for (_, name) in &stage.inputs {
+                if let Some(producer) = program.publication_index(name).map_err(&reject)? {
+                    let placement = &mut pipelines[producer].publication;
+                    if matches!(placement, advice::Placement::Automatic) { *placement = advice::Placement::Host; }
+                }
+            }
+        }
+    }
     for (index, stage) in program.stages.iter().enumerate() {
         let mut types = BTreeMap::new();
         let mut publications = BTreeMap::new();
@@ -102,6 +124,7 @@ pub fn compile(
                         crate::Publication {
                             placement: if normalized { advice::Placement::Device } else { advice::Placement::Host },
                             nullable: vec![false; width],
+                            presence: Vec::new(),
                             domains: origins,
                             grouped: None,
                         },
@@ -114,17 +137,7 @@ pub fn compile(
             .iter()
             .map(|(name, publication)| (name.clone(), publication.domains.clone()))
             .collect();
-        let mut pipeline = if let Some(pipeline) = override_pipeline {
-            pipeline.clone()
-        } else if mode == "automatic" {
-            advice::Pipeline::automatic()
-        } else {
-            advice::Pipeline::staged(query, index)
-        };
-        if override_pipeline.is_none() {
-            pipeline.publication = advice::Placement::Automatic;
-        }
-        let (code, mut artifact) = compile_stage(&kernel, manifest, &pipeline, &publications)?;
+        let (code, mut artifact) = compile_stage(&kernel, manifest, &pipelines[index], &publications)?;
         artifact["stage"] = json!(index);
         artifact["cpu_query"] = json!(kernel.cpu_query().to_string());
         artifact["final_download"] = json!(stage.final_download);
@@ -170,7 +183,15 @@ pub fn compile(
         let result = format_ident!("result_{index}");
         // DECODE P: terminal stage results download native answer tuples; source dictionary resolution is deferred until validation selects rows.
         let download = if publication_facts[index].resident() {
-            quote!(measurement.final_download(|| #result.to_host())?)
+            let p = &publication_facts[index];
+            if p.presence.is_empty() {
+                quote!(measurement.final_download(|| #result.to_host())?)
+            } else {
+                let types = output_types[index].iter().collect::<Vec<_>>();
+                let flags = p.presence.iter().enumerate().map(|(j,&i)|(i,types.len()+j)).collect();
+                let unpack = crate::nullable::unpack(&types, &flags);
+                quote!(measurement.final_download(|| Ok(#result.to_host()?.into_iter().map(|row| #unpack).collect::<Vec<_>>()))?)
+            }
         } else {
             quote!(#result)
         };
