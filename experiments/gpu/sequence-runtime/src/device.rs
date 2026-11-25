@@ -73,9 +73,9 @@ pub use gpu_tiles::owner;
 /// Read adjacent native endpoints of the half-open range for a dense key.
 ///
 /// # Safety
-/// `offsets[key..=key+1]` must be live, initialized and fit u32.
+/// `offsets[key..=key+1]` must be live and initialized.
 #[device]
 #[inline(always)]
-pub unsafe fn range(offsets: *const i64, key: u32) -> (u32, u32) {
-    unsafe { (*offsets.add(key as usize) as u32, *offsets.add(key as usize + 1) as u32) }
+pub unsafe fn range(offsets: *const u32, key: u32) -> (u32, u32) {
+    unsafe { (*offsets.add(key as usize), *offsets.add(key as usize + 1)) }
 }

@@ -443,7 +443,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     assert_eq!(selected.offsets().to_host()?, [0, 2, 3, 3]);
     // DECODE P: diagnostic selected payload values publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [11, 13, 12]);
-    assert_eq!(selected.offsets().bounds(), Bounds::Inclusive { min: 0, max: 3 });
+    assert_eq!(selected.offset_bounds(), Bounds::Inclusive { min: 0, max: 3 });
     // Filtering removes both source extrema, but preserves their enclosure.
     assert_eq!(selected.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
 
@@ -463,7 +463,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0]);
     // DECODE P: diagnostic empty selected payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
-    assert_eq!(empty.offsets().bounds(), Bounds::singleton(0));
+    assert_eq!(empty.offset_bounds(), Bounds::singleton(0));
     assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
 
     let keys = Buffer::from_host(pool.clone(), &[7u64, 2, 7, 1, 2])?;
@@ -506,7 +506,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     assert_eq!(newer.offsets().to_host()?, [0, 1, 1, 1]);
     assert_eq!(retained.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
     assert_eq!(newer.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
-    assert_eq!(newer.offsets().bounds(), Bounds::Inclusive { min: 0, max: 1 });
+    assert_eq!(newer.offset_bounds(), Bounds::Inclusive { min: 0, max: 1 });
     drop((retained, newer));
     let reused = builder.build_with_workspace(&descriptor, &mut workspace)?;
     // DECODE P: diagnostic reused workspace payload publishes logical host values for exact assertions.
@@ -565,7 +565,7 @@ fn dense_directory_preserves_holes_tile_boundaries_and_duplicate_runs() -> Resul
         selection: Some(RangeSelection { column: key, start: 1, end: 1100 }),
         payload: vec![],
     })?;
-    let expected: Vec<i64> = (0..=1100).map(|d| match d {
+    let expected: Vec<u32> = (0..=1100).map(|d| match d {
         0..=254 => 0,
         255 => 1,
         256 => 2,
@@ -575,10 +575,10 @@ fn dense_directory_preserves_holes_tile_boundaries_and_duplicate_runs() -> Resul
         801..=1024 => 8198,
         _ => 8199,
     }).collect();
-    assert_eq!(directory.offsets().codec(), Codec::Plain);
+    assert_eq!(directory.offsets().bytes(), 1101 * 4);
     // DECODE P: diagnostic native directory publication for the complete rank oracle.
     assert_eq!(directory.offsets().to_host()?, expected);
-    assert_eq!(directory.offsets().bounds(), Bounds::Inclusive { min: 0, max: 8199 });
+    assert_eq!(directory.offset_bounds(), Bounds::Inclusive { min: 0, max: 8199 });
     Ok(())
 }
 
@@ -635,7 +635,7 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
         // DECODE P: diagnostic codec-sweep empty directory publishes logical host values for exact assertions.
         assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0, 0]);
         assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
-        assert_eq!(empty.offsets().bounds(), Bounds::singleton(0));
+        assert_eq!(empty.offset_bounds(), Bounds::singleton(0));
     }
     Ok(())
 }
@@ -864,7 +864,7 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     assert!(complete.offsets().to_host()?.is_empty());
     // DECODE P: diagnostic keyless complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
-    assert_eq!(complete.offsets().bounds(), Bounds::Empty);
+    assert_eq!(complete.offset_bounds(), Bounds::Empty);
     assert_eq!(complete.payload()[0].bounds(), Bounds::Inclusive { min: 2, max: 7 });
     descriptor.selection = Some(RangeSelection {
         column: values,
@@ -883,7 +883,7 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     assert!(empty.offsets().to_host()?.is_empty());
     // DECODE P: diagnostic keyless empty payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
-    assert_eq!(empty.offsets().bounds(), Bounds::Empty);
+    assert_eq!(empty.offset_bounds(), Bounds::Empty);
     assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
     // DECODE P: diagnostic keyless retained complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
@@ -920,7 +920,7 @@ fn h02_shaped_ranges_reuse_bounds_without_publication_readbacks() -> Result<()> 
         };
         let mut workspace = RangeWorkspace::new(pool.clone(), &descriptor)?;
         for (selection, order, offsets) in [
-            (None, vec![1usize, 3, 0, 2, 4], [0i64, 2, 5, 5]),
+            (None, vec![1usize, 3, 0, 2, 4], [0u32, 2, 5, 5]),
             (Some((11, 14)), vec![1, 3, 2], [0, 2, 3, 3]),
             (Some((20, 30)), vec![], [0, 0, 0, 0]),
         ] {
@@ -939,7 +939,7 @@ fn h02_shaped_ranges_reuse_bounds_without_publication_readbacks() -> Result<()> 
             assert_eq!(range.len(), order.len());
             assert_eq!(range.payload().len(), payload_count);
             assert_eq!(
-                range.offsets().bounds(),
+                range.offset_bounds(),
                 Bounds::Inclusive { min: 0, max: order.len() as i64 }
             );
             // DECODE P: diagnostic h02-shaped directory publishes offsets to its host oracle.

@@ -92,7 +92,7 @@ pub mod build {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn dense_directory(keys: *const u32, rows: u32, entries: u32, offsets: *mut i64) {
+    pub fn dense_directory(keys: *const u32, rows: u32, entries: u32, offsets: *mut u32) {
         use cuda_device::warp;
         let lane = warp::lane_id() as usize;
         let mut start = thread::index_1d().get() / 32 * DIRECTORY_TILE;
@@ -119,7 +119,7 @@ pub mod build {
                 let mut d = start + lane;
                 while d <= last {
                     let rank = unsafe { key_lower_bound(keys, lo, hi, d as u32) };
-                    unsafe { *offsets.add(d) = rank as i64 };
+                    unsafe { *offsets.add(d) = rank };
                     d += 32;
                 }
             } else {
@@ -132,7 +132,7 @@ pub mod build {
                     };
                     let end = if row == hi as usize { last } else { unsafe { *keys.add(row) as usize } };
                     while d <= end {
-                        unsafe { *offsets.add(d) = row as i64 };
+                        unsafe { *offsets.add(d) = row as u32 };
                         d += 1;
                     }
                     row += 32;
