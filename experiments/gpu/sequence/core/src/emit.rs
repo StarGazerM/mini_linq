@@ -1397,14 +1397,14 @@ impl<'a> Compiler<'a> {
                     while __low < __high {
                         let __middle = __low + (__high - __low) / 2;
                         // DECODE V: P4 membership reconstructs FOR values for full-width comparison, never truncated codes.
-                        if ::cq_gpu_sequence_runtime::device::decode(__column, __middle as u64) < __key {
+                        if ::cq_gpu_sequence_runtime::device::range_payload(__column, __middle as u64) < __key {
                             __low = __middle + 1;
                         } else {
                             __high = __middle;
                         }
                     }
                     __member_found = __low < __end
-                        && ::cq_gpu_sequence_runtime::device::decode(__column, __low as u64) == __key;
+                        && ::cq_gpu_sequence_runtime::device::range_payload(__column, __low as u64) == __key;
                 });
             } else {
                 membership_checks.extend(quote! {
@@ -1414,7 +1414,7 @@ impl<'a> Compiler<'a> {
                     while __low<__high {
                         let __middle=__low+(__high-__low)/2;
                         // DECODE V: P4 lower-bound key search reconstructs FOR values solely for ordered relational comparison.
-                        if ::cq_gpu_sequence_runtime::device::decode(__column,__middle as u64)<__key {
+                        if ::cq_gpu_sequence_runtime::device::range_payload(__column,__middle as u64)<__key {
                             __low=__middle+1;
                         } else {__high=__middle;}
                     }
@@ -1423,7 +1423,7 @@ impl<'a> Compiler<'a> {
                     while __low<__high {
                         let __middle=__low+(__high-__low)/2;
                         // DECODE V: P4 upper-bound key search reconstructs FOR values solely for ordered relational comparison.
-                        if ::cq_gpu_sequence_runtime::device::decode(__column,__middle as u64)<=__key {
+                        if ::cq_gpu_sequence_runtime::device::range_payload(__column,__middle as u64)<=__key {
                             __low=__middle+1;
                         } else {__high=__middle;}
                     }
@@ -1495,7 +1495,7 @@ impl<'a> Compiler<'a> {
         // DECODE V: P6 provider payload reconstructs FOR values without restricting decode to rust_reads columns.
         let assignments = payload.iter().enumerate().map(|(index,column)| {
             let slot=self.slot(column)?;
-            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::decode(*#view.payload.add(#index), (#position) as u64);))
+            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::range_payload(*#view.payload.add(#index), (#position) as u64);))
         }).collect::<syn::Result<Vec<_>>>()?;
         Ok(quote!(#(#assignments)*))
     }

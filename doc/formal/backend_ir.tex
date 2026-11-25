@@ -1810,6 +1810,14 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  a=\text{checked catalog ABI of }T\quad K=\mathrm{concat}(\mathrm{levels})\quad
  P=\text{recorded complete scan or reconstructed lookup payload}}
  {\mathrm{layout}=(T,a,K,P,\text{provider directory policy})}
+\Rule{GPU-RangePayload}{\pi=\operatorname{stableArgsort}_{K}(\operatorname{select}(S))\quad
+ c\in P\quad i<|\pi|}
+ {\operatorname{read}(c,i)=
+  \begin{cases}
+   \operatorname{decode}(c,\pi_i)&c\text{ owns immutable resident storage}\\
+   A_c[i],\quad A_c=\bigl[\operatorname{decode}(c,j)\mid j\in\pi\bigr]
+      &c\text{ projects build-time storage}
+  \end{cases}}
 \Rule{GPU-RadixAdvice}{\Delta(t).\mathrm{abi}=\mathrm{radix}\iff p.\mathrm{radix}=(W,O,\rho,r,m)\quad
  \rho\geq 2\quad r\leq 32\quad m\geq 1}
  {\mathrm{advice}(p)=(W,O,\rho,r,m)\text{ authored per instance; nothing chooses it}}
@@ -1942,6 +1950,9 @@ each row function and the host-bound selection conditions.
  \text{every source of }B\text{ publishes }c}
  {\mathsf{descriptor}(c).\mathsf{bounds}=B\quad
   \mathsf{domain}(c)=B\text{ or one recorded measurement}}
+\Rule{GPU-DenseDirectory}{K\in[0,D)^n\text{ sorted}\quad n\le 2^{32}-1\quad 0\le d\le D}
+ {\mathsf{offset}[d]=|\{i:k_i<d\}|\quad
+  \mathsf{offset}[0..D]\text{ is published directly in owned native lanes}}
 \Rule{GPU-TerminalGroup}{G=\text{recorded terminal group of the final publication}\quad
  \text{aliases are transparent stores of }G}
  {\mathsf{group}_{\rm gpu}=G.\mathsf{completion}(G.\mathsf{input})}
@@ -1970,9 +1981,14 @@ and consumers read the uploaded count rather than the unfiltered input length.
 A source interval is available only when every folded bound restricts the
 same source column. Independent literal restrictions remain row predicates;
 they are not an illegal multi-column interval. Dense range providers normalize
-signed keys by a recorded runtime base $\min(0,\mathsf{bounds.min})$ before
+signed keys by their recorded lower bound before
 directory addressing. Domain size and its sentinel are checked with widened
 arithmetic; payload values retain their original signed representation.
+For \textsc{GPU-DenseDirectory}, an empty keyed input has $D+1$ zero ranks;
+a keyless provider has no directory. A warp locates the two endpoint ranks of
+one directory tile. If their difference is $s$, it fills the gaps between
+adjacent sorted keys, except when searching the $t$ tile entries within that
+span costs less ($s>t\lceil\log_2(s+1)\rceil$). A zero span is a constant tile.
 An inferred answer binder's declared head type supplies its carrier inference
 constraint before publication storage records scalar bounds and arena metadata.
 The carrier checker validates that constraint independently; printing does not

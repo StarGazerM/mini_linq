@@ -554,6 +554,35 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
 }
 
 #[test]
+fn dense_directory_preserves_holes_tile_boundaries_and_duplicate_runs() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let mut values = vec![1024, 0, 254, 255, 256, 510, 800, 800];
+    values.resize(values.len() + 8192, 259);
+    let key = column(&pool, &values)?;
+    let directory = RangeBuilder::new(&pool, &AUX)?.build(&RangeDescriptor {
+        directory_entries: 1101,
+        key: vec![KeyDescriptor { column: key.clone(), domain_size: 1100 }],
+        selection: Some(RangeSelection { column: key, start: 1, end: 1100 }),
+        payload: vec![],
+    })?;
+    let expected: Vec<i64> = (0..=1100).map(|d| match d {
+        0..=254 => 0,
+        255 => 1,
+        256 => 2,
+        257..=259 => 3,
+        260..=510 => 8195,
+        511..=800 => 8196,
+        801..=1024 => 8198,
+        _ => 8199,
+    }).collect();
+    assert_eq!(directory.offsets().codec(), Codec::Plain);
+    // DECODE P: diagnostic native directory publication for the complete rank oracle.
+    assert_eq!(directory.offsets().to_host()?, expected);
+    assert_eq!(directory.offsets().bounds(), Bounds::Inclusive { min: 0, max: 8199 });
+    Ok(())
+}
+
+#[test]
 fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
     let values: Vec<i64> = (0..2051)
@@ -642,7 +671,6 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
             },
         )?
     };
-    drop(rows);
     let mut descriptor = RangeDescriptor {
         directory_entries: 4,
         key: vec![KeyDescriptor {
@@ -691,6 +719,12 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
             max: i64::MAX
         }
     );
+    // A projection is only borrowed for the build. Editing the backing rows
+    // afterwards must not change either published payload.
+    unsafe { rows.write_async(&[0i64; 8])? };
+    drop(rows);
+    assert_eq!(negative.payload()[0].to_host()?, [i64::MIN, -4_294_967_297]);
+    assert_eq!(retained.payload()[0].to_host()?, [i64::MIN, 4_294_967_297, i64::MAX, -4_294_967_297]);
 
     let keys = Arc::new(Buffer::from_host(
         pool.clone(),
