@@ -6,6 +6,7 @@ mod key_domains;
 #[path = "src/manifest.rs"]
 #[allow(dead_code)]
 mod manifest;
+use cq_gpu_sequence::nullable;
 #[path = "src/source.rs"]
 mod source;
 #[path = "src/stages.rs"]
@@ -32,6 +33,8 @@ type CompileResult<T> = std::result::Result<T, Rejected>;
 struct Publication {
     placement: advice::Placement,
     nullable: Vec<bool>,
+    /// Logical columns whose physical flags are appended after all values.
+    presence: Vec<usize>,
     domains: Vec<Option<(String, String)>>,
     /// Resident grouped output conversion, recorded with the placement.
     #[serde(default)]
@@ -209,14 +212,15 @@ impl Publication {
 
 fn nullable_inputs(
     program: &cq_lang_cq::Program,
-    inputs: Option<&std::collections::BTreeMap<String, Publication>>,
+    inputs: &std::collections::BTreeMap<String, Publication>,
+    host_only: bool,
 ) -> std::collections::BTreeSet<String> {
     let mut nullable = std::collections::BTreeSet::new();
-    for item in &program.query.body {
+    for item in cq_lang_cq::blocks::walk(&program.query.body) {
         let cq_lang_cq::BodyItem::Positive { atom } = item else {
             continue;
         };
-        if let Some(input) = inputs.and_then(|inputs| inputs.get(&atom.relation.to_string())) {
+        if let Some(input) = inputs.get(&atom.relation.to_string()).filter(|p| !host_only || !p.resident()) {
             for (argument, valid) in atom.args.iter().zip(&input.nullable) {
                 if *valid && let syn::Expr::Path(path) = argument {
                     nullable.insert(path.path.to_token_stream().to_string());
@@ -231,9 +235,11 @@ fn nullable_inputs(
 fn publication(
     program: &cq_lang_cq::Program,
     pipeline: &advice::Pipeline,
-    inputs: Option<&std::collections::BTreeMap<String, Publication>>,
+    inputs: &std::collections::BTreeMap<String, Publication>,
+    width: usize,
+    forwarded: &std::collections::BTreeMap<usize, usize>,
 ) -> syn::Result<Publication> {
-    let mut nullable = nullable_inputs(program, inputs);
+    let mut nullable = nullable_inputs(program, inputs, false);
     if let Some(group) = &program.query.group {
         for aggregate in &group.aggregates {
             if matches!(
@@ -249,24 +255,28 @@ fn publication(
         .head
         .args
         .iter()
-        .map(|argument| {
-            matches!(argument, syn::Expr::Path(path)
-            if nullable.contains(&path.path.to_token_stream().to_string()))
+        .take(width).enumerate()
+        .map(|(slot, argument)| {
+            forwarded.contains_key(&slot) || matches!(argument, syn::Expr::Path(path)
+                if nullable.contains(&path.path.to_token_stream().to_string()))
         })
         .collect();
     let placement = pipeline
         .publication
-        .resolve(pipeline.target, nullable.iter().any(|value| *value));
+        .resolve(pipeline.target);
     if placement == advice::Placement::Device
-        && (matches!(pipeline.target, advice::Target::Host) || nullable.iter().any(|value| *value))
+        && matches!(pipeline.target, advice::Target::Host)
     {
         return Err(syn::Error::new_spanned(
             program,
-            "device publication requires a device target and nonnullable columns; select host publication",
+            "device publication requires a device target",
         ));
     }
     Ok(Publication {
         placement,
+        presence: if placement == advice::Placement::Device {
+            nullable::presence_slots(&nullable).collect()
+        } else { Vec::new() },
         nullable,
         domains: Vec::new(),
         grouped: None,
@@ -361,6 +371,11 @@ fn compile_stage(
             cq_workload_authored::tpch_evidence::load_with_bindings(&path, &cq.declarations, bindings),
         )?;
     }
+    let logical_output: Vec<_> = cq.output().expect("checked stage output").columns.iter()
+        .map(|column| column.ty.clone()).collect();
+    let resident_inputs = publications.iter().filter(|(_, p)| p.resident())
+        .map(|(name, p)| (name.as_str(), &p.nullable[..], &p.presence[..]));
+    let forwarded = checked("nullable input refinement", &encoded, nullable::lower(&mut cq, resident_inputs))?;
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
     let captures = &normal.query.captures;
     let mut setup_bindings = kernel
@@ -380,9 +395,10 @@ fn compile_stage(
     let mut publication = checked(
         "publication contract",
         &normal,
-        publication(&normal, pipeline, Some(publications)),
+        publication(&normal, pipeline, publications, logical_output.len(), &forwarded),
     )?;
     if publication.resident() {
+        checked("nullable output layout", &normal, nullable::check(&publication.nullable, &publication.presence))?;
         // Table loaders use the selected target; staged inputs carry their
         // producer's publication placement. Record both before selecting bounds.
         let input_placements: std::collections::BTreeMap<_, _> = kernel
@@ -527,15 +543,14 @@ fn compile_stage(
         &structures,
         cq_lang_structures::contract::check(&physical, &structures),
     )?;
-    // Nullable publication payloads have no device scalar ABI. A join carrying
-    // one from either side needs a host-readable index, until a later projection
-    // removes that column. Use checked layouts, never Rust type spellings.
+    // Explicit host publications still need host-readable indices for their
+    // logical Rust payloads. Resident publications carry ordinary scalar lanes.
     if !host
         && publications
             .values()
-            .any(|input| input.nullable.iter().any(|value| *value))
+            .any(|input| !input.resident() && input.nullable.iter().any(|value| *value))
     {
-        let nullable = nullable_inputs(&normal, Some(publications));
+        let nullable = nullable_inputs(&normal, publications, true);
         let (_, host_structures) = checked(
             "nullable host provider selection",
             &selected,
@@ -576,7 +591,7 @@ fn compile_stage(
                 && (nullable_reader
                     || advice::relation_of(&physical, &entry.name)
                         .and_then(|relation| publications.get(&relation.to_string()))
-                        .is_some_and(|input| input.nullable.iter().any(|value| *value)))
+                        .is_some_and(|input| !input.resident() && input.nullable.iter().any(|value| *value)))
             {
                 let cq_lang_structures::Structure::Built { keyed, .. } =
                     &host_structures.structures.entries[index].structure
@@ -818,9 +833,13 @@ fn compile_stage(
     )?;
     setup_bindings.extend(checked("host handle bindings", &planned.program, device_captures.host_setup())?);
     let host_setup_bindings = setup_bindings.clone();
-    let computed_inputs = kernel.computed_publication_inputs().map_err(|error| Rejected {
+    let mut computed_inputs = kernel.computed_publication_inputs().map_err(|error| Rejected {
         phase: "publication origin check", error: error.to_string(), term: cpu_source.to_string(),
     })?;
+    for (relation, input) in publications {
+        computed_inputs.extend((0..input.presence.len()).map(|flag|
+            (relation.clone(), input.nullable.len() + flag)));
+    }
     artifact["computed_publication_inputs"] = json!(computed_inputs);
     let publication_origins = checked(
         "publication field origins", &planned.structures,
@@ -980,18 +999,10 @@ fn compile_stage(
         error: error.to_string(),
         term: cpu_source.to_string(),
     })?;
-    let mut answer_types = Vec::new();
+    let answer_types: Vec<_> = logical_output.iter().collect();
     let mut decode_bindings = Vec::new();
     let mut owned_outputs = Vec::new();
-    for (index, ((_, ty), column)) in kernel.answer.iter().zip(&answer_columns).enumerate() {
-        answer_types.push(if let Some(output) = cq.output() {
-            &output.columns[index].ty
-        } else {
-            column
-                .as_ref()
-                .and_then(|column| stored_types.get(column))
-                .unwrap_or(ty)
-        });
+    for (index, column) in answer_columns.iter().enumerate() {
         if let Some(domain) = column.as_ref().and_then(|column| domains.get(column)) {
             let decoder = format_ident!("domain_{index}");
             decode_bindings.push(quote!(let #decoder = data.domains[#domain].as_ref().ok_or("missing loaded key domain")?;));
@@ -1098,24 +1109,28 @@ fn compile_stage(
             .collect();
         let inputs: Vec<_> = names
             .iter()
-            .zip(&rows)
-            .map(|(name, row)| {
-                if publications[&name.to_string()].resident() {
+            .zip(kernel.published.iter())
+            .map(|(name, relation)| {
+                let p = &publications[&name.to_string()];
+                let types: Vec<_> = relation.columns.iter().map(|(_, ty)| ty).collect();
+                let row = nullable::row_type(&types, &p.presence);
+                if p.resident() {
                     quote!(cq_gpu_runtime::DeviceColumns<'static, #row>)
                 } else {
                     quote!(Vec<#row>)
                 }
             })
             .collect();
-        let cpu_names: Vec<_> = (0..answer_types.len()).map(syn::Index::from).collect();
-        let own_row = {
-            let fields = answer_types.iter().zip(&cpu_names).map(|(ty, index)| {
-                quote!(<#ty as ::core::clone::Clone>::clone(
-                    ::core::borrow::Borrow::<#ty>::borrow(&row.#index)
-                ))
-            });
-            quote!((#(#fields,)*))
-        };
+        let own_row = nullable::unpack(&answer_types, &forwarded);
+        let mut pack_inputs = Vec::new();
+        for relation in &kernel.published {
+            let name = &relation.name;
+            let p = &publications[&name.to_string()];
+            if !p.presence.is_empty() {
+                let pack = nullable::pack(relation.columns.len(), &p.presence);
+                pack_inputs.push(quote!(let #name: Vec<_> = #name.iter().map(|row| #pack).collect();));
+            }
+        }
         // DECODE V: P6 staged host execution downloads entire logical input tuples before subsequent relational operators; retain codes outside rust_reads.
         let host_inputs: Vec<_> = names
             .iter()
@@ -1123,8 +1138,13 @@ fn compile_stage(
             .map(|name| quote!(let #name = #name.to_host()?;))
             .collect();
         let resident = publication.resident();
+        let resident_row = if publication.presence.is_empty() {
+            quote!(Answer)
+        } else {
+            nullable::row_type(&answer_types, &publication.presence)
+        };
         let output_type = if resident {
-            quote!(cq_gpu_runtime::DeviceColumns<'static, Answer>)
+            quote!(cq_gpu_runtime::DeviceColumns<'static, #resident_row>)
         } else {
             quote!(Vec<Answer>)
         };
@@ -1142,10 +1162,12 @@ fn compile_stage(
             }
         } else {
             let publish = if !resident {
+                let restore = (!forwarded.is_empty()).then(||quote!(let result: Vec<_> = result.into_iter().map(|row| #own_row).collect();));
                 quote!({
                     let started = ::std::time::Instant::now();
                     // DECODE ?: nonresident stage output may feed later stages or final publication; terminal-use evidence determines R/P/V.
                     let result = output.to_host()?;
+                    #restore
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                     let mut timing =
                         cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
@@ -1155,8 +1177,18 @@ fn compile_stage(
                     result
                 })
             } else if let Some(grouped) = &publication.grouped {
-                let slots = &grouped.slots;
-                let bounds: Vec<_> = grouped.bounds.iter().map(|bounds| match bounds {
+                let slots = grouped.slots.iter().take(answer_types.len()).map(|slot|
+                    quote!(::cq_gpu_sequence_runtime::group::GroupLane::Value(#slot)))
+                    .chain(publication.presence.iter().map(|i| {
+                        if let Some(flag) = forwarded.get(i) {
+                            let slot = grouped.slots[*flag];
+                            quote!(::cq_gpu_sequence_runtime::group::GroupLane::Value(#slot))
+                        } else {
+                            let slot = grouped.slots[*i];
+                            quote!(::cq_gpu_sequence_runtime::group::GroupLane::Presence(#slot))
+                        }
+                    }));
+                let mut bounds: Vec<_> = grouped.bounds.iter().take(answer_types.len()).map(|bounds| match bounds {
                     KeyBounds::Input { relation, field, resident } => {
                         let name = format_ident!("{}", relation);
                         let value = if publications.contains_key(relation) { quote!(#name) } else { quote!(&data.#name) };
@@ -1176,9 +1208,10 @@ fn compile_stage(
                     }
                     KeyBounds::Full => quote!(cq_gpu_runtime::Bounds::Inclusive { min: i64::MIN, max: i64::MAX }),
                 }).collect();
+                bounds.extend(publication.presence.iter().map(|_| quote!(cq_gpu_runtime::Bounds::Inclusive { min: 0, max: 1 })));
                 quote!({
                     let started = ::std::time::Instant::now();
-                    let result = unsafe { output.into_columns::<Answer>(&[#(#slots),*], &[#(#bounds),*])? };
+                    let result = unsafe { output.into_columns::<#resident_row>(&[#(#slots),*], &[#(#bounds),*])? };
                     let mut timing = cq_gpu_runtime::take_last_timings().ok_or("group stage published no timings")?;
                     timing.wall_ms += started.elapsed().as_secs_f64() * 1000.0;
                     cq_gpu_runtime::publish_timings(timing);
@@ -1229,6 +1262,7 @@ fn compile_stage(
                 pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
                     #host_setup_bindings
                     #(#sequential_bindings)*
+                    #(#pack_inputs)*
                     Ok((#cpu).map(|row| #own_row).collect())
                 }
                 pub(super) fn decoders<'a>(data: &'a Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<(#(impl Fn(&#answer_types) -> String + 'a,)*)> {

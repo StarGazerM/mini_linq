@@ -72,6 +72,9 @@ pub struct SourceView {
     pub base: i64,
 }
 unsafe impl DeviceCopy for SourceView {}
+/// SourceView tag for an unaligned, byte-strided validity projection. Like the
+/// packed-key projection this does not change the ABI of ordinary columns.
+pub const SOURCE_BYTES: u32 = 2;
 impl From<ColumnView> for SourceView {
     fn from(column: ColumnView) -> Self {
         Self {
@@ -90,6 +93,11 @@ impl From<ColumnView> for SourceView {
 // DECODE ?: source inverse serves gather re-encoding and relational index builds; classify the consuming call.
 pub unsafe fn decode_source(source: SourceView, row: u64) -> i64 {
     if source.packed != 0 {
+        if source.packed == SOURCE_BYTES {
+            return unsafe {
+                source.column.data.cast::<u8>().add((row * source.stride) as usize).read() as i64
+            };
+        }
         let offset = if source.mask == 0 {
             0
         } else {
