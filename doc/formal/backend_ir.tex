@@ -961,9 +961,9 @@ rewrites cannot express this decomposition, the checked \code{segment}
 rewrite pairs an inner-flatten store with an outer tile, justified by
 BE-Offsets and BE-Partition and exposed through both the library and macro.
 Recorded output protocols, including count inserted by lowering, are preserved. Only absent
-protocols are filled: count when the final length depends only on input
-lengths, otherwise reserve; a bounded protocol requires an authored
-capacity. Reported provider, canon and codec obligations are validated
+protocols are filled: bounded for a declared capacity, reserve for a GPU
+machine or a variable final length, otherwise count.
+Reported provider, canon and codec obligations are validated
 against catalog capabilities at their levels. Structures already records
 provider types and canonical references; a canonical rows provider must carry
 the \code{Distinct} capability. Catalog support may retype that provider without changing the reference.
@@ -1373,9 +1373,8 @@ emission consume the same recorded publication kind, never independent
 deferred-range recognizers. Host references stop at completed publication
 boundaries; a host consumer of a later expanded store is not a host consumer
 of that store's deferred-range input.
-The same record fixes the first attempt's output capacity (zero for
-\code{count}, the store's declared capacity, the machine's default
-reservation for an undeclared \code{reserve}, or the arena's previous count),
+The same record fixes the first attempt's output capacity
+(\textsc{GPU-DispatchReservation}, or the arena's previous count),
 the output compaction (each lane gathers its stripe items; the block reserves
 one range per stripe batch), and one strip per strip-mined level of every
 chain in pre-order: rows per expansion batch, items per lane, nested tile
@@ -1643,6 +1642,25 @@ published, so the batch equals the Count protocol's.
 \Rule{GPU-ReservePrevious}{\text{inputs immutable during the invocation}\quad
  \text{count}\le\text{capacity checked before publication}}
  {\text{published batch}=\text{the }\mathsf{count}\text{ protocol's batch}}
+\end{mathpar}
+
+Ordinary GPU stores count and write in the same attempt, including
+intermediate stores and stores whose logical protocol is \code{count}.
+The first reservation is the store's declared capacity, otherwise a
+representable conditional BE-PrefixBound for the physical result, otherwise
+zero for count or the machine reservation for reserve. No estimate licenses
+truncation. Each dispatch's compiled module, scoped to its CUDA context and
+query lifetime, remembers its last validated \emph{physical} output count
+(range descriptors, not the length after expanding them). No output buffer
+or data survives solely for this hint. PL-Cost charges no mandatory replay
+of such a final producer.
+\begin{mathpar}
+\Rule{GPU-DispatchReservation}{C=\mathsf{lastValidated}(d)\mathbin{??}\mathsf{first}(d)\quad
+ N=\mathsf{count}(d,I)\quad I\text{ unchanged during attempts}}
+ {\mathsf{failure}\Rightarrow\bot;\quad
+ N>C\Rightarrow\mathsf{discardAndReplay}(d,I,N);\quad
+ \neg\mathsf{failure}\land N\le C\Rightarrow
+ \mathsf{publishPrefix}(N),\ \mathsf{lastValidated}(d)\gets N}
 \end{mathpar}
 
 Round may assign a head's producers to a common reservation when their inputs
