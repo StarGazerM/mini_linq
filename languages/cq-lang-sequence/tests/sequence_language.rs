@@ -803,7 +803,7 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
         } else {
             vec![gpu::Synchronization::CountAndFailure]
         },
-        capacity: gpu::InitialCapacity::Zero,
+        capacity: gpu::InitialCapacity::DispatchCount(gpu::ReservationSeed::Zero),
         reservation: gpu::Reservation::StripeBatch,
         chains: vec![gpu::ChainExecution { strips }],
         share: gpu::Share::None,
@@ -816,6 +816,23 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
 fn reject_gpu_launch(p: &Program, analysis: &Analysis) {
     let error = gpu::check(p, analysis).unwrap_err().to_string();
     assert!(error.contains("GPU-Launch:"), "{error}");
+}
+
+#[test]
+fn gpu_reservation_evidence_must_name_the_published_result_bound() {
+    use gpu::{InitialCapacity::DispatchCount, ReservationSeed};
+    let (p, mut analysis) = gpu_launch_fixture(false);
+    let result = analysis.results["a"].clone();
+    analysis.prefix_bounds.get_mut(&result).unwrap().rows = Some(17);
+    for (seed, accepted) in [
+        (ReservationSeed::Evidence(17), true),
+        (ReservationSeed::Evidence(16), false),
+        (ReservationSeed::Zero, false),
+        (ReservationSeed::Declared, false),
+    ] {
+        analysis.dispatches[0].gpu.as_mut().unwrap().capacity = DispatchCount(seed);
+        assert_eq!(gpu::check(&p, &analysis).is_ok(), accepted);
+    }
 }
 
 fn compact_publication_program(union: bool) -> Program {

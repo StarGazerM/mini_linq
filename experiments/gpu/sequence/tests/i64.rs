@@ -38,6 +38,12 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
     let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
     let analysis = check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine()).unwrap();
     assert_eq!(analysis.dispatches.len(), 1);
+    assert_eq!(
+        analysis.dispatches[0].gpu.as_ref().unwrap().capacity,
+        cq_lang_sequence::gpu::InitialCapacity::DispatchCount(
+            cq_lang_sequence::gpu::ReservationSeed::Zero
+        )
+    );
     let translated = cq_gpu_sequence::translate(&physical, &structures, &program, &analysis).unwrap();
     let generated = translated.to_token_stream().to_string();
     assert!(generated.contains("PayloadKind :: I64"), "{generated}");
@@ -110,13 +116,16 @@ fn membership_case(span: i64) -> cq_gpu_sequence_runtime::Result<()> {
         &mut Dictionary::default(),
         &[Codec::For, Codec::For],
     )?;
-    let stored = DeviceColumns::from_rows(
-        pool.clone(),
-        &[(0i64, 7i64)],
-        &mut Dictionary::default(),
-        &[Codec::For, Codec::For],
-    )?;
-    let output = cq_gpu_sequence_test_macros::sequence! {
+    // Exceed the declared cold reservation, fit the validated count, then
+    // grow beyond it and shrink again in the same compiled module/context.
+    for count in [2, 2, raw.len(), 1] {
+        let stored = DeviceColumns::from_rows(
+            pool.clone(),
+            &raw[..count],
+            &mut Dictionary::default(),
+            &[Codec::For, Codec::For],
+        )?;
+        let output = cq_gpu_sequence_test_macros::sequence! {
         physical {
             relation R(a:i64,c:i64) = (&edges);
             relation S(a:i64,c:i64) = (&stored);
@@ -136,14 +145,17 @@ fn membership_case(span: i64) -> cq_gpu_sequence_runtime::Result<()> {
         sequence {
             Edges = store rows l;
             ByA = store rows s;
-            result = store canon compact checked lookup s [a,c]
+            result = store capacity 1 canon compact checked lookup s [a,c]
                 flatten tile 1024 items 4 Edges;
             output count;
         }
         graded gpu { Edges at host; ByA at host; result at device; }
-    };
-    let mut actual: Vec<(i64, i64)> = output.to_host()?;
-    actual.sort_unstable();
-    assert_eq!(actual, vec![(0, 7)]);
+        };
+        let mut actual: Vec<(i64, i64)> = output.to_host()?;
+        actual.sort_unstable();
+        let mut expected = raw[..count].to_vec();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+    }
     Ok(())
 }

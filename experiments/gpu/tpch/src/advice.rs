@@ -778,7 +778,7 @@ pub fn hand_schedule(
             });
         }
     }
-    schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Count));
+    schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Reserve));
     for step in schedule {
         (planned.physical, planned.structures, planned.program) =
             step.apply(&planned.physical, &planned.structures, &planned.program)?;

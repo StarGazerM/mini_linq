@@ -555,7 +555,7 @@ fn candidate(
             }
         ) {
             OutputProtocol::Bounded
-        } else if variable_output(&planned.physical, &last.term, &planned.program) {
+        } else if machine.gpu.is_some() || variable_output(&planned.physical, &last.term, &planned.program) {
             OutputProtocol::Reserve
         } else {
             OutputProtocol::Count

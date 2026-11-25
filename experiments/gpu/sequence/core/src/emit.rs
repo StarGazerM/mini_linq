@@ -2653,6 +2653,7 @@ fn translate_with_metadata(
     let mut kernels = Vec::new();
     let mut launches = Vec::new();
     let mut program_preparations = Vec::new();
+    let mut reservation_seeds = Vec::new();
     let mut output = None;
     let mut head_terminal = false;
     let final_name = analysis
@@ -4418,28 +4419,37 @@ fn translate_with_metadata(
             let words = share.words(meta_words);
             quote!(+ #words)
         });
-        use cq_lang_sequence::gpu::InitialCapacity;
-        let initial = match (&execution.capacity, capacity) {
-            (InitialCapacity::Zero, _) => quote!(0usize),
+        use cq_lang_sequence::gpu::{InitialCapacity, ReservationSeed};
+        let (initial, validated_count) = match &execution.capacity {
+            InitialCapacity::NoStore => return Err(error("GPU publication lacks a capacity")),
+            InitialCapacity::DispatchCount(seed) => {
+                let first = match seed {
+                    ReservationSeed::Zero => 0,
+                    ReservationSeed::Declared => capacity.ok_or_else(|| {
+                        error("GPU-Launch: declared capacity is absent from the store")
+                    })?,
+                    ReservationSeed::Evidence(rows) => *rows as usize,
+                    ReservationSeed::Rows(rows) => *rows,
+                };
+                let slot = reservation_seeds.len();
+                reservation_seeds.push(first);
+                (
+                    quote!(__cq_reservations[#slot]),
+                    Some(quote!(__cq_reservations[#slot] = __cq_required;)),
+                )
+            }
             // Formal rule GPU-ReservePrevious: the per-hole capacity hint (the
             // last validated count, raised toward twice the hole's high-water
             // mark within a small byte cap) is not a bound. Validate and
             // replay against unchanged inputs on a miss.
-            (InitialCapacity::PreviousCount, _) if arena.is_some() && final_output => {
-                quote!(__cq_arena.capacity_hint(&__cq_arena_packing))
+            InitialCapacity::PreviousCount if arena.is_some() && final_output => {
+                (quote!(__cq_arena.capacity_hint(&__cq_arena_packing)), None)
             }
-            (InitialCapacity::PreviousCount, _) => {
+            InitialCapacity::PreviousCount => {
                 return Err(error(
                     "reserve_previous requires a final GPU arena dispatch",
                 ));
             }
-            (InitialCapacity::Declared, Some(capacity)) => quote!(#capacity),
-            (InitialCapacity::Declared, None) => {
-                return Err(error(
-                    "GPU-Launch: declared capacity is absent from the store",
-                ));
-            }
-            (InitialCapacity::Rows(rows), _) => quote!(#rows),
         };
         let (row_width, key_width) = match &record.storage {
             PublicationStorage::FlatRows(flat) => (flat.width, 0usize),
@@ -4709,6 +4719,7 @@ fn translate_with_metadata(
                 }
                 #report_expansions
                 let __cq_logical = #complete_offsets;
+                #validated_count
                 break (#stores #output_keys,#meta_value,__cq_logical);
             };
             #remember_count
@@ -4967,6 +4978,7 @@ fn translate_with_metadata(
         quote!(true)
     };
     let preparation_count = program_preparations.len();
+    let reservations = reservation_seeds.len();
     let cache_names = (0..preparation_count).map(|slot| format_ident!("__cq_launch_cache_{slot}"));
     syn::parse2(quote!({
         #[::cuda_device::cuda_module]
@@ -4987,6 +4999,7 @@ fn translate_with_metadata(
                     ::std::sync::Arc<::cuda_core::CudaContext>,
                     #module_name::LoadedModule,
                     [::cq_gpu_runtime::ProgramLaunchCache; #preparation_count],
+                    [usize; #reservations],
                 )>> = const { ::std::cell::RefCell::new(None) };
             }
             ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
@@ -4994,14 +5007,14 @@ fn translate_with_metadata(
             });
             __CQ_SEQUENCE_MODULE.with(|cache| -> ::cq_gpu_runtime::Result<_> {
                 let mut cache=cache.borrow_mut();
-                if cache.as_ref().is_none_or(|(context,_,_)|
+                if cache.as_ref().is_none_or(|(context,_,_,_)|
                     !::std::sync::Arc::ptr_eq(context,__cq_pool.context()))
                 {
                     let __cq_module=unsafe {#module_name::load(__cq_pool.context())?};
                     let prepared=::std::array::from_fn(|_| ::cq_gpu_runtime::ProgramLaunchCache::default());
-                    *cache=Some((__cq_pool.context().clone(),__cq_module,prepared));
+                    *cache=Some((__cq_pool.context().clone(),__cq_module,prepared,[#(#reservation_seeds),*]));
                 }
-                let (_, __cq_module, [#(#cache_names,)*])=cache.as_mut().expect("initialized program launch");
+                let (_, __cq_module, [#(#cache_names,)*], __cq_reservations)=cache.as_mut().expect("initialized program launch");
             let __cq_timing_enabled = #timing_enabled;
             let __cq_timing_wall = __cq_timing_enabled.then(::std::time::Instant::now);
             let __cq_timing_start = if __cq_timing_enabled {

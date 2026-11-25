@@ -149,16 +149,18 @@ impl Cost {
                 )))?)?;
             }
         }
-        // Count interpretation evaluates the final producer again after counting;
-        // references to already materialized definitions are dependencies, not
-        // duplicated row computations.
-        if analysis
-            .output
-            .as_ref()
-            .is_some_and(|(_, protocol)| *protocol == OutputProtocol::Count)
-            && let Some(last) = program.sequence.definitions.last()
+        // A validated GPU dispatch reservation counts and writes together.
+        // Only charge mandatory Count replay to an ordinary count producer;
+        // references to already materialized dependencies do not repeat.
+        if let Some((name, OutputProtocol::Count)) = &analysis.output
+            && !analysis.dispatches.iter().any(|d| {
+                d.inner_stores.last() == Some(name)
+                    && d.gpu.as_ref().is_some_and(|gpu| matches!(
+                        gpu.capacity, cq_lang_sequence::gpu::InitialCapacity::DispatchCount(_)
+                    ))
+            })
         {
-            let fact = &evaluator.facts[&symbol_name(&last.name)];
+            let fact = &evaluator.facts[name];
             work.add(&fact.work)?;
             let mut replay = fact.span.clone();
             replay.add(&fact.local_span)?;

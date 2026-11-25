@@ -65,15 +65,25 @@ pub enum Grid {
     /// One thread per element: `ceil(elements / block_threads)` blocks.
     Elements { block_threads: u32 },
 }
-/// Initial output capacity of the first launch attempt; a shortfall replays
-/// at the full required count (BE-Length).
+/// Cold reservation for an ordinary output dispatch. A seed is never a
+/// certificate that the output fits.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InitialCapacity {
+pub enum ReservationSeed {
     Zero,
     /// The Store's declared capacity.
     Declared,
+    /// The physical result's conditional BE-PrefixBound.
+    Evidence(u32),
     /// The machine's default reservation for an undeclared `reserve`.
     Rows(usize),
+}
+
+/// Owner of the capacity hint. Only a validated prefix is published.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InitialCapacity {
+    NoStore,
+    /// Context-local compiled dispatch state, initialized from the seed.
+    DispatchCount(ReservationSeed),
     /// The arena's last validated count (GPU-ReservePrevious).
     PreviousCount,
 }
@@ -226,7 +236,7 @@ pub(crate) fn derive(
             offsets: OffsetScan::None,
             fold: FoldCompletion::Local,
             synchronization: vec![Synchronization::CountAndFailure],
-            capacity: InitialCapacity::Zero,
+            capacity: InitialCapacity::NoStore,
             reservation: Reservation::StripeBatch,
             chains: Vec::new(),
             share: Share::None,
@@ -244,12 +254,21 @@ pub(crate) fn derive(
             } else {
                 (term, false)
             };
+            // Formal rule GPU-DispatchReservation: seed the ordinary dispatch's
+            // context-local count slot; neither a seed nor history is a bound.
             execution.capacity = match dispatch.concatenation {
-                OutputProtocol::Count => InitialCapacity::Zero,
                 OutputProtocol::ReservePrevious => InitialCapacity::PreviousCount,
-                OutputProtocol::Bounded => InitialCapacity::Declared,
-                OutputProtocol::Reserve if declared => InitialCapacity::Declared,
-                OutputProtocol::Reserve => InitialCapacity::Rows(machine.reserve_rows),
+                _ if declared => InitialCapacity::DispatchCount(ReservationSeed::Declared),
+                _ => {
+                    let seed = match prefix_rows(analysis, name) {
+                        Some(rows) => ReservationSeed::Evidence(rows),
+                        None if dispatch.concatenation == OutputProtocol::Reserve => {
+                            ReservationSeed::Rows(machine.reserve_rows)
+                        }
+                        None => ReservationSeed::Zero,
+                    };
+                    InitialCapacity::DispatchCount(seed)
+                }
             };
             let chains = linear(inner, &definitions, &sources, &analysis.capabilities);
             for steps in &chains {
@@ -392,6 +411,11 @@ fn shared_expansions(execution: &Execution) -> Share {
     } else {
         Share::None
     }
+}
+
+fn prefix_rows(analysis: &Analysis, store: &str) -> Option<u32> {
+    let result = analysis.results.get(store)?;
+    u32::try_from(analysis.prefix_bounds.get(result)?.rows?).ok()
 }
 
 /// Formal rule GPU-ResidentMeta: an arena terminal (`reserve_previous`, the
@@ -767,6 +791,9 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .rev()
             .find(|name| matches!(definitions[*name], Term::Store { .. }))
         else {
+            if execution.capacity != InitialCapacity::NoStore {
+                return Err(error("capacity without a publication store"));
+            }
             if !execution.chains.is_empty() {
                 return Err(error("chain records without a publication store"));
             }
@@ -775,15 +802,18 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         let Term::Store { inner, capacity } = definitions[name] else {
             unreachable!()
         };
+        use InitialCapacity::DispatchCount;
+        let evidence = prefix_rows(analysis, name);
         let capacity = match (&dispatch.concatenation, &execution.capacity, capacity) {
-            (OutputProtocol::Count, InitialCapacity::Zero, _)
-            | (OutputProtocol::ReservePrevious, InitialCapacity::PreviousCount, _)
-            | (
-                OutputProtocol::Bounded | OutputProtocol::Reserve,
-                InitialCapacity::Declared,
-                Some(_),
-            ) => true,
-            (OutputProtocol::Reserve, InitialCapacity::Rows(rows), None) => *rows > 0,
+            (OutputProtocol::ReservePrevious, InitialCapacity::PreviousCount, _) => true,
+            (OutputProtocol::Bounded | OutputProtocol::Count | OutputProtocol::Reserve,
+                DispatchCount(ReservationSeed::Declared), Some(_)) => true,
+            (OutputProtocol::Count | OutputProtocol::Reserve,
+                DispatchCount(ReservationSeed::Evidence(rows)), None) => Some(*rows) == evidence,
+            (OutputProtocol::Count, DispatchCount(ReservationSeed::Zero), None) => evidence.is_none(),
+            (OutputProtocol::Reserve, DispatchCount(ReservationSeed::Rows(rows)), None) => {
+                evidence.is_none() && *rows > 0
+            }
             _ => false,
         };
         if !capacity {

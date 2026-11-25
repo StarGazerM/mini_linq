@@ -207,6 +207,11 @@ fn grading_records_two_queries_ranges_membership_and_bounded_publication() {
         analysis.dispatches[1].concatenation,
         OutputProtocol::Bounded
     );
+    use cq_lang_sequence::gpu::{InitialCapacity::DispatchCount, ReservationSeed};
+    assert_eq!(
+        analysis.dispatches[1].gpu.as_ref().unwrap().capacity,
+        DispatchCount(ReservationSeed::Declared)
+    );
     assert_eq!(
         analysis.tilings["result"],
         [Tiling::Strip, Tiling::Strip, Tiling::Distribute]
