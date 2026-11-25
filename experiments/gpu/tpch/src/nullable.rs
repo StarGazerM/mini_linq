@@ -243,6 +243,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn carrier_and_host_boundaries_agree_on_presence_slots() {
+        let optional: Type = syn::parse_quote!(Maybe);
+        let key: Type = syn::parse_quote!(u32);
+        let types = [&optional, &key, &optional];
+        let presence: Vec<_> = presence_slots(&[true, false, true]).collect();
+        let flags = presence.iter().enumerate()
+            .map(|(i, &slot)| (slot, types.len() + i)).collect();
+
+        let carrier: Type = syn::parse_quote!((i64, u32, i64, bool, bool,));
+        assert_eq!(syn::parse2::<Type>(row_type(&types, &presence)).unwrap(), carrier);
+
+        let packed: Expr = syn::parse_quote!((
+            ::cq_gpu_sequence_runtime::group::Nullable::value_lane(&row.0),
+            row.1.clone(),
+            ::cq_gpu_sequence_runtime::group::Nullable::value_lane(&row.2),
+            ::cq_gpu_sequence_runtime::group::Nullable::present(&row.0),
+            ::cq_gpu_sequence_runtime::group::Nullable::present(&row.2),
+        ));
+        assert_eq!(syn::parse2::<Expr>(pack(types.len(), &presence)).unwrap(), packed);
+
+        let logical: Expr = syn::parse_quote!((
+            <Maybe as ::cq_gpu_sequence_runtime::group::Nullable>::from_lanes(
+                *::core::borrow::Borrow::<i64>::borrow(&row.0),
+                *::core::borrow::Borrow::<bool>::borrow(&row.3)),
+            <u32 as ::core::clone::Clone>::clone(::core::borrow::Borrow::<u32>::borrow(&row.1)),
+            <Maybe as ::cq_gpu_sequence_runtime::group::Nullable>::from_lanes(
+                *::core::borrow::Borrow::<i64>::borrow(&row.2),
+                *::core::borrow::Borrow::<bool>::borrow(&row.4)),
+        ));
+        assert_eq!(syn::parse2::<Expr>(unpack(&types, &flags)).unwrap(), logical);
+    }
+
+    #[test]
     fn forwarded_alias_and_opaque_read_use_the_same_pair() {
         let mut p: Program = syn::parse_quote! {
             struct Query;
