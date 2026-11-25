@@ -194,14 +194,14 @@ fn retail_h07_selections_belong_to_atoms_with_and_without_blocks() {
                 if let ra::Operator::Rename(rename) = &definition.operator {
                     if let Some(selection) = &rename.constants {
                         assert_eq!(rename.relation, "Nation", "blocks={blocks} {planner:?}");
-                        assert!(selection.equalities.iter().all(|e| e.left == "name"));
+                        assert!(selection.bindings.iter().all(|e| e.column == "name"));
                         assert!(
                             rename
                                 .mapping
                                 .iter()
                                 .all(|mapping| mapping.source != "name")
                         );
-                        constants += selection.equalities.len();
+                        constants += selection.bindings.len();
                     }
                 }
                 let ra::Operator::Select(select) = &definition.operator else {

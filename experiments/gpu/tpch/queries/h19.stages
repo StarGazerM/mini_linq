@@ -27,8 +27,8 @@ program h19 {
             relation Part(p_partkey: i64, p_brand: StringCode, p_container: StringCode, p_size: i32);
             relation answer(revenue: i64);
             answer(sum(revenue_units)) :-
-                Lineitem(order_key, line_number, part_key, quantity, price, discount, ship_mode, ship_instruction),
-                where (ship_mode == "AIR" || ship_mode == "AIR REG") && ship_instruction == "DELIVER IN PERSON",
+                Lineitem(order_key, line_number, part_key, quantity, price, discount, ship_mode, "DELIVER IN PERSON"),
+                where ship_mode == "AIR" || ship_mode == "AIR REG",
                 Part(part_key, brand, container, size),
                 where (brand == "Brand#12"
                     && (container == "SM CASE" || container == "SM BOX" || container == "SM PACK" || container == "SM PKG")

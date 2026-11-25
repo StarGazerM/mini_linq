@@ -2013,14 +2013,15 @@ sticky failure word.
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,
-an equality selection against the literal (a closed capture), and a projection
+an equality selection against the same constant, and a projection
 that drops the fresh column. Its checker inspects the recorded rename--select--project
 chain: intermediate pipes are private single-use results, original mappings
-are preserved, added equalities bind only the source literals, and the final
+are preserved, added equalities bind only the source constants, and the final
 projection is exact. It does not regenerate fresh names or rerun the rewrite.
-Operands at code-domain columns arrive
-already translated by A-Domain into capture references; no string literal
-reaches this rewrite.
+A constant at a code-domain column arrives as its A-DomainLiteral capture
+reference \code{@(k)} and is compared as that closed operand; no string literal
+reaches this rewrite. The rewrite is opt-in: without it a literal-bearing
+rename stays an occurrence restriction.
 \begin{mathpar}
 \Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
  {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{select}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}

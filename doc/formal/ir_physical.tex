@@ -6,7 +6,7 @@
 Physical ::= physical { Decl* Fact* Def* return [canon] [dedup] r as Head; }
 Fact ::= consumer canonical;
 Def ::= r = (pipe | let | exists) [canon] Op;
-Op  ::= unit | rename R {..} [constants {source = literal, ...}]
+Op  ::= unit | rename R {..} [constants {source = Const, ...}]
       | select ... | point select ... | range select ...
       | bind ... | guard ... | project r keep {..} | merge [K] l, r
       | probe [first|smallest] [K] l, r

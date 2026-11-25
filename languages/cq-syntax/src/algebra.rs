@@ -284,12 +284,13 @@ pub struct AttributeRename {
     pub target: Ident,
 }
 
-/// Filter literal source columns, drop them, and rename the remaining columns.
+/// Filter constant source columns, drop them, and rename the remaining columns.
 ///
 /// ```text
 /// Rename ::= "rename" RelationName "{"
 ///              [AttributeRename ("," AttributeRename)* [","]]
-///            "}" ["constants" "{" Equality ("," Equality)* [","] "}"]
+///            "}" ["constants" "{" OccurrenceConstant ("," OccurrenceConstant)* [","] "}"]
+/// OccurrenceConstant ::= SourceColumn "=" (Literal | "@" "(" Capture ")")
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Rename {
@@ -304,7 +305,7 @@ pub struct Rename {
     pub constants: Option<OccurrenceConstants>,
 }
 
-/// Literal restrictions in source-column names, absent from the result heading.
+/// Constant restrictions in source-column names, absent from the result heading.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct OccurrenceConstants {
     pub constants_token: kw::constants,
@@ -312,29 +313,44 @@ pub struct OccurrenceConstants {
     pub brace: token::Brace,
     #[syn(in = brace)]
     #[parse(CommaList::parse_terminated)]
-    pub equalities: CommaList<crate::Equality>,
+    pub bindings: CommaList<OccurrenceConstant>,
+}
+
+/// One source column restricted to a literal or to the closed reference of
+/// its A-DomainLiteral code capture; either is one host-once value.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct OccurrenceConstant {
+    pub column: Ident,
+    pub eq_token: Token![=],
+    pub value: crate::constraint::Term,
 }
 
 impl OccurrenceConstants {
     pub fn check(&self) -> syn::Result<()> {
-        if self.equalities.is_empty() {
+        if self.bindings.is_empty() {
             return Err(syn::Error::new_spanned(
                 self,
                 "occurrence constants must not be empty",
             ));
         }
         let mut sources = std::collections::BTreeSet::new();
-        for equality in &self.equalities {
-            equality.check()?;
-            if !matches!(equality.right, crate::EqualityValue::Literal(_)) {
+        for binding in &self.bindings {
+            let constant = match &binding.value {
+                crate::constraint::Term::Literal(value) => crate::equality::literal(value),
+                crate::constraint::Term::Closed(syn::Expr::Path(path)) => {
+                    path.path.get_ident().is_some()
+                }
+                _ => false,
+            };
+            if !constant {
                 return Err(syn::Error::new_spanned(
-                    equality,
-                    "occurrence constants require literal values",
+                    binding,
+                    "occurrence constants require a literal or a capture reference",
                 ));
             }
-            if !sources.insert(crate::symbol_name(&equality.left)) {
+            if !sources.insert(crate::symbol_name(&binding.column)) {
                 return Err(syn::Error::new_spanned(
-                    &equality.left,
+                    &binding.column,
                     "occurrence constant source column is repeated",
                 ));
             }

@@ -180,17 +180,17 @@ pub(crate) fn entry(
             else {
                 unreachable!("checked host rename")
             };
-            let literals: BTreeSet<String> = rename
+            let constants: BTreeSet<String> = rename
                 .constants
                 .iter()
-                .flat_map(|constants| &constants.equalities)
-                .map(|equality| symbol_name(&equality.left))
+                .flat_map(|constants| &constants.bindings)
+                .map(|binding| symbol_name(&binding.column))
                 .collect();
             let mut prefix: Vec<String> = declaration
                 .columns
                 .iter()
                 .map(|column| symbol_name(&column.name))
-                .take_while(|column| literals.contains(column))
+                .take_while(|column| constants.contains(column))
                 .collect();
             prefix.sort();
             prefix == key

@@ -4,7 +4,7 @@
 \paragraph{Grammar.} A standalone named DAG; declarations and output are part of it.
 \begin{lstlisting}
 RA ::= relational { Decl* (r = Op;)* output r as Head; }
-Op ::= unit | rename R {source -> variable, ...} [constants {source = literal, ...}]
+Op ::= unit | rename R {source -> variable, ...} [constants {source = Const, ...}]
      | natural_join l with r | semijoin l with r
      | project r keep {columns} | select r if (Theta)
      | guard r if (Expr) [Environment]
@@ -15,7 +15,10 @@ BlockOrigin ::= block free[F] interface[I]
                 [fallback] [over prefix] [domain input]
 \end{lstlisting}
 A \code{rename} names a declared relation; its identity is its result name.
-Its mapping and literal bindings partition the declared columns. Writing
+Its mapping and constant bindings partition the declared columns. A binding's
+\code{Const} is a literal or the closed reference \code{@(k)} of the
+A-DomainLiteral code capture of an atom literal; either is one host-once value.
+Writing
 $C$ for those bindings, the rename denotes
 $\delta_m(\pi_{\dom m}\sigma_C(R))$; the dropped columns are not interface columns
 and cannot prove disjointness of union arms.
@@ -34,7 +37,7 @@ The Environment syntax is unchanged. IX and Physical preserve this token.
 
 \Rule{RA-Rename}{R\in\dom\Sigma\quad
  \operatorname{cols}(\Sigma(R))=\dom m\uplus\dom C\quad m:\dom m\cong V\\
- C\text{ assigns admissible literals to declared columns}}
+ C\text{ assigns admissible literals or capture references to declared columns}}
  {\Sigma;\Delta\vdash\delta_m(\pi_{\dom m}\sigma_C(R)):V}
 
 \Rule{RA-Join}{\Delta(r).V=V\quad\Delta(s).V=W}

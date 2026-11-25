@@ -671,21 +671,21 @@ fn check_rename(rename: &Rename, declaration: &cq_syntax::RelationDecl) -> syn::
     let mut constant_sources = BTreeSet::new();
     if let Some(constants) = &rename.constants {
         constants.check()?;
-        for equality in &constants.equalities {
-            let source = symbol_name(&equality.left);
+        for binding in &constants.bindings {
+            let source = symbol_name(&binding.column);
             let Some(_) = declaration
                 .columns
                 .iter()
                 .find(|c| symbol_name(&c.name) == source)
             else {
                 return Err(syn::Error::new_spanned(
-                    &equality.left,
+                    &binding.column,
                     format!("occurrence constant source attribute `{source}` is not declared"),
                 ));
             };
             if by_source.contains_key(&source) {
                 return Err(syn::Error::new_spanned(
-                    &equality.left,
+                    &binding.column,
                     "occurrence constant source attribute must not also be mapped",
                 ));
             }

@@ -16,8 +16,7 @@ program h11 {
             relation answer(part_key: i64, supplier_key: i64, quantity: i64, cost_units: i64);
             answer(*part_key, *supplier_key, *quantity, *cost_units) :-
                 Partsupp(part_key, supplier_key, quantity, cost),
-                Supplier(supplier_key, nation_key), Nation(nation_key, nation_name),
-                where nation_name == "GERMANY",
+                Supplier(supplier_key, nation_key), Nation(nation_key, "GERMANY"),
                 let cost_units: i64 = cost.scaled();
         }
     }

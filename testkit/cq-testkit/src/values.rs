@@ -264,6 +264,18 @@ pub fn evaluate_equality(e: &cq_syntax::Equality, row: &Binding) -> bool {
     row[&symbol_name(&e.left)] == right
 }
 
+/// An occurrence constant compares its source column with a literal or with a
+/// closed capture supplied in the external binding map.
+pub fn evaluate_occurrence_constant(c: &cq_syntax::algebra::OccurrenceConstant, row: &Binding) -> bool {
+    use cq_syntax::constraint::Term;
+    let right = match &c.value {
+        Term::Variable(v) => row[&symbol_name(v)],
+        Term::Closed(expression) => evaluate_integer(expression, row),
+        Term::Literal(l) => evaluate_integer(l, row),
+    };
+    row[&symbol_name(&c.column)] == right
+}
+
 /// Independent integer interpretation of the relational syntax. Closed host
 /// captures, when used by an IR fixture, are supplied in the external binding map.
 pub fn evaluate_constraint(c: &cq_syntax::Constraint, row: &Binding) -> bool {

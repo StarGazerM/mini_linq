@@ -192,13 +192,13 @@ pub(super) fn check(
                     })
                     .collect();
                 let constants = |constants: Option<&ra::OccurrenceConstants>| {
-                    let mut equalities: Vec<_> = constants
+                    let mut bindings: Vec<_> = constants
                         .into_iter()
-                        .flat_map(|constants| &constants.equalities)
-                        .map(|equality| equality.to_token_stream().to_string())
+                        .flat_map(|constants| &constants.bindings)
+                        .map(|binding| binding.to_token_stream().to_string())
                         .collect();
-                    equalities.sort();
-                    equalities
+                    bindings.sort();
+                    bindings
                 };
                 let actual: BTreeSet<_> = rename
                     .mapping
@@ -209,7 +209,10 @@ pub(super) fn check(
                     || actual != mapping
                     || rename.mapping.len() != mapping.len()
                     || constants(rename.constants.as_ref())
-                        != constants(super::occurrence_constants(declaration, atom).as_ref())
+                        != constants(
+                            super::occurrence_constants(declaration, atom, &cq.query.captures)
+                                .as_ref(),
+                        )
                 {
                     return fail(format!(
                         "`{name}` does not rename the occurrence read at VO step {position:?}"

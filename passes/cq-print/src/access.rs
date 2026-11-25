@@ -162,7 +162,7 @@ impl<'a> Context<'a> {
             return self.blocked_rows(result, source);
         }
         if let Operator::Rename(rename) = &self.physical[result].operator {
-            // Literal predicates belong only to this row source. Retained rows
+            // Constant predicates belong only to this row source. Retained rows
             // and indices consume its projected tuples through ordinary builds.
             if let Some(constants) = &rename.constants {
                 let host = &self.hosts[&self.physical_analysis.hosts[result]];
@@ -173,18 +173,19 @@ impl<'a> Context<'a> {
                     .enumerate()
                     .map(|(i, _)| format_ident!("__cq_source_{i}"))
                     .collect::<Vec<_>>();
-                let tests = constants.equalities.iter().map(|equality| {
+                let tests = constants.bindings.iter().map(|constant| {
                     let position = host
                         .layout
                         .iter()
-                        .position(|column| *column == symbol_name(&equality.left))
+                        .position(|column| *column == symbol_name(&constant.column))
                         .expect("checked occurrence column");
                     let binding = &bindings[position];
-                    let structures::syntax::EqualityValue::Literal(literal) = &equality.right
-                    else {
-                        unreachable!("checked occurrence literal")
+                    // IF-Parameter: a capture constant reads its existing reference.
+                    let value = match &constant.value {
+                        structures::syntax::constraint::Term::Literal(literal) => quote!(&#literal),
+                        value => value.reference(&self.parameters),
                     };
-                    quote!(::cq_storage::relational_eq(*#binding, &#literal))
+                    quote!(::cq_storage::relational_eq(*#binding, #value))
                 });
                 let row = self.carrier(result, |column| {
                     let source = &self.physical_analysis.renames[result][column];
@@ -196,19 +197,13 @@ impl<'a> Context<'a> {
                     bindings[position].to_token_stream()
                 });
                 let ty = self.fallback_type(result, cq_lang_structures::ReaderRef::Scan, &[]);
-                let literals: BTreeMap<_, _> = constants
-                    .equalities
+                let values: BTreeMap<_, _> = constants
+                    .bindings
                     .iter()
-                    .map(|equality| {
-                        let structures::syntax::EqualityValue::Literal(literal) = &equality.right
-                        else {
-                            unreachable!("checked occurrence literal")
-                        };
-                        (symbol_name(&equality.left), literal)
-                    })
+                    .map(|constant| (symbol_name(&constant.column), &constant.value))
                     .collect();
-                // A recorded native scan reads the leading literal constants by
-                // one point read; the residual filter still tests every literal.
+                // A recorded native scan reads the leading constants by one
+                // point read; the residual filter still tests every constant.
                 let native =
                     self.analysis
                         .natives
@@ -227,9 +222,24 @@ impl<'a> Context<'a> {
                                 .position(|c| c == column)
                                 .expect("checked native scan column")]
                         });
-                        let values = native.key.iter().map(|column| literals[column]);
+                        // Literal keys keep their typed constant; a key with a
+                        // capture borrows its reference, owned once per read.
+                        let closed = native.key.iter().any(|column| {
+                            matches!(values[column], structures::syntax::constraint::Term::Closed(_))
+                        });
+                        let keys = native.key.iter().map(|column| match values[column] {
+                            structures::syntax::constraint::Term::Literal(value) if !closed => {
+                                quote!(#value)
+                            }
+                            value => value.reference(&self.parameters),
+                        });
+                        let key = if closed {
+                            quote!(::cq_storage::rows::OwnKey::own_key(&(#(#keys,)*)))
+                        } else {
+                            quote!((#(#keys,)*))
+                        };
                         quote!({
-                            let __cq_key: (#(#types,)*) = (#(#values,)*);
+                            let __cq_key: (#(#types,)*) = #key;
                             ::cq_storage::dispatch::point(#value, &__cq_key)
                         })
                     }

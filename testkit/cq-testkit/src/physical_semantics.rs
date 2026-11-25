@@ -147,19 +147,17 @@ pub fn evaluate(
                         columns.iter().map(String::as_str).zip(row).collect();
                     if let Some(constants) = &rename.constants {
                         let mut keep = true;
-                        for equality in &constants.equalities {
-                            let column = symbol_name(&equality.left);
+                        for constant in &constants.bindings {
+                            let column = symbol_name(&constant.column);
                             let Some(value) = source.get(column.as_str()) else {
                                 return malformed(format!("`{host}` has no column `{column}`"));
                             };
-                            let right = match &equality.right {
-                                cq_syntax::EqualityValue::Variable(v) => {
-                                    match source.get(symbol_name(v).as_str()) {
-                                        Some(value) => Scalar::from_value(value),
-                                        None => return malformed(format!("unknown column `{v}`")),
-                                    }
+                            let right = match &constant.value {
+                                cq_syntax::constraint::Term::Literal(l) => eval(l, &env)?,
+                                cq_syntax::constraint::Term::Closed(e) => eval(e, &env)?,
+                                cq_syntax::constraint::Term::Variable(v) => {
+                                    return malformed(format!("constant `{v}` is a variable"));
                                 }
-                                cq_syntax::EqualityValue::Literal(l) => eval(l, &env)?,
                             };
                             keep &= Scalar::from_value(value).equals(&right)?;
                         }

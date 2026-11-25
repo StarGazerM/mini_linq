@@ -33,8 +33,7 @@ program h10 {
             answer(customer_key, name, sum(revenue_units), balance_units, nation, address, phone, comment) :-
                 Orders(order_key, customer_key, order_date),
                 where order_date >= start && order_date < end,
-                Lineitem(order_key, line_number, price, discount, returnflag),
-                where returnflag == "R",
+                Lineitem(order_key, line_number, price, discount, "R"),
                 Customer(customer_key, name, balance, nation_key, address, phone, comment),
                 Nation(nation_key, nation),
                 let revenue_units: i64 = price.scaled() * (100 - discount.scaled()),

@@ -2094,9 +2094,9 @@ pub(crate) fn origin(
             };
             if let Some(constants) = &rename.constants {
                 if constants
-                    .equalities
+                    .bindings
                     .iter()
-                    .map(|equality| symbol_name(&equality.left))
+                    .map(|binding| symbol_name(&binding.column))
                     .collect::<BTreeSet<_>>()
                     .len()
                     > 1
@@ -2104,17 +2104,16 @@ pub(crate) fn origin(
                     result.predicate = true;
                     return Ok(Some(result));
                 }
-                for equality in &constants.equalities {
-                    let EqualityValue::Literal(value) = &equality.right else {
-                        return Err(error(
-                            "T-Gpu: source selection must compare a code to a constant",
-                        ));
-                    };
+                // A literal or a host-bound capture constant: one code interval.
+                for binding in &constants.bindings {
+                    let value = host_value(&binding.value).map_err(|_| {
+                        error("T-Gpu: source selection must compare a code to a constant")
+                    })?;
                     interval(
                         &mut result.selection,
                         name,
-                        symbol_name(&equality.left),
-                        quote!(::gpu_datalog_runtime::encode_scalar(&(#value))),
+                        symbol_name(&binding.column),
+                        value,
                         "eq",
                     )?;
                 }

@@ -327,7 +327,8 @@ fn seed_997_literal_occurrences_are_preserved_before_rust() {
             rename.constants.as_mut()
         })
         .unwrap();
-    constants.equalities[0].right = cq_lang_ra::EqualityValue::Literal(syn::parse_quote!(99));
+    constants.bindings[0].value =
+        cq_lang_vo::syntax::constraint::Term::Literal(Box::new(syn::parse_quote!(99)));
     cq_lang_ra::contract::check(&changed).unwrap();
     let analysis = cq_lang_vo::contract::check(&normal, &written_vo).unwrap();
     assert!(cq_relational_lowering::check_reference(

@@ -13,6 +13,29 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Atom literals are occurrence restrictions again at code-domain columns
+  (`A-DomainLiteral`, `RL-Occurrence`, `WF-Domain`). Since InternedStrings
+  (`6a4f52bf`), A-Domain rewrote `R(a, "AIR")` into `R(a, k), where k ==
+  @(c)`, so every literal at a domain column became a predicate read
+  (`pipe point select`) and lost its literal-bearing rename. A positive-atom
+  literal now stays in its atom; normalization records one exact capture per
+  domain id and literal, and RL-Occurrence emits `rename R {..} constants
+  {m = @(c)}` (`let`, filtered source). `OccurrenceConstants` holds
+  `OccurrenceConstant { column, value: Term }` (a literal or a capture
+  reference); the CPU host scan, PH-ConstantGuard and GPU sources
+  (GPU-Capture `host_constants`, build-phase position selection) read
+  capture constants. TPC-H h02 (`p_size`, `r_name`), h10, h11, h20 and GPU
+  h19 write their single-value equalities as atom literals. GPU census: 13
+  of 26 advised queries move plan (point selects on literal columns become
+  restricted renames; d27 probes Part before Orders); written orders are
+  unchanged. All 26 validate at SF1 and SF10. Paired against `80d602fa`
+  (one suite run each): SF10 sum 158.61 -> 158.24 ms, SF1 19.34 -> 19.94 ms;
+  h02 SF10 0.887x and h19 SF10 0.885x (filtered roots are build-phase
+  position selections), but h08 SF1 1.44x (about 1.3k selected Part rows,
+  200k/150 types, give a ~6-block root grid) and h11 SF10 1.27x (the now-bounded one-row Nation root
+  triggers GR-RetainPrefix: one extra dispatch). Root tile sizing and
+  retention still ignore expansion evidence for small selected roots (open).
+
 - GPU Sequence/TPC-H: six code-generation performance bugs found by profiling
   against DuckDB 2.0.1 + Sirius (nsys, ncu, perf; RTX 6000 Ada) are fixed.
   Plans stay exact; all 26 advised queries match DuckDB at SF1 and SF10.
