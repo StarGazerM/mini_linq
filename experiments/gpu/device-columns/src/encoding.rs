@@ -194,6 +194,7 @@ pub fn encode_value<'data, T: EncodeValue<'data>>(
 }
 
 // DECODE ?: generic typed reconstruction needs the caller read fact; a Rust type is not evidence.
+#[inline]
 pub fn decode_value<'data, T: DecodeValue<'data>>(
     value: i64,
     dictionary: &Dictionary<'data>,
@@ -222,6 +223,7 @@ macro_rules! integers {
                 Ok(value as Self)
             }
             // DECODE ?: integer carrier inverse serves generic typed reads and answers.
+            #[inline]
             fn decode(value: i64, _: &Dictionary<'data>) -> Result<Self> {
                 <$ty>::try_from(value).map_err(|_| failure("CQ_GPU_DECODE_RANGE",
                     concat!("encoded value is outside ", stringify!($ty))))
