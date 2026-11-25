@@ -6,7 +6,8 @@ mod key_domains;
 #[path = "src/manifest.rs"]
 #[allow(dead_code)]
 mod manifest;
-use cq_gpu_sequence::nullable;
+#[path = "src/nullable.rs"]
+mod nullable;
 #[path = "src/source.rs"]
 mod source;
 #[path = "src/stages.rs"]

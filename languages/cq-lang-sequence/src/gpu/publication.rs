@@ -8,8 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub use super::bindings::ColumnBounds;
 
-/// Formal rule DR-NullableLanes: the first W fields carry values; remaining
-/// fields carry presence in the order of their originating logical columns.
+/// Enumerate nullable columns in the order of their presence lanes.
 pub fn presence_slots(nullable: &[bool]) -> impl Iterator<Item = usize> + '_ {
     nullable.iter().enumerate().filter_map(|(i, &optional)| optional.then_some(i))
 }
