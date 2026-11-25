@@ -624,8 +624,7 @@ pub fn hand_membership(
         .collect())
 }
 
-/// Share only legal placement/catalog discovery with decomposition. The root,
-/// expansion boundaries, tile/items and output protocol are authored here.
+/// Apply the authored geometry as an overlay on the checked decomposition.
 pub fn hand_schedule(
     physical: &cq_lang_physical::Program,
     structures: &cq_lang_structures::Program,
@@ -646,11 +645,17 @@ pub fn hand_schedule(
         program: source.clone(),
         trace: Vec::new(),
     };
+    fn geometry_target(step: &Advice) -> Option<&syn::Ident> {
+        match step {
+            Advice::Tile { name, .. } | Advice::Partition { name, .. } | Advice::Segment { name, .. } =>
+                Some(name),
+            _ => None,
+        }
+    }
+    let mut geometry = Vec::new();
     for step in suggested.trace {
-        if matches!(
-            step,
-            Advice::Tile { .. } | Advice::Partition { .. } | Advice::Segment { .. }
-        ) {
+        if geometry_target(&step).is_some() {
+            geometry.push(step);
             continue;
         }
         (planned.physical, planned.structures, planned.program) =
@@ -778,6 +783,12 @@ pub fn hand_schedule(
             });
         }
     }
+    // Formal rule DR-ScheduleOverlay: keep geometry for targets the recipe
+    // does not schedule. Replay it before authored steps, in planner order.
+    let authored: std::collections::BTreeSet<_> =
+        schedule.iter().filter_map(geometry_target).collect();
+    geometry.retain(|step| !authored.contains(geometry_target(step).expect("geometry target")));
+    schedule.splice(..0, geometry);
     schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Count));
     for step in schedule {
         (planned.physical, planned.structures, planned.program) =

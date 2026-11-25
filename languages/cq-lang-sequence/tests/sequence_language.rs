@@ -758,6 +758,7 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
         a = store flatten lookup r [a] rows l;
         output count;
     });
+    p.evidence = syn::parse_quote!(evidence from authored("launch fixture") { count L = 1024; });
     grade(&mut p, quote!(a at device;));
     let mut analysis = common::check_grading(&p, &gpu()).unwrap();
     assert_eq!(analysis.dispatches.len(), 1);
@@ -805,7 +806,7 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
         },
         capacity: gpu::InitialCapacity::Zero,
         reservation: gpu::Reservation::StripeBatch,
-        chains: vec![gpu::ChainExecution { strips }],
+        chains: vec![gpu::ChainExecution { strips, split_child: None }],
         share: gpu::Share::None,
         meta: gpu::Meta::Fresh,
     });
@@ -1052,8 +1053,14 @@ fn gpu_launch_checker_accepts_recorded_positive_implicit_sizes() {
             analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Tiles { rows };
             gpu::check(&p, &analysis).unwrap();
         }
-        analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One;
-        gpu::check(&p, &analysis).unwrap();
+        analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One { max_rows: 1 };
+        reject_gpu_launch(&p, &analysis);
+        analysis.prefix_bounds.get_mut("l").unwrap().rows = Some(1);
+        if deferred {
+            gpu::check(&p, &analysis).unwrap();
+        } else {
+            reject_gpu_launch(&p, &analysis);
+        }
     }
 }
 
@@ -1213,7 +1220,7 @@ fn frontier_refines_only_the_checked_expanding_arena_terminal() {
         reject_gpu_launch(&p, &invalid);
     };
     refused(|a| a.dispatches[0].gpu.as_mut().unwrap().meta = gpu::Meta::Fresh);
-    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One);
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One { max_rows: 1 });
     refused(|a| a.dispatches[0].gpu.as_mut().unwrap().chains[0].strips.truncate(1));
     refused(|a| a.dispatches[0].gpu.as_mut().unwrap().chains[0].strips[0].fold =
         Some(gpu::FoldScope::Whole));

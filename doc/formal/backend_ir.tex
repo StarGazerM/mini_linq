@@ -1386,9 +1386,13 @@ any positive implicit strip and requires explicit tiles and fold scopes to be
 the chain's. Under the Sequence statement \code{roots spread} (EXT-SeqRoots),
 every fold-free dispatch records \textsc{Spread}$(m)$ instead: root tiles
 shrink at launch so a small driver occupies every resident block
-(GPU-RootSpread). A dispatch with a fold keeps its declared partition, because
-block-local fold scopes depend on the root tile. A spread single-chain
-dispatch that expands also records an expansion share (GPU-ExpansionShare):
+(GPU-RootSpread). Without this explicit policy, a potentially underfilled
+expanding driver records a materialized child level. If the actual domain is
+nonempty and fits one tile, every resident block reads it and visits a disjoint
+interval of that level's children (GPU-ChildSlice). Larger domains keep the
+ordinary root-ticket loop; no expansion descriptors are allocated. A whole
+fold combines disjoint partials; a tile-local fold keeps its exact tile cover.
+A spread single-chain dispatch that expands also records an expansion share (GPU-ExpansionShare):
 once some block waits with nothing to steal, a block running an expansion with
 more than $k$ batches left publishes that expansion's block state (parents,
 range begins, offsets and the run it reads) and its remaining batch range to
@@ -1463,11 +1467,29 @@ raw-candidate programs; checking accepts any legal recorded alternative.
   (\mathsf{partition},\mathsf{publication},
    \mathsf{offsetScan},\mathsf{foldCompletion},\mathsf{synchronizations},
    \mathsf{capacity},\mathsf{reservation},\mathsf{strips})}
-\Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count}\quad
+\Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count, or }\infty\text{ for an active GPU-ChildSlice}\quad
  S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
  {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
+\Rule{GPU-OnePart}{d.\mathsf{partition}=\mathsf{One}(b)\quad
+  d.\mathsf{parts}=\bot\quad b\le w_M\quad
+  \forall c\in d.\mathsf{chains}.\ \beta(\mathsf{root}(c)).rows\le b
+  \ \land\ c\text{ has no materialized expansion}}
+ {d\text{ may launch one root part; an absent or unknown bound is not evidence}}
+\Rule{GPU-DistributeExpansion}{d\text{ has a chain with materialized children}\quad
+ \beta(\mathsf{root}(c)).rows=\bot\ \lor\ \beta(\mathsf{root}(c)).rows\le w_d\quad
+ \text{no tile-local fold scope}}
+ {d.\mathsf{partition}=\mathsf{Fanout}(w_d);\ \text{record a materialized child level }j_c
+   \text{ on each underfilled chain}}
+\Rule{GPU-ChildSlice}{0<|D_c|\le w_d\quad j_c\text{ recorded}\quad
+ n\text{ children in the block's scan at }j_c\quad
+ q=\lfloor n/g\rfloor,\ r=n\bmod g,\ p_b=bq+\min(b,r)}
+ {\text{block }b\text{ visits }[p_b,p_{b+1})\text{ and all of its descendants};
+  \ \biguplus_{b<g}[p_b,p_{b+1})=[0,n)}
+\Rule{DR-ScheduleOverlay}{A\text{ authored schedule}\quad P\text{ planner schedule}\quad
+ \mathsf{target}(p)\notin\mathsf{targets}(A)}
+ {p\in P\Rightarrow p\text{ is retained; authored geometry overrides only its own targets}}
 \Rule{GPU-ProgramLaunch}{L(d)\text{ recorded}\quad
- L(d)=\mathsf{ProgramOne}\Rightarrow d.\mathsf{partition}=\mathsf{One}\quad
+ L(d)=\mathsf{ProgramOne}\Rightarrow \exists b.\ d.\mathsf{partition}=\mathsf{One}(b)\quad
  (K,C,B)\text{ is the entry's validated ordinary 1-D envelope}\quad 1\le g\le B}
  {\mathsf{launch}(K,C,g)\text{ reuses that program entry's function and attributes;
  only its grid cap varies, with the same scalar ABI and synchronization}}

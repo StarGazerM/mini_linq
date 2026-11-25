@@ -1519,6 +1519,8 @@ struct Kernel<'c, 'p> {
     parents: std::collections::VecDeque<Vec<String>>,
     /// GPU-ExpansionShare: the chain's published-expansion pool, when shared.
     share: Option<ShareSites>,
+    /// Unconsumed strips after the expansion selected by GPU-ChildSlice.
+    split_remaining: Option<usize>,
 }
 
 /// GPU-ExpansionShare: the dispatch's pool words and the expansion sites.
@@ -1913,6 +1915,14 @@ impl Kernel<'_, '_> {
                         }
                     }
                 });
+                let split_here = self.split_remaining == Some(self.strips.len());
+                let count_children = count_children.map(|count| {
+                    if self.split_remaining.is_some_and(|n| self.strips.len() >= n) {
+                        quote! { if !__cq_split || ::cuda_device::thread::blockIdx_x() == 0 { #count } }
+                    } else {
+                        count
+                    }
+                });
                 let tile = strip
                     .rows
                     .ok_or_else(|| error("GPU-Launch: expansion strip lacks its batch rows"))?;
@@ -1975,6 +1985,23 @@ impl Kernel<'_, '_> {
                         || self.compiler.rows.radix_provider(provider).is_some()))
                 .then(|| format_ident!("__cq_run_{provider}"));
                 let tile_u64 = tile as u64;
+                // Formal rule GPU-ChildSlice: only the selected scan is
+                // replicated. Each block takes disjoint child positions; the
+                // complete continuation below that interval remains fused.
+                let (start, end) = if split_here {
+                    (quote! {
+                        let (__lo, __hi) = if __cq_split {
+                            let b = ::cuda_device::thread::blockIdx_x();
+                            let q = __children / __blocks;
+                            let r = __children % __blocks;
+                            let lo = b * q + b.min(r);
+                            (lo, lo + q + u32::from(b < r))
+                        } else { (0, __children) };
+                        let mut __child_base = __lo as u64;
+                    }, quote!(__hi as u64))
+                } else {
+                    (quote!(let mut __child_base = 0u64;), quote!(__children as u64))
+                };
                 let (expansion, shared_site) = match (site, self.share.as_mut()) {
                     (Some(site), Some(share)) => {
                         // Descriptor words: site, run, children, reserved; each
@@ -2121,10 +2148,10 @@ impl Kernel<'_, '_> {
                             let #begins = __shared.add(#begin_offset).cast::<u32>();
                             let #offsets = __shared.add(#offsets_offset).cast::<u32>();
                             #scan
-                            let mut __child_base = 0u64;
-                            while __child_base < __children as u64 {
+                            #start
+                            while __child_base < #end {
                                 let __partition_begin = __child_base;
-                                let __partition_end = (__child_base + #tile_u64).min(__children as u64);
+                                let __partition_end = (__child_base + #tile_u64).min(#end);
                                 #partition
                                 __child_base += #tile_u64;
                             }
@@ -3590,6 +3617,7 @@ fn translate_with_metadata(
             strips: Default::default(),
             parents: Default::default(),
             share: None,
+            split_remaining: None,
         };
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
@@ -3754,6 +3782,8 @@ fn translate_with_metadata(
                     cq_lang_sequence::ResourceAllocation::Fold => None,
                 })
                 .collect();
+            generator.split_remaining = execution.chains[chain_index].split_child
+                .map(|level| generator.strips.len() - level - 1);
             let strip = generator.next_strip()?;
             if strip.rows.is_some() {
                 return Err(error(
@@ -3761,8 +3791,9 @@ fn translate_with_metadata(
                 ));
             }
             let tile = match execution.partition {
-                cq_lang_sequence::gpu::Partition::Tiles { rows } => quote!(#rows),
-                cq_lang_sequence::gpu::Partition::One => quote!((#domain as u64).max(1)),
+                cq_lang_sequence::gpu::Partition::Tiles { rows }
+                | cq_lang_sequence::gpu::Partition::Fanout { rows } => quote!(#rows),
+                cq_lang_sequence::gpu::Partition::One { .. } => quote!((#domain as u64).max(1)),
                 // GPU-RootSpread: the launch passes the tile sized from occupancy.
                 cq_lang_sequence::gpu::Partition::Spread { .. } => {
                     let tile = format_ident!("__cq_tile_{chain_index}");
@@ -3971,14 +4002,31 @@ fn translate_with_metadata(
                     }
                 }
             } else {
+                let claim = quote! {
+                    if __tid==0 {
+                        *__tile_slot=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(#cursor))
+                            .fetch_add(1,::cuda_device::atomic::AtomicOrdering::Relaxed);
+                    }
+                    ::cuda_device::thread::sync_threads();
+                };
+                let (setup, ticket) = if execution.chains[chain_index].split_child.is_some() {
+                    (quote! {
+                        let __cq_split = #domain != 0 && #domain as u64 <= #tile as u64;
+                        let mut __visited = false;
+                    }, quote! {
+                        let __tile = if __cq_split {
+                            if __visited { break; }
+                            __visited = true;
+                            0u64
+                        } else { #claim *__tile_slot as u64 };
+                    })
+                } else {
+                    (TokenStream::new(), quote! { #claim let __tile = *__tile_slot as u64; })
+                };
                 quote! {
+                    #setup
                     loop {
-                        if __tid==0 {
-                            *__tile_slot=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(#cursor))
-                                .fetch_add(1,::cuda_device::atomic::AtomicOrdering::Relaxed);
-                        }
-                        ::cuda_device::thread::sync_threads();
-                        let __tile=*__tile_slot as u64;
+                        #ticket
                         if __tile*#tile as u64>=#domain as u64 {break;}
                         let __partition_begin=__tile*#tile as u64;
                         let __partition_end=(__partition_begin+#tile as u64).min(#domain as u64);
@@ -4370,11 +4418,18 @@ fn translate_with_metadata(
         let output_keys = format_ident!("__cq_store_keys_{index}");
         let meta_words = 4 + chains.len();
         let parts = match execution.partition {
-            cq_lang_sequence::gpu::Partition::One => quote!(1usize),
-            cq_lang_sequence::gpu::Partition::Tiles { rows } => {
-                let domains = (0..chains.len()).map(|i| {
+            cq_lang_sequence::gpu::Partition::One { .. } => quote!(1usize),
+            cq_lang_sequence::gpu::Partition::Tiles { rows }
+            | cq_lang_sequence::gpu::Partition::Fanout { rows } => {
+                let domains = execution.chains.iter().enumerate().map(|(i, chain)| {
                     let domain = format_ident!("__cq_domain_{i}");
-                    quote!((#domain as usize).div_ceil(#rows))
+                    if chain.split_child.is_some() {
+                        quote!(if #domain != 0 && #domain as usize <= #rows {
+                            usize::MAX
+                        } else { (#domain as usize).div_ceil(#rows) })
+                    } else {
+                        quote!((#domain as usize).div_ceil(#rows))
+                    }
                 });
                 quote!(0usize #(.max(#domains))*)
             }
@@ -4843,6 +4898,7 @@ fn translate_with_metadata(
                 strips: Default::default(),
                 parents: Default::default(),
                 share: None,
+                split_remaining: None,
             };
             let write = row.rewrite(generator.output_write()?)?;
             let kernel = format_ident!("__cq_host_output_{module_name}");
@@ -5166,6 +5222,7 @@ mod tests {
             strips: Default::default(),
             parents: Default::default(),
             share: None,
+            split_remaining: None,
         };
         let write = kernel.output_write().unwrap();
         assert_eq!(
@@ -5212,6 +5269,31 @@ mod tests {
                 output count;
             }
             graded gpu { index at host; input at host; output_rows at device; }
+        }
+    }
+
+    #[test]
+    fn expanding_root_uses_declared_tile_only_when_domain_fills_it() {
+        use cq_lang_sequence::gpu::Partition;
+        let Stack { physical, structures, mut program } = arena_program(false);
+        for (rows, partition, child) in [
+            (None, Partition::Fanout { rows: 256 }, Some(1)),
+            (Some(1usize), Partition::Fanout { rows: 256 }, Some(1)),
+            (Some(4096), Partition::Tiles { rows: 256 }, None),
+        ] {
+            if let Some(rows) = rows {
+                program.evidence = syn::parse_quote!(evidence from authored("launch fixture") { count R = #rows; });
+            }
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let launch = analysis.dispatches[0].gpu.as_ref().unwrap();
+            assert_eq!((&launch.partition, launch.chains[0].split_child), (&partition, child));
+            if child.is_some() {
+                for invalid in [None, Some(0), Some(2)] {
+                    let mut forged = analysis.clone();
+                    forged.dispatches[0].gpu.as_mut().unwrap().chains[0].split_child = invalid;
+                    assert!(cq_lang_sequence::gpu::check(&program, &forged).is_err());
+                }
+            }
         }
     }
 
@@ -6659,6 +6741,7 @@ mod tests {
                         strips: Default::default(),
                         parents: Default::default(),
                         share: None,
+                        split_remaining: None,
                     };
                     let strip = Strip {
                         rows: None,

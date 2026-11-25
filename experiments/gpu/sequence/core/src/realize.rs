@@ -108,7 +108,7 @@ pub(crate) fn select(
         let launches = analysis.dispatches.iter().map(|dispatch| {
             if reusable {
                 match dispatch.gpu.as_ref().expect("graded GPU dispatch").partition {
-                    cq_lang_sequence::gpu::Partition::One => Launch::ProgramOne,
+                    cq_lang_sequence::gpu::Partition::One { .. } => Launch::ProgramOne,
                     _ => Launch::ProgramOccupancy,
                 }
             } else {
@@ -1787,7 +1787,7 @@ pub(crate) fn check(
     }
     for (launch, dispatch) in records.launches.iter().zip(&analysis.dispatches) {
         if *launch == Launch::ProgramOne
-            && !matches!(dispatch.gpu.as_ref().expect("checked GPU dispatch").partition, cq_lang_sequence::gpu::Partition::One)
+            && !matches!(dispatch.gpu.as_ref().expect("checked GPU dispatch").partition, cq_lang_sequence::gpu::Partition::One { .. })
         {
             return Err(error("GPU-ProgramLaunch: one-block preparation requires the one-part partition"));
         }
