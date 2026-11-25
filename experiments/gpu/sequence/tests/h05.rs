@@ -373,7 +373,23 @@ fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
     let query = functions.queries[1].to_token_stream().to_string();
     assert!(!query.contains("__row"));
     assert!(!query.contains("__stored"));
-    assert!(query.contains("device :: decode ("));
+    #[derive(Default)]
+    struct ChildCodes(std::collections::BTreeSet<String>);
+    impl<'ast> Visit<'ast> for ChildCodes {
+        fn visit_expr_assign(&mut self, assignment: &'ast syn::ExprAssign) {
+            let value = assignment.right.to_token_stream().to_string();
+            if value.contains("device :: range_payload (") && value.contains("__child_position") {
+                assert!(value.contains("* __cq_sequence_provider_view_") && value.contains(". payload . add ("));
+                let code = assignment.left.to_token_stream().to_string();
+                assert!(code.starts_with("__code_"), "child payload must feed a live code column: {code}");
+                self.0.insert(code);
+            }
+            visit::visit_expr_assign(self, assignment);
+        }
+    }
+    let mut codes = ChildCodes::default();
+    codes.visit_block(&functions.queries[1].block);
+    assert_eq!(codes.0.len(), 2, "expected the order and supplier code columns");
     assert!(
         !query.contains("decode_u32"),
         "parent carriers use the recorded i64 ABI"
