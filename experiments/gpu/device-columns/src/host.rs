@@ -90,9 +90,16 @@ macro_rules! tuple_codec {
             const ANSWER_FIELDS: &'static [AnswerField] = &[$(AnswerField::for_value::<$T>()),+];
             fn assemble(mut batch: &[u64], count: usize, dictionary: &Dictionary<'data>) -> Result<Vec<Self>> {
                 let columns = ($(take_column::<$T::Word>(&mut batch, count)?,)+);
-                let mut rows = Vec::with_capacity(count);
+                let mut rows = Vec::<Self>::with_capacity(count);
                 for i in 0..count {
-                    rows.push(($($T::from_word(columns.$i[i], dictionary)?,)+));
+                    let row = ($($T::from_word(columns.$i[i], dictionary)?,)+);
+                    // Exact-size batch: growth checks in this transpose loop
+                    // prevent vectorization. Commit each row after all its
+                    // fields succeed so errors still drop the complete prefix.
+                    unsafe {
+                        rows.as_mut_ptr().add(i).write(row);
+                        rows.set_len(i + 1);
+                    }
                 }
                 Ok(rows)
             }
