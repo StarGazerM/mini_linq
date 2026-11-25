@@ -15,8 +15,6 @@
 //! the final dispatch. Use `frontier; head;` to request both refinements.
 //! An ineligible frontier is a translation error.
 
-pub mod nullable;
-
 pub use cq_gpu_sequence_core::runs::record_representation;
 pub use cq_gpu_sequence_core::{
     bind_structures, catalog, machine, providers, translate, translate_arena, translate_arena_head, translate_with_origins,

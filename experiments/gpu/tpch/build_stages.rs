@@ -27,7 +27,7 @@ pub fn compile(
     let mut publication_facts: Vec<crate::Publication> = Vec::new();
     let mut host_uploads = BTreeMap::new();
     let mut host_references = BTreeMap::new();
-    // Formal rule DR-Publication: an automatic transfer boundary depends on
+    // An automatic transfer boundary depends on
     // every consumer, not just on the producer's target.
     let mut pipelines: Vec<_> = (0..program.stages.len()).map(|index| {
         if let Some(pipeline) = override_pipeline { return pipeline.clone(); }

@@ -121,6 +121,8 @@ pub fn lower<'a>(
         if decl.columns.len() != nullable.len() {
             return Err(syn::Error::new_spanned(decl, "DR-NullableLanes: stale input width"));
         }
+        // Formal rule DR-NullableLanes: keep value slots stable and append
+        // presence in recorded column order to the device relation heading.
         let mut slots = Vec::with_capacity(presence.len());
         for &slot in presence {
             let column = &mut decl.columns[slot];

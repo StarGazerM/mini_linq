@@ -5,6 +5,8 @@ pub mod cache;
 pub mod key_domains;
 pub mod loader;
 pub mod manifest;
+#[cfg(test)]
+mod nullable;
 #[allow(warnings)]
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/queries.rs"));
@@ -250,31 +252,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn automatic_stages_retain_nonnullable_device_publications() -> Result<()> {
+    fn all_device_stages_retain_recorded_nullable_publications() -> Result<()> {
         for report in plans()?
             .iter()
-            .filter(|report| report["mode"] == "automatic" && report["status"] == "accepted")
+            .filter(|report| report["status"] == "accepted")
         {
             let Some(stages) = report["stages"].as_array() else {
                 continue;
             };
+            if !stages.iter().all(|s| s["pipeline"]["target"] == "device") {
+                continue;
+            }
             for stage in stages {
-                let nullable = stage["publication_facts"]["nullable"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|value| value.as_bool().unwrap());
-                // A one-stage terminal retains its explicit host publication;
-                // inter-stage automatic placement follows target and validity.
-                let expected =
-                    if stages.len() > 1 && stage["pipeline"]["target"] == "device" && !nullable {
-                        "device"
-                    } else {
-                        "host"
-                    };
+                let facts = &stage["publication_facts"];
+                let nullable = facts["nullable"].as_array().unwrap();
+                // One-stage terminals have explicit host publication; staged
+                // all-device pipelines keep both payload and presence resident.
+                let expected = if stages.len() > 1 { "device" } else { "host" };
+                let presence: Vec<_> = nullable.iter().enumerate()
+                    .filter_map(|(i, flag)| (expected == "device" && flag.as_bool().unwrap()).then_some(i))
+                    .collect();
+                assert_eq!(facts["presence"], json!(presence));
                 assert_eq!(
                     stage["publication"], expected,
-                    "{} stage {}: publication must follow target and validity facts",
+                    "{} stage {}: publication must follow consumer targets",
                     report["query"], stage["stage"]
                 );
                 assert_eq!(stage["pipeline"]["publication"], expected);
