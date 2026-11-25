@@ -334,7 +334,7 @@ pub struct Auxiliary {
     pub canon: BlockGeometry,
     /// Keyed group element kernels (order, key gather, boundaries).
     pub group: BlockGeometry,
-    /// Keyed group reduction: one block per group.
+    /// Block-private dense keyed partial table and its combine.
     pub group_reduce: BlockGeometry,
     /// Bounds reduction of measured columns (uploads, provider descriptors).
     pub bounds: BlockGeometry,

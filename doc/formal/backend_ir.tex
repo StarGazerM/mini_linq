@@ -1902,7 +1902,20 @@ each row function and the host-bound selection conditions.
  B=\biguplus_b B_b\text{ over an occupancy grid}\quad
  p_b=(\mathsf{fold}_a(B_b),\mathsf{present}_a(B_b))_a}
  {\mathsf{group}_{\rm gpu}(G)_a=\bigoplus_b (p_b)_a\text{ in one stream-ordered combine block per aggregate }a}
+\Rule{GPU-KeyedGridFold}{G.\mathrm{ty}=\mathsf{SegmentedGroup}\quad K\ne\varnothing\quad
+ D=\prod_{k\in K}(1+\max k-\min k)\quad W=1+|A|}
+ {\begin{cases}
+ DW\le S/8: &\text{one occupancy-grid histogram of live arguments, then combine occupied bins;}\\
+ \text{otherwise}:&\text{stable radix order, prefix warp head counts, fold all run fragments in parallel.}
+ \end{cases}}
 \end{mathpar}
+Here $S$ is the recorded group-reduction scratch size. Enclosing recorded
+resident bounds permit the dense histogram to consume argument evaluation
+directly; otherwise the provider measures the live keys. Dense bins use
+lexicographic mixed-radix order. Sorted run heads supply keys directly;
+continuations combine on the producing stream. Every sum combine checks
+machine overflow; only final occupied cells are checked against the result
+carrier. An empty keyed relation publishes zero rows.
 Whole-relation (zero-key) lookups also demand a recorded source or completed
 publication, including its row count; they do not require a keyed provider.
 Filtered host Cartesian operands are uploaded with the predicate applied,
@@ -1923,8 +1936,10 @@ fields extraction decodes), a completed flat publication or device source
 fused with the chain's row maps under a live mask, or a host evaluation of the
 Physical input, uploaded unless already a device source. Store aliases that
 wrap the same group are realized by its fold rather than published. Keyed
-groups extract arguments on the occupancy grid and call the recorded
-accumulator. Keyless groups fold in one fused pass: each block accumulates its
+groups call their recorded accumulator with live key enclosures. When the
+frame fits the block table the occupancy-grid argument kernel folds directly;
+otherwise the provider measures the extracted live arguments and applies
+\textsc{GPU-KeyedGridFold}. Keyless groups fold in one fused pass: each block accumulates its
 grid-stride live rows into typed per-aggregate partials (count and checked sum,
 extrema with presence) at its recorded block geometry, and one block per
 aggregate combines the partials on the producing stream at the recorded
