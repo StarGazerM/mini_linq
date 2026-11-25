@@ -1,0 +1,40 @@
+{
+  "scope": "Native DOOP manual-joins, release, sm_89 materialized cubin, warm dependency artifacts. One machine; not a clean workspace build or a multi-workload speed guarantee.",
+  "toolchain": "rustc 1.99.1 (58cf8f9c3), CUDA 13.0, release CGU=16, CARGO_BUILD_JOBS=12",
+  "source": {"control_tree": "d67a61536567c96f5c9ae0836877042faa8627d5", "applied_postprefix_patch_sha256": "78aa1c71cfdc06da9a40a67e456f8dce91cc7f6858d39be27edb108029476814"},
+  "method": "Serial builds under an exclusive machine timing lock. Times are external wall seconds, excluding lock acquisition, unless indicated. The capture rustc wrapper records which units actually ran: Cargo can replay the previous -Ztime-passes output for a fresh library.",
+  "generated_rule_edit": {
+    "edit": "Remove VPT_LoadField@2 from print_rounds frontier scheduling; same relational result, different generated CUDA traversal.",
+    "monolithic_seconds": 62.72,
+    "rustc_incremental_seconds": 66.34,
+    "incremental_unchanged_ptx_entries": "285 of 286 had identical names and bodies after normalizing comments, self references, whitespace, and local basic-block labels.",
+    "shard_boundary": "Run the existing checked frontend to the Round printer. Materialize standalone rule functions, their packed type aliases, and the engine body. Pass the selected rule to the engine through a concrete Rust function pointer. Build its body on the executable side of the crate boundary; retain the other rules in the engine rlib. Rewrite only files whose contents changed.",
+    "changed_output": "Only __cq_gpu_hole_131.rs changed among 139 standalone functions, the aliases and engine tail. This prototype chooses the editable rule in advance; it is not a general automatic partitioner.",
+    "first_build_seconds": {"generate": 3.45, "cargo_and_link": 60.71},
+    "repeat_full_edit_seconds": 10.12,
+    "repeat_full_edit_includes": "Measured in one invocation: run checked plan generation from edited source, render/update sources, Cargo release build and executable link. No incremental rustc flag. Final executable SHA-256 279ea2e0b4241bd7981c7eb14c5714f6392e254fab07fcf4aa8fd3bfe2096382.",
+    "validation": {"xalan": "Edited monolith and shard each matched the CPU reference's full tuples for all 26 outputs.", "scala_cardinality_sha1_prefix": "75b7003b", "scala_fixpoint_seconds": {"monolith": 3.265875, "shard": 3.282355}, "runtime_repetitions": 1},
+    "cargo_only_after_render_seconds": {"first_forward": 6.56, "reverse": 6.16, "second_forward": 6.24}
+  },
+  "handwritten_rule_edit": {
+    "edit": "Reverse the order in which expand_pairs consumes VPT_LoadArray@3 pair descriptors. Each descriptor still writes its own reserved output range. Identical edited manual.rs in both arms.",
+    "first_build_seconds": {"monolithic": 63.04, "split": 65.36},
+    "edited_build_seconds": {"monolithic": 62.74, "split": 6.03},
+    "validation": "Both variants passed Xalan exact tuples for all 26 outputs and Scala cardinalities digest 75b7003b twice, in split/monolith/monolith/split order.",
+    "scope": "Same engine/rule boundary; no checked source generation needed for this hand-written rule edit."
+  },
+  "host_codegen": {
+    "audit": "Of 286 host kernel symbols, 210 private generated entry addresses were referenced only by discard-only black_box calls in PTX-name helpers. Retain device MIR, launch identity, and host ABI. Replace only these audited host definitions with distinct traps before host LLVM optimization; leave the other 76 entries unchanged. The interposer is an experiment, not a supported compiler interface.",
+    "full_build_seconds": {"control": 63.59, "audited": 57.25},
+    "finish_ongoing_codegen_seconds": {"control": 15.110, "audited": 7.834},
+    "identical_device_ptx_sha256": "642d0c6841ab2ff579cb8ce9feeec30fa0d7ccbbd1da4908968bbc780a507d06",
+    "verification": "Device IR also byte-identical. Both arms passed Xalan full tuples (26 outputs) and Scala output cardinalities twice."
+  },
+  "other_trials": {
+    "fast_host_flags": {"flags": "-Copt-level=3 -Clto=off -Cno-prepopulate-passes --jobs-frontend=8", "build_seconds": 45.14, "executable_bytes": 33356120, "baseline_executable_bytes": 25303864},
+    "fast_host_flags_runtime": {"metric": "driver-reported Scala GPU evaluation seconds including host work; alternating trials, identical output counts", "baseline": [4.412782, 4.466602], "fast_flags": [7.193532, 7.162165]},
+    "device_partition_replay": {"scope": "Saved LLVM IR to PTX only, including input processing, parallel opt/llc and merge; AB/BA means. Not a whole build.", "whole_module_partitions_seconds": 4.233, "reachability_pruned_seconds": 3.322, "input_mb_before_after": [173.82, 18.71], "verification": "Entire 14687343-byte PTX identical."}
+  },
+  "prototype_and_profile_bundle": "/data/design-notes/doop-compile-sharding-20261124-ouMSCA/prototype-and-profiles.tgz",
+  "prototype_and_profile_bundle_sha256": "bec3b35907a7dab77cb1239b6cbe7791797f23a2d255aed4199945a0ac7dffb4"
+}
