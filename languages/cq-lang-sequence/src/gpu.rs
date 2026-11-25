@@ -765,14 +765,13 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 "synchronization contradicts the recorded publication",
             ));
         }
-        // Explicit roots policy fixes the geometry; the automatic underfilled
-        // case is checked below against the actual publication's source.
+        // Explicit roots policy fixes spread geometry, independent of estimates.
         let spreads = program.sequence.roots == crate::Roots::Spread
             && !execution.chains.is_empty()
             && fold_free(execution);
         let partition = match &execution.partition {
             Partition::Spread { max_rows } =>
-                *max_rows > 0 && dispatch.parts.is_none_or(|parts| parts == *max_rows),
+                spreads && *max_rows > 0 && dispatch.parts.is_none_or(|parts| parts == *max_rows),
             Partition::Fanout { rows } =>
                 !spreads && *rows > 0 && dispatch.parts.is_none_or(|parts| parts == *rows),
             Partition::Tiles { rows } => !spreads && dispatch.parts.is_none_or(|parts| parts == *rows),
@@ -854,26 +853,27 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         if chains.len() != execution.chains.len() {
             return Err(error("chain records differ from the publication's chains"));
         }
-        let underfilled = underfilled_expansion(
-            execution, &chains, analysis, dispatch.parts.unwrap_or(execution.block_threads as usize),
-        );
         if let Partition::One { max_rows } = execution.partition
             && root_bound(execution, &chains, analysis).is_none_or(|bound| bound > max_rows)
         {
             return Err(error("GPU-OnePart: one part lacks bounded non-expanding root evidence"));
         }
-        if !spreads && (matches!(execution.partition, Partition::Spread { .. })
-            || matches!(execution.partition, Partition::Fanout { .. }) != underfilled)
-        {
-            return Err(error("GPU-DistributeExpansion: underfilled expansion requires distributed children"));
+        // Formal rule GPU-FanoutLegal: check the supplied geometry, not the
+        // estimates or the last-child preference used to select it.
+        let fanout = matches!(execution.partition, Partition::Fanout { .. });
+        if fanout {
+            if execution.chains.iter().flat_map(|c| &c.strips)
+                .any(|s| matches!(s.fold, Some(FoldScope::Tiles(_))))
+            {
+                return Err(error("GPU-FanoutLegal: fanout cannot split a tile-local fold"));
+            }
+            if !chains.iter().zip(&execution.chains).any(|(s, c)| root_loop_children(s, c) > 0) {
+                return Err(error("GPU-FanoutLegal: fanout requires a materialized root-loop child"));
+            }
         }
         for (steps, record) in chains.iter().zip(&execution.chains) {
-            let children = root_loop_children(steps, record);
-            let needs_split = matches!(execution.partition, Partition::Fanout { rows }
-                if children != 0 && root_rows(steps, analysis).is_none_or(|n| n <= rows as u128));
-            if record.split_child != needs_split.then_some(children)
-            {
-                return Err(error("GPU-ChildSlice: missing or invalid materialized child level"));
+            if record.split_child.is_some_and(|i| !fanout || i == 0 || i > root_loop_children(steps, record)) {
+                return Err(error("GPU-ChildSlice: split must name a materialized root-loop child of a fanout partition"));
             }
             let levels = levels(steps, deferred);
             if levels.len() != record.strips.len() {
