@@ -31,6 +31,7 @@ pub(crate) struct Origin {
     pub(crate) predicate: bool,
 }
 struct Source {
+    read: Ident,
     reads: Vec<(usize, TokenStream)>,
     length: TokenStream,
     positions: Option<Ident>,
@@ -1005,6 +1006,7 @@ impl Rows {
                     sources.insert(
                         name.clone(),
                         Source {
+                            read: format_ident!("decode"),
                             reads,
                             length,
                             positions,
@@ -1121,6 +1123,7 @@ impl Rows {
                 sources.insert(
                     name.clone(),
                     Source {
+                        read: format_ident!("range_payload"),
                         reads,
                         length: quote!(#owner.len()),
                         positions: None,
@@ -1176,6 +1179,7 @@ impl Rows {
                 sources.insert(
                     name.clone(),
                     Source {
+                        read: format_ident!("decode"),
                         reads,
                         length,
                         positions,
@@ -1288,6 +1292,7 @@ impl Rows {
         self.sources.insert(
             name.to_owned(),
             Source {
+                read: format_ident!("decode"),
                 reads,
                 length: quote!(#length),
                 positions: None,
@@ -1359,9 +1364,10 @@ impl Rows {
             None => quote!((#position) as u64),
         };
         // DECODE V: P6 source scans reconstruct FOR values into i64 even for code-only joins and predicates.
+        let read = &source.read;
         let reads = source.reads.iter().filter(|(slot, _)| live.is_none_or(|live| live.contains(slot))).map(|(slot, view)| {
             quote! {
-                #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::decode(#view, #position) } as i64;
+                #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::#read(#view, #position) } as i64;
             }
         });
         Ok(quote!(#(#reads)*))

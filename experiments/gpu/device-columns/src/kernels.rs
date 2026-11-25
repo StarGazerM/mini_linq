@@ -372,6 +372,21 @@ pub(crate) mod codecs {
         }
     }
 
+    /// Snapshot a build-time source projection, or download an indirect run.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn gather_plain(source: SourceView, order: *const u32, rows: u64, output: *mut i64) {
+        let mut i = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while i < rows {
+            let row = if order.is_null() { i } else { unsafe { *order.add(i as usize) as u64 } };
+            // DECODE ?: native gather snapshots a build-time projection or reconstructs a diagnostic download, per caller.
+            unsafe { output.add(i as usize).write(decode_source(source, row)) };
+            i += stride;
+        }
+    }
+
     /// Gather `source[order[i]]` into index order and FOR-pack it in one pass.
     /// One warp per 1024-row vector stages its native-width values in shared memory,
     /// reduces the vector's extrema, writes its header, and packs it into a
