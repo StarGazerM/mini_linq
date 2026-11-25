@@ -1915,9 +1915,10 @@ impl Kernel<'_, '_> {
                         }
                     }
                 });
-                let split_here = self.split_remaining == Some(self.strips.len());
+                let may_split = self.split_remaining.is_some_and(|n| self.strips.len() >= n);
+                let last_split = self.split_remaining == Some(self.strips.len());
                 let count_children = count_children.map(|count| {
-                    if self.split_remaining.is_some_and(|n| self.strips.len() >= n) {
+                    if may_split {
                         quote! { if !__cq_split || ::cuda_device::thread::blockIdx_x() == 0 { #count } }
                     } else {
                         count
@@ -1985,18 +1986,23 @@ impl Kernel<'_, '_> {
                         || self.compiler.rows.radix_provider(provider).is_some()))
                 .then(|| format_ident!("__cq_run_{provider}"));
                 let tile_u64 = tile as u64;
-                // Formal rule GPU-ChildSlice: only the selected scan is
-                // replicated. Each block takes disjoint child positions; the
-                // complete continuation below that interval remains fused.
-                let (start, end) = if split_here {
+                // Formal rule GPU-ChildSlice: blocks revisit the prefix through
+                // this scan, then visit disjoint intervals. The continuation
+                // below each interval remains fused and executes exactly once.
+                let (start, end) = if may_split {
+                    let take = if last_split { quote!(__cq_split) } else {
+                        quote!(__cq_split && __children >= __blocks)
+                    };
                     (quote! {
-                        let (__lo, __hi) = if __cq_split {
+                        let __take = #take;
+                        let (__lo, __hi) = if __take {
                             let b = ::cuda_device::thread::blockIdx_x();
                             let q = __children / __blocks;
                             let r = __children % __blocks;
                             let lo = b * q + b.min(r);
                             (lo, lo + q + u32::from(b < r))
                         } else { (0, __children) };
+                        let __cq_split = __cq_split && !__take;
                         let mut __child_base = __lo as u64;
                     }, quote!(__hi as u64))
                 } else {

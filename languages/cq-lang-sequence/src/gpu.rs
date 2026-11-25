@@ -111,7 +111,8 @@ pub struct Strip {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainExecution {
     pub strips: Vec<Strip>,
-    /// One-based index into `strips` of the materialized expansion to split.
+    /// Last child strip at which a one-tile root must split; an earlier scan
+    /// with enough children for the grid claims the split first.
     pub split_child: Option<usize>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -340,17 +341,8 @@ pub(crate) fn derive(
                 execution.partition = Partition::Fanout { rows: width };
                 for (steps, chain) in chains.iter().zip(&mut execution.chains) {
                     if chain.strips.len() > 1 && root_rows(steps, analysis).is_none_or(|n| n <= width as u128) {
-                        let children = chain.strips.len() - 1;
-                        // Skip small providers in the prefix: the first wide
-                        // expansion gives the other blocks useful child work.
-                        for (i, provider) in dispatch_lookups(steps).take(children).enumerate() {
-                            chain.split_child = Some(i + 1);
-                            if analysis.prefix_bounds.get(provider).and_then(|b| b.rows)
-                                .is_none_or(|n| n > width as u128)
-                            {
-                                break;
-                            }
-                        }
+                        let children = root_loop_children(steps, chain);
+                        chain.split_child = (children != 0).then_some(children);
                     }
                 }
             } else if dispatch.parts.is_none()
@@ -402,11 +394,10 @@ fn root_rows(steps: &[Step], analysis: &Analysis) -> Option<u128> {
 }
 
 // A whole fold's suffix executes in its combine kernel, not in the root loop.
-fn dispatch_lookups(steps: &[Step]) -> impl Iterator<Item = &String> {
-    steps.iter().take_while(|s| !matches!(s, Step::Fold(_))).filter_map(|s| match s {
-        Step::Lookup(provider, _) => Some(provider),
-        _ => None,
-    })
+fn root_loop_children(steps: &[Step], chain: &ChainExecution) -> usize {
+    steps.iter().take_while(|s| !matches!(s, Step::Fold(_)))
+        .filter(|s| matches!(s, Step::Lookup(..)))
+        .take(chain.strips.len().saturating_sub(1)).count()
 }
 
 // Formal rule GPU-OnePart: the evidence for every source must fit a block,
@@ -427,8 +418,7 @@ fn underfilled_expansion(
     execution.chains.iter().flat_map(|c| &c.strips)
         .all(|s| !matches!(s.fold, Some(FoldScope::Tiles(_))))
         && chains.iter().zip(&execution.chains).any(|(steps, chain)| {
-            chain.strips.len() > 1
-                && dispatch_lookups(steps).next().is_some()
+            root_loop_children(steps, chain) != 0
                 && root_rows(steps, analysis).is_none_or(|rows| rows <= width as u128)
         })
 }
@@ -878,12 +868,10 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             return Err(error("GPU-DistributeExpansion: underfilled expansion requires distributed children"));
         }
         for (steps, record) in chains.iter().zip(&execution.chains) {
+            let children = root_loop_children(steps, record);
             let needs_split = matches!(execution.partition, Partition::Fanout { rows }
-                if record.strips.len() > 1 && dispatch_lookups(steps).next().is_some()
-                    && root_rows(steps, analysis).is_none_or(|n| n <= rows as u128));
-            if needs_split != record.split_child.is_some()
-                || record.split_child.is_some_and(|i| i == 0 || i >= record.strips.len()
-                    || dispatch_lookups(steps).nth(i - 1).is_none())
+                if children != 0 && root_rows(steps, analysis).is_none_or(|n| n <= rows as u128));
+            if record.split_child != needs_split.then_some(children)
             {
                 return Err(error("GPU-ChildSlice: missing or invalid materialized child level"));
             }
