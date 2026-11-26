@@ -2589,6 +2589,10 @@ namespace {
 // CUDA DeviceRadixRun layout (GPU-RadixRun): keys of `lanes` u64 words.
 constexpr uint32_t kMaxWordLanes = 8;      // Must match words.metal.
 constexpr uint32_t kMaxWordRadixBits = 30; // Directory entries index a uint grid.
+constexpr uint32_t kMaxWordItems = 12;     // CUDA item tuple arity.
+// Merge-path slots per thread; measured on M3 Max, 16M + 10% random keys:
+// 2-4 fastest (~7.8 ms), 16: 11.6 ms, 32: 12.9 ms (strided tiles coalesce poorly).
+constexpr uint32_t kWordMergeTile = 4;
 
 struct WordRunShape {
   uint32_t lanes, ms_first, active_bits, radix_bits, offset_bytes;
@@ -2602,9 +2606,25 @@ size_t word_directory_entries(uint32_t radix_bits) {
   return radix_bits == 0 ? 0 : (size_t{1} << radix_bits) + 1;
 }
 
-// inputs: keys uint64 [n, lanes]. outputs: distinct keys [n, lanes] (prefix
-// key_count), offsets [n + 1] (prefix key_count + 1), stable order uint32
-// [n], directory [entries], meta uint64 [2] = {key_count, n}.
+// Directory over the published distinct keys outputs[0] with meta outputs[4].
+void encode_word_directory(
+    std::vector<mx::array>& outputs, const WordRunShape& shape,
+    mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  if (shape.radix_bits == 0) return;
+  const uint32_t args[] = {shape.lanes, shape.ms_first, shape.radix_bits};
+  encoder.set_compute_pipeline_state(index_kernel(device,
+      shape.offset_bytes == 8 ? "words_directory_o64" : "words_directory_o32"));
+  encoder.set_input_array(outputs[0], 0);
+  encoder.set_input_array(outputs[4], 1);
+  encoder.set_output_array(outputs[3], 2);
+  encoder.set_bytes(args, 3, 3);
+  dispatch(encoder, ceil_div(word_directory_entries(shape.radix_bits), kThreads));
+}
+
+// inputs: keys uint64 [n, lanes], then item columns [n]. outputs: distinct
+// keys [n, lanes] (prefix key_count), offsets [n + 1] (prefix key_count + 1),
+// stable order uint32 [n], directory [entries], meta uint64 [2] =
+// {key_count, n}, then each item column gathered through the stable order.
 class WordRunOperation final : public mx::Primitive {
  public:
   WordRunOperation(mx::Stream stream, WordRunShape shape)
@@ -2667,60 +2687,245 @@ class WordRunOperation final : public mx::Primitive {
     encoder.set_output_array(outputs[4], 6);
     encoder.set_bytes(group_args, 2, 7);
     dispatch(encoder, ceil_div(n, kThreads));
-    if (shape_.radix_bits != 0) {
-      const auto entries = word_directory_entries(shape_.radix_bits);
-      const uint32_t args[] = {shape_.lanes, shape_.ms_first, shape_.radix_bits};
+    encode_word_directory(outputs, shape_, device, encoder);
+    for (size_t column = 1; column < inputs.size(); ++column) {
       encoder.set_compute_pipeline_state(index_kernel(device,
-          wide ? "words_directory_o64" : "words_directory_o32"));
-      encoder.set_input_array(outputs[0], 0);
-      encoder.set_input_array(outputs[4], 1);
-      encoder.set_output_array(outputs[3], 2);
-      encoder.set_bytes(args, 3, 3);
-      dispatch(encoder, ceil_div(entries, kThreads));
+          inputs[column].itemsize() == 8 ? "words_gather_b8" : "words_gather_b4"));
+      encoder.set_input_array(inputs[column], 0);
+      encoder.set_input_array(outputs[2], 1);
+      encoder.set_output_array(outputs[4 + column], 2);
+      encoder.set_bytes(n, 3);
+      dispatch(encoder, ceil_div(n, kThreads));
     }
   }
  private:
   WordRunShape shape_;
 };
 
-std::array<mlx_array*, 4> word_run_handles(mccl_word_run* run) {
-  return {&run->keys, &run->offsets, &run->order, &run->directory};
+// inputs: older {keys, offsets, order}, newer {keys, offsets, order}, then
+// the older and the newer item columns. outputs as WordRunOperation, with
+// key and offset capacity slots = older keys + newer keys.
+class WordMergeOperation final : public mx::Primitive {
+ public:
+  WordMergeOperation(mx::Stream stream, WordRunShape shape)
+      : mx::Primitive(stream), shape_(shape) {}
+  const char* name() const override { return "McclWordMerge"; }
+  void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
+    throw std::runtime_error("mccl word runs require a GPU stream");
+  }
+  void eval_gpu(
+      const std::vector<mx::array>& inputs,
+      std::vector<mx::array>& outputs) override {
+    auto& device = validate_index_device(stream());
+    require_contiguous(inputs, "word run merge");
+    for (auto& output : outputs) allocate_storage(output);
+    auto& encoder = mx::metal::get_command_encoder(stream());
+    const bool wide = shape_.offset_bytes == 8;
+    const auto older_keys = static_cast<uint32_t>(inputs[0].shape(0));
+    const auto newer_keys = static_cast<uint32_t>(inputs[3].shape(0));
+    const auto older_rows = static_cast<uint32_t>(inputs[2].shape(0));
+    const auto newer_rows = static_cast<uint32_t>(inputs[5].shape(0));
+    const uint32_t slots = older_keys + newer_keys, rows = older_rows + newer_rows;
+    auto tags = allocate_leaf({static_cast<int>(slots)}, device);
+    auto positions = allocate_leaf(
+        {static_cast<int>(slots + 1)}, device, offset_dtype(shape_.offset_bytes));
+    auto sources = allocate_leaf({static_cast<int>(rows)}, device);
+    encoder.add_temporary(tags);
+    encoder.add_temporary(positions);
+    encoder.add_temporary(sources);
+    auto prefix = flag_prefix(slots, device, encoder);
+    const uint32_t slot_args[] = {
+        older_keys, newer_keys, shape_.lanes, shape_.ms_first, kWordMergeTile,
+        older_rows, newer_rows};
+    encoder.set_compute_pipeline_state(index_kernel(device,
+        wide ? "words_merge_slots_o64" : "words_merge_slots_o32"));
+    encoder.set_input_array(inputs[0], 0);
+    encoder.set_input_array(inputs[1], 1);
+    encoder.set_input_array(inputs[3], 2);
+    encoder.set_input_array(inputs[4], 3);
+    encoder.set_output_array(tags, 4);
+    encoder.set_output_array(positions, 5);
+    encoder.set_output_array(prefix, 6);
+    encoder.set_bytes(slot_args, 7, 7);
+    dispatch(encoder, ceil_div(ceil_div(slots, kWordMergeTile), kThreads));
+    scan_flags(prefix, device, encoder);
+    const uint32_t scatter_args[] = {slots, shape_.lanes};
+    encoder.set_compute_pipeline_state(index_kernel(device,
+        wide ? "words_merge_scatter_o64" : "words_merge_scatter_o32"));
+    encoder.set_input_array(inputs[0], 0);
+    encoder.set_input_array(inputs[3], 1);
+    encoder.set_input_array(tags, 2);
+    encoder.set_input_array(positions, 3);
+    encoder.set_input_array(prefix, 4);
+    encoder.set_output_array(outputs[0], 5);
+    encoder.set_output_array(outputs[1], 6);
+    encoder.set_output_array(outputs[4], 7);
+    encoder.set_bytes(scatter_args, 2, 8);
+    dispatch(encoder, ceil_div(slots, kThreads));
+    const uint32_t source_args[] = {slots, rows, older_rows};
+    encoder.set_compute_pipeline_state(index_kernel(device,
+        wide ? "words_merge_sources_o64" : "words_merge_sources_o32"));
+    encoder.set_input_array(inputs[1], 0);
+    encoder.set_input_array(inputs[4], 1);
+    encoder.set_input_array(tags, 2);
+    encoder.set_input_array(positions, 3);
+    encoder.set_output_array(sources, 4);
+    encoder.set_bytes(source_args, 3, 5);
+    dispatch(encoder, ceil_div(rows, kThreads));
+    // Column 0 is the stable order: newer rows rebase after the older rows.
+    const size_t columns = (inputs.size() - 6) / 2;
+    for (size_t column = 0; column <= columns; ++column) {
+      const auto& older = column == 0 ? inputs[2] : inputs[5 + column];
+      const auto& newer = column == 0 ? inputs[5] : inputs[5 + columns + column];
+      const uint32_t args[] = {rows, older_rows, column == 0 ? older_rows : 0};
+      encoder.set_compute_pipeline_state(index_kernel(device,
+          older.itemsize() == 8 ? "words_merge_b8" : "words_merge_b4"));
+      encoder.set_input_array(older, 0);
+      encoder.set_input_array(newer, 1);
+      encoder.set_input_array(sources, 2);
+      encoder.set_output_array(column == 0 ? outputs[2] : outputs[4 + column], 3);
+      encoder.set_bytes(args, 3, 4);
+      dispatch(encoder, ceil_div(rows, kThreads));
+    }
+    encode_word_directory(outputs, shape_, device, encoder);
+  }
+ private:
+  WordRunShape shape_;
+};
+
+void validate_word_params(
+    uint32_t lanes, uint32_t active_bits, uint32_t radix_bits, uint32_t offset_bytes) {
+  if (lanes == 0 || lanes > kMaxWordLanes) {
+    throw std::invalid_argument("mccl word run lanes must be 1..8");
+  }
+  if (active_bits > lanes * 64) {
+    throw std::invalid_argument("mccl word run active bits exceed the key word");
+  }
+  if (radix_bits > kMaxWordRadixBits) {
+    throw std::invalid_argument("mccl word run directory bits must be at most 30");
+  }
+  if (offset_bytes != 4 && offset_bytes != 8) {
+    throw std::invalid_argument("mccl word run offsets must be 4 or 8 bytes");
+  }
+}
+
+// Run outputs then item outputs: non-null, pairwise distinct, none an input.
+std::vector<mlx_array*> word_run_handles(
+    mccl_word_run* run, mlx_array* items, uint32_t item_count,
+    const std::vector<mlx_array>& inputs) {
+  if (item_count > kMaxWordItems) {
+    throw std::invalid_argument("mccl word run item columns must be at most 12");
+  }
+  if (item_count != 0 && !items) {
+    throw std::invalid_argument("mccl word run item outputs must not be null");
+  }
+  std::vector<mlx_array*> handles{&run->keys, &run->offsets, &run->order, &run->directory};
+  for (uint32_t column = 0; column < item_count; ++column) handles.push_back(items + column);
+  for (size_t i = 0; i < handles.size(); ++i) {
+    if (!handles[i]->ctx) continue;
+    for (const auto& input : inputs) {
+      if (handles[i]->ctx == input.ctx) {
+        throw std::invalid_argument("mccl word run outputs must not alias the inputs");
+      }
+    }
+    for (size_t j = 0; j < i; ++j) {
+      if (handles[i]->ctx == handles[j]->ctx) {
+        throw std::invalid_argument("mccl word run output handles must be distinct");
+      }
+    }
+  }
+  return handles;
+}
+
+const mx::array& word_item(mlx_array item, size_t rows) {
+  if (!item.ctx) throw std::invalid_argument("mccl word run item column is missing");
+  const auto& column = mlx_array_get_(item);
+  const auto dtype = column.dtype();
+  if (dtype != mx::uint32 && dtype != mx::int32 && dtype != mx::uint64 && dtype != mx::int64) {
+    throw std::invalid_argument("mccl word run item columns must be 4- or 8-byte integers");
+  }
+  if (column.ndim() != 1 || static_cast<size_t>(column.shape(0)) != rows) {
+    throw std::invalid_argument("mccl word run item columns must be [rows]");
+  }
+  return column;
+}
+
+// A merge input as published by a build or merge: arrays match metadata.
+std::array<mx::array, 3> word_run_arrays(const mccl_word_run& run) {
+  if (!run.keys.ctx || !run.offsets.ctx || !run.order.ctx || !run.directory.ctx) {
+    throw std::invalid_argument("mccl word run merge input arrays are missing");
+  }
+  if (run.key_count == 0 || run.key_count > run.rows || run.rows > kMaxPairRows) {
+    throw std::invalid_argument("mccl word run merge input has invalid counts");
+  }
+  const auto offsets = offset_dtype(run.offset_bytes);
+  const auto keys = static_cast<int>(run.key_count);
+  const auto expect = [](const mx::array& array, mx::Dtype dtype, const mx::Shape& shape) {
+    if (array.dtype() != dtype || array.shape() != shape) {
+      throw std::invalid_argument("mccl word run merge input arrays do not match their metadata");
+    }
+    return array;
+  };
+  expect(mlx_array_get_(run.directory), offsets,
+      {static_cast<int>(word_directory_entries(run.radix_bits))});
+  return {
+      expect(mlx_array_get_(run.keys), mx::uint64, {keys, static_cast<int>(run.lanes)}),
+      expect(mlx_array_get_(run.offsets), offsets, {keys + 1}),
+      expect(mlx_array_get_(run.order), mx::uint32, {static_cast<int>(run.rows)})};
+}
+
+// Evaluates {keys, offsets, order, directory, meta, items...} with one
+// count readback and installs primitive-free prefixes; *out changes only on
+// success.
+void publish_word_run(
+    mccl_word_run* out, const std::vector<mlx_array*>& handles,
+    std::vector<mx::array>& graph, size_t rows, const WordRunShape& shape) {
+  mx::eval(graph);
+  const auto* meta = graph[4].data<uint64_t>();
+  if (meta[1] != rows || meta[0] == 0 ||
+      meta[0] > static_cast<uint64_t>(graph[0].shape(0))) {
+    throw std::runtime_error("mccl GPU word run metadata exceeds output capacity");
+  }
+  const auto key_count = static_cast<int>(meta[0]);
+  const auto n = static_cast<int>(rows);
+  std::vector<mx::array> result{
+      radix_prefix(graph[0], {key_count, static_cast<int>(shape.lanes)}),
+      radix_prefix(graph[1], {key_count + 1}),
+      radix_prefix(graph[2], {n}),
+      radix_prefix(graph[3], graph[3].shape())};
+  for (size_t column = 5; column < graph.size(); ++column) {
+    result.push_back(radix_prefix(graph[column], {n}));
+  }
+  for (size_t i = 0; i < handles.size(); ++i) install(handles[i], std::move(result[i]));
+  out->rows = rows;
+  out->key_count = meta[0];
+  out->lanes = shape.lanes;
+  out->ms_first = shape.ms_first;
+  out->active_bits = shape.active_bits;
+  out->radix_bits = shape.radix_bits;
+  out->offset_bytes = shape.offset_bytes;
 }
 
 } // namespace
 
-extern "C" int mccl_build_word_run(
-    mccl_word_run* out, mlx_array keys, uint32_t lanes, int ms_first,
-    uint32_t active_bits, uint32_t radix_bits, uint32_t offset_bytes,
-    mlx_stream stream) {
+extern "C" int mccl_build_word_run_items(
+    mccl_word_run* out, mlx_array* items_out, mlx_array keys, const mlx_array* items,
+    uint32_t item_count, uint32_t lanes, int ms_first, uint32_t active_bits,
+    uint32_t radix_bits, uint32_t offset_bytes, mlx_stream stream) {
   return capture_error([&] {
     if (!out) throw std::invalid_argument("mccl word run output must not be null");
     if (!keys.ctx) throw std::invalid_argument("mccl word run keys are missing");
+    if (item_count != 0 && !items) {
+      throw std::invalid_argument("mccl word run item columns must not be null");
+    }
     const auto s = validate_stream(stream);
     auto& device = validate_index_device(s);
-    const auto handles = word_run_handles(out);
-    for (size_t i = 0; i < handles.size(); ++i) {
-      if (handles[i]->ctx && handles[i]->ctx == keys.ctx) {
-        throw std::invalid_argument("mccl word run outputs must not alias the keys");
-      }
-      for (size_t j = 0; j < i; ++j) {
-        if (handles[i]->ctx && handles[i]->ctx == handles[j]->ctx) {
-          throw std::invalid_argument("mccl word run output handles must be distinct");
-        }
-      }
+    validate_word_params(lanes, active_bits, radix_bits, offset_bytes);
+    std::vector<mlx_array> sources{keys};
+    for (uint32_t column = 0; column < std::min(item_count, kMaxWordItems); ++column) {
+      sources.push_back(items[column]);
     }
-    if (lanes == 0 || lanes > kMaxWordLanes) {
-      throw std::invalid_argument("mccl word run lanes must be 1..8");
-    }
-    if (active_bits > lanes * 64) {
-      throw std::invalid_argument("mccl word run active bits exceed the key word");
-    }
-    if (radix_bits > kMaxWordRadixBits) {
-      throw std::invalid_argument("mccl word run directory bits must be at most 30");
-    }
-    if (offset_bytes != 4 && offset_bytes != 8) {
-      throw std::invalid_argument("mccl word run offsets must be 4 or 8 bytes");
-    }
+    const auto handles = word_run_handles(out, items_out, item_count, sources);
     const auto& source = mlx_array_get_(keys);
     if (source.ndim() != 2 || source.dtype() != mx::uint64 ||
         static_cast<uint32_t>(source.shape(1)) != lanes) {
@@ -2737,31 +2942,96 @@ extern "C" int mccl_build_word_run(
     validate_capacity(rows + 1, device, offset_bytes);
     const auto entries = word_directory_entries(radix_bits);
     validate_capacity(entries, device, offset_bytes);
-    const WordRunShape shape{lanes, uint32_t(ms_first != 0), active_bits, radix_bits, offset_bytes};
     const auto n = static_cast<int>(rows);
-    auto graph = mx::array::make_arrays(
-        {{n, static_cast<int>(lanes)}, {n + 1}, {n}, {static_cast<int>(entries)}, {2}},
-        {mx::uint64, offset_dtype(offset_bytes), mx::uint32, offset_dtype(offset_bytes), mx::uint64},
-        std::make_shared<WordRunOperation>(s, shape),
-        {mx::contiguous(source, false, s)});
-    mx::eval(graph);
-    const auto* meta = graph[4].data<uint64_t>();
-    if (meta[1] != rows || meta[0] == 0 || meta[0] > rows) {
-      throw std::runtime_error("mccl GPU word run metadata exceeds output capacity");
+    std::vector<mx::Shape> shapes{
+        {n, static_cast<int>(lanes)}, {n + 1}, {n}, {static_cast<int>(entries)}, {2}};
+    std::vector<mx::Dtype> dtypes{
+        mx::uint64, offset_dtype(offset_bytes), mx::uint32, offset_dtype(offset_bytes), mx::uint64};
+    std::vector<mx::array> inputs{mx::contiguous(source, false, s)};
+    for (uint32_t column = 0; column < item_count; ++column) {
+      const auto& item = word_item(items[column], rows);
+      shapes.push_back({n});
+      dtypes.push_back(item.dtype());
+      inputs.push_back(mx::contiguous(item, false, s));
     }
-    const auto key_count = static_cast<int>(meta[0]);
-    mx::array result[] = {
-        radix_prefix(graph[0], {key_count, static_cast<int>(lanes)}),
-        radix_prefix(graph[1], {key_count + 1}),
-        radix_prefix(graph[2], {n}),
-        radix_prefix(graph[3], {static_cast<int>(entries)})};
-    for (size_t i = 0; i < handles.size(); ++i) install(handles[i], std::move(result[i]));
-    out->rows = rows;
-    out->key_count = meta[0];
-    out->lanes = lanes;
-    out->ms_first = shape.ms_first;
-    out->active_bits = active_bits;
-    out->radix_bits = radix_bits;
-    out->offset_bytes = offset_bytes;
+    const WordRunShape shape{lanes, uint32_t(ms_first != 0), active_bits, radix_bits, offset_bytes};
+    auto graph = mx::array::make_arrays(
+        std::move(shapes), std::move(dtypes),
+        std::make_shared<WordRunOperation>(s, shape), std::move(inputs));
+    publish_word_run(out, handles, graph, rows, shape);
+  });
+}
+
+extern "C" int mccl_build_word_run(
+    mccl_word_run* out, mlx_array keys, uint32_t lanes, int ms_first,
+    uint32_t active_bits, uint32_t radix_bits, uint32_t offset_bytes,
+    mlx_stream stream) {
+  return mccl_build_word_run_items(
+      out, nullptr, keys, nullptr, 0, lanes, ms_first, active_bits, radix_bits,
+      offset_bytes, stream);
+}
+
+extern "C" int mccl_merge_word_runs(
+    mccl_word_run* out, mlx_array* items_out, const mccl_word_run* older,
+    const mlx_array* older_items, const mccl_word_run* newer,
+    const mlx_array* newer_items, uint32_t item_count, mlx_stream stream) {
+  return capture_error([&] {
+    if (!out) throw std::invalid_argument("mccl word run output must not be null");
+    if (!older || !newer) throw std::invalid_argument("mccl word run merge inputs must not be null");
+    if (item_count != 0 && (!older_items || !newer_items)) {
+      throw std::invalid_argument("mccl word run item columns must not be null");
+    }
+    const auto s = validate_stream(stream);
+    auto& device = validate_index_device(s);
+    if (older->lanes != newer->lanes || older->ms_first != newer->ms_first ||
+        older->active_bits != newer->active_bits || older->radix_bits != newer->radix_bits ||
+        older->offset_bytes != newer->offset_bytes) {
+      throw std::invalid_argument("mccl word run merge inputs must have identical parameters");
+    }
+    const auto lanes = older->lanes, offset_bytes = older->offset_bytes;
+    validate_word_params(lanes, older->active_bits, older->radix_bits, offset_bytes);
+    const auto first = word_run_arrays(*older), second = word_run_arrays(*newer);
+    if (older->rows > kMaxPairRows - newer->rows) {
+      throw std::invalid_argument("mccl word run merged rows exceed 1<<30");
+    }
+    std::vector<mlx_array> sources{
+        older->keys, older->offsets, older->order, older->directory,
+        newer->keys, newer->offsets, newer->order, newer->directory};
+    for (uint32_t column = 0; column < std::min(item_count, kMaxWordItems); ++column) {
+      sources.push_back(older_items[column]);
+      sources.push_back(newer_items[column]);
+    }
+    const auto handles = word_run_handles(out, items_out, item_count, sources);
+    const auto rows = older->rows + newer->rows;
+    const auto slots = older->key_count + newer->key_count;
+    validate_capacity(slots * lanes, device, sizeof(uint64_t));
+    validate_capacity(slots + 1, device, offset_bytes);
+    const auto entries = word_directory_entries(older->radix_bits);
+    validate_capacity(entries, device, offset_bytes);
+    const auto n = static_cast<int>(rows);
+    std::vector<mx::Shape> shapes{
+        {static_cast<int>(slots), static_cast<int>(lanes)}, {static_cast<int>(slots + 1)},
+        {n}, {static_cast<int>(entries)}, {2}};
+    std::vector<mx::Dtype> dtypes{
+        mx::uint64, offset_dtype(offset_bytes), mx::uint32, offset_dtype(offset_bytes), mx::uint64};
+    std::vector<mx::array> inputs{first[0], first[1], first[2], second[0], second[1], second[2]};
+    for (uint32_t column = 0; column < item_count; ++column) {
+      const auto& item = word_item(older_items[column], older->rows);
+      if (word_item(newer_items[column], newer->rows).dtype() != item.dtype()) {
+        throw std::invalid_argument("mccl word run merge item columns must have identical types");
+      }
+      shapes.push_back({n});
+      dtypes.push_back(item.dtype());
+      inputs.push_back(mx::contiguous(item, false, s));
+    }
+    for (uint32_t column = 0; column < item_count; ++column) {
+      inputs.push_back(mx::contiguous(mlx_array_get_(newer_items[column]), false, s));
+    }
+    const WordRunShape shape{
+        lanes, older->ms_first, older->active_bits, older->radix_bits, offset_bytes};
+    auto graph = mx::array::make_arrays(
+        std::move(shapes), std::move(dtypes),
+        std::make_shared<WordMergeOperation>(s, shape), std::move(inputs));
+    publish_word_run(out, handles, graph, rows, shape);
   });
 }

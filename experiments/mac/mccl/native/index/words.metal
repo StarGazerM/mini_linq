@@ -164,3 +164,184 @@ kernel void NAME( \
 WORDS_DIRECTORY(words_directory_o32, uint)
 WORDS_DIRECTORY(words_directory_o64, ulong)
 #undef WORDS_DIRECTORY
+
+// Item columns through a stable order: out[i] = in[order[i]]. args: n.
+// Columns are moved as 4- or 8-byte words whatever their signedness.
+#define WORDS_GATHER(NAME, T) \
+kernel void NAME( \
+    const device T* in [[buffer(0)]], const device uint* order [[buffer(1)]], \
+    device T* out [[buffer(2)]], constant uint& n [[buffer(3)]], \
+    uint i [[thread_position_in_grid]]) \
+{ \
+    if (i < n) out[i] = in[order[i]]; \
+}
+WORDS_GATHER(words_gather_b4, uint)
+WORDS_GATHER(words_gather_b8, ulong)
+#undef WORDS_GATHER
+
+// Unsigned multi-word order of key i of a against key j of b.
+inline int words_compare(const device ulong* a, uint i, const device ulong* b, uint j,
+    uint lanes, uint ms_first)
+{
+    for (uint lane = lanes; lane-- > 0;) {
+        const ulong x = word_lane(a, i, lanes, ms_first, lane);
+        const ulong y = word_lane(b, j, lanes, ms_first, lane);
+        if (x != y) return x < y ? -1 : 1;
+    }
+    return 0;
+}
+
+// Merge slots record their source run in the top bit; slot indices < 2^31.
+constant uint kNewerSlot = 0x80000000u;
+
+// args: older keys, newer keys, lanes, ms_first, tile, older rows, newer
+// rows. Stable merge-path over two runs' distinct keys, ties older first;
+// each thread owns `tile` consecutive slots. Slot s records its source,
+// the occurrences before it (positions, strictly increasing: every group is
+// nonempty) and in flags whether it starts a merged key. Older slots never
+// repeat (an equal newer key follows them), so only a newer slot equal to
+// the preceding older key is dropped. flags[slots] = 0 leaves the merged key
+// count at the exclusive prefix[slots]; positions[slots] is the row total.
+template<typename O>
+inline void words_merge_slots_impl(
+    const device ulong* older, const device O* older_offsets,
+    const device ulong* newer, const device O* newer_offsets,
+    device uint* tags, device O* positions, device uint* flags,
+    constant uint* args, uint thread_id)
+{
+    const uint na = args[0], nb = args[1], lanes = args[2], ms_first = args[3], tile = args[4];
+    const uint slots = na + nb;
+    if (thread_id == 0u) {
+        positions[slots] = O(ulong(args[5]) + ulong(args[6]));
+        flags[slots] = 0u;
+    }
+    if (ulong(thread_id) * tile >= slots) return;
+    const uint start = thread_id * tile, end = min(slots, start + tile);
+    uint low = start > nb ? start - nb : 0u, high = min(start, na);
+    while (low < high) {
+        const uint middle = low + (high - low) / 2u;
+        if (words_compare(older, middle, newer, start - middle - 1u, lanes, ms_first) <= 0) {
+            low = middle + 1u;
+        } else {
+            high = middle;
+        }
+    }
+    uint a = low, b = start - low;
+    // Whether older[a - 1] equals newer[b]: the next newer slot repeats it.
+    bool equal = a > 0u && b < nb && words_compare(older, a - 1u, newer, b, lanes, ms_first) == 0;
+    for (uint slot = start; slot < end; ++slot) {
+        positions[slot] = O(ulong(older_offsets[a]) + ulong(newer_offsets[b]));
+        const int order = a == na ? 1 : b == nb ? -1 : words_compare(older, a, newer, b, lanes, ms_first);
+        if (order <= 0) {
+            tags[slot] = a++;
+            flags[slot] = 1u;
+            equal = order == 0;
+        } else {
+            tags[slot] = b++ | kNewerSlot;
+            flags[slot] = equal ? 0u : 1u;
+            equal = false;
+        }
+    }
+}
+
+#define WORDS_MERGE_SLOTS(NAME, O) \
+kernel void NAME( \
+    const device ulong* older [[buffer(0)]], const device O* older_offsets [[buffer(1)]], \
+    const device ulong* newer [[buffer(2)]], const device O* newer_offsets [[buffer(3)]], \
+    device uint* tags [[buffer(4)]], device O* positions [[buffer(5)]], \
+    device uint* flags [[buffer(6)]], constant uint* args [[buffer(7)]], \
+    uint i [[thread_position_in_grid]]) \
+{ \
+    words_merge_slots_impl<O>(older, older_offsets, newer, newer_offsets, tags, positions, flags, args, i); \
+}
+WORDS_MERGE_SLOTS(words_merge_slots_o32, uint)
+WORDS_MERGE_SLOTS(words_merge_slots_o64, ulong)
+#undef WORDS_MERGE_SLOTS
+
+// args: slots, lanes. Compacts the merged keys and their group offsets with
+// the terminal row total; meta = {key_count, rows}.
+template<typename O>
+inline void words_merge_scatter_impl(
+    const device ulong* older, const device ulong* newer, const device uint* tags,
+    const device O* positions, const device uint* prefix, device ulong* distinct,
+    device O* offsets, device ulong* meta, constant uint* args, uint i)
+{
+    const uint slots = args[0], lanes = args[1];
+    if (i == 0u) {
+        meta[0] = prefix[slots];
+        meta[1] = ulong(positions[slots]);
+        offsets[prefix[slots]] = positions[slots];
+    }
+    if (i >= slots || prefix[i + 1u] == prefix[i]) return;
+    const uint slot = prefix[i], tag = tags[i];
+    offsets[slot] = positions[i];
+    const device ulong* key = (tag & kNewerSlot) != 0u ? newer : older;
+    const ulong row = ulong(tag & ~kNewerSlot) * lanes;
+    for (uint m = 0; m < lanes; ++m) distinct[ulong(slot) * lanes + m] = key[row + m];
+}
+
+#define WORDS_MERGE_SCATTER(NAME, O) \
+kernel void NAME( \
+    const device ulong* older [[buffer(0)]], const device ulong* newer [[buffer(1)]], \
+    const device uint* tags [[buffer(2)]], const device O* positions [[buffer(3)]], \
+    const device uint* prefix [[buffer(4)]], device ulong* distinct [[buffer(5)]], \
+    device O* offsets [[buffer(6)]], device ulong* meta [[buffer(7)]], \
+    constant uint* args [[buffer(8)]], uint i [[thread_position_in_grid]]) \
+{ \
+    words_merge_scatter_impl<O>(older, newer, tags, positions, prefix, distinct, offsets, meta, args, i); \
+}
+WORDS_MERGE_SCATTER(words_merge_scatter_o32, uint)
+WORDS_MERGE_SCATTER(words_merge_scatter_o64, ulong)
+#undef WORDS_MERGE_SCATTER
+
+// args: slots, rows, older rows. sources[p] is merged occurrence p's index
+// in the concatenation older ++ newer: its slot is the last whose position
+// is at most p, and it keeps its rank within that source group.
+template<typename O>
+inline void words_merge_sources_impl(
+    const device O* older_offsets, const device O* newer_offsets, const device uint* tags,
+    const device O* positions, device uint* sources, constant uint* args, uint p)
+{
+    const uint slots = args[0];
+    if (p >= args[1]) return;
+    uint low = 0u, high = slots;
+    while (low < high) {
+        const uint middle = low + (high - low) / 2u;
+        if (ulong(positions[middle]) <= ulong(p)) low = middle + 1u;
+        else high = middle;
+    }
+    const uint slot = low - 1u, tag = tags[slot];
+    const ulong base = (tag & kNewerSlot) != 0u
+        ? ulong(args[2]) + ulong(newer_offsets[tag & ~kNewerSlot])
+        : ulong(older_offsets[tag]);
+    sources[p] = uint(base + ulong(p) - ulong(positions[slot]));
+}
+
+#define WORDS_MERGE_SOURCES(NAME, O) \
+kernel void NAME( \
+    const device O* older_offsets [[buffer(0)]], const device O* newer_offsets [[buffer(1)]], \
+    const device uint* tags [[buffer(2)]], const device O* positions [[buffer(3)]], \
+    device uint* sources [[buffer(4)]], constant uint* args [[buffer(5)]], \
+    uint p [[thread_position_in_grid]]) \
+{ \
+    words_merge_sources_impl<O>(older_offsets, newer_offsets, tags, positions, sources, args, p); \
+}
+WORDS_MERGE_SOURCES(words_merge_sources_o32, uint)
+WORDS_MERGE_SOURCES(words_merge_sources_o64, ulong)
+#undef WORDS_MERGE_SOURCES
+
+// args: rows, older rows, newer bias. Gathers a column through the merge
+// sources; the bias rebases newer stable-order rows after the older rows.
+#define WORDS_MERGE_ITEMS(NAME, T) \
+kernel void NAME( \
+    const device T* older [[buffer(0)]], const device T* newer [[buffer(1)]], \
+    const device uint* sources [[buffer(2)]], device T* out [[buffer(3)]], \
+    constant uint* args [[buffer(4)]], uint p [[thread_position_in_grid]]) \
+{ \
+    if (p >= args[0]) return; \
+    const uint source = sources[p]; \
+    out[p] = source < args[1] ? older[source] : T(newer[source - args[1]] + T(args[2])); \
+}
+WORDS_MERGE_ITEMS(words_merge_b4, uint)
+WORDS_MERGE_ITEMS(words_merge_b8, ulong)
+#undef WORDS_MERGE_ITEMS

@@ -287,10 +287,11 @@ they still apply.
    `tests/radix_{run,layout,candidates}.rs` ported and exact against
    `cq_storage::RadixRun`. Explore: exact-prefix versus spline directory for CPU
    and GPU reads (matched build + read); multi-lane sort cost at 1M/16M/60M;
-   private versus shared scratch. Status: 1a, one-run build, done
-   ([word runs](#step-1a-cuda-word-runs-on-metal-2026-11-24)); next 1b, item
-   columns through the stable order and ratio-law multi-run snapshots, then
-   1c CPU reader and probes, 1d the ported CUDA cases and measurements.
+   private versus shared scratch. Status: 1a–1c done
+   ([word runs](#step-1a-cuda-word-runs-on-metal-2026-11-24),
+   [items, merge, sets, CPU reader](#steps-1b1c-items-merge-ratio-law-sets-and-the-cpu-reader-2026-11-26));
+   next 1d: fewer build sort passes, remaining CUDA cases (layout views,
+   candidates/distinct), private scratch.
 2. **MCCL operators on the shared layout.** Join, semijoin, distinct and the
    fused chain read typed item columns instead of row-ID gathers; `metal_h09`
    loses the u32 key domain; packed `MacRun` and its maintained owner retire.
@@ -2302,3 +2303,50 @@ sorted/reversed/all-equal/single-key inputs, 40-of-64 active bits, zero active
 bits, and parameter rejection. Build cost is not measured yet: the current
 entry copies host keys into a new array, which would confound it; 1b builds
 keys from resident relation columns first.
+
+## Steps 1b–1c: items, merge, ratio-law sets and the CPU reader (2026-11-26)
+
+`mccl::words` adds resident keys (`WordKeys`, `Gpu::upload_word_keys`,
+`build_word_run_from`), up to 12 typed item columns (`u32/i32/u64/i64`,
+gathered on the GPU through the stable order, read as zero-copy slices),
+`Gpu::merge_word_runs` (merge-path over distinct keys, older occurrences first,
+directory rebuilt, one count readback) and `WordRunSet`: publication groups the
+delta and merges newest runs while `older.items / ratio < newer.items`, as
+CUDA's `publish`; empty deltas are no-ops, failures leave runs unchanged, and
+`snapshot()` is immutable, identified, and outlives later publications and
+the owner. Deviations: item column types are fixed per set at runtime (CUDA:
+type `C`); merged runs keep the stable order column (4 B/row); merge tile 4
+slots/thread (measured 1–32 at 16M; CUDA default 32); `Rc`, single-thread.
+`mccl::word_read` reads the same arrays on the CPU with CUDA `device`
+semantics (`search`, `contains`, `count`, `range`, `interval`, `group`;
+multi-run `count`/`range`/`distinct`, each key once in its oldest run).
+
+Tests (`tests/words_runs.rs`, `tests/word_read.rs`): items equal permuted
+sources; merges equal a fresh build of the concatenation; per-publication
+`(keys, items)` per run equal a host replay of the ratio law for CUDA's
+`u64_publication_matches_cpu_radix_run_across_ratio_transitions` grid (ratios
+2/4/8, batches 7/127/2048/all, directory 0–16 bits, 1–3 lanes); snapshot
+retention; every probe's directory search equals plain binary search and a
+`BTreeMap` oracle, including extremes, lane carries and reversed intervals.
+
+M3 Max, warm, median of 7, resident keys, `radix_bits` 16, `u32` offsets (ms):
+
+| Case | 1M | 16M | 60M |
+|---|---:|---:|---:|
+| Word build, 1 lane, random | 2.08 | 24.4 | 104.2 |
+| Word build, 1 lane, 16 rows/key | 1.52 | 20.5 | 83.8 |
+| Word build, 2 lanes, random | 2.63 | 44.5 | 216.4 |
+| u32 `build_radix_index`, random | 0.87 | 10.4 | 39.7 |
+| Word merge +10%, 1 lane, random | 0.82 | 7.88 | — |
+| Word merge +10%, 1 lane, 16 rows/key | 0.35 | 1.99 | — |
+| u32 `merge_radix_indexes` +10% | 0.63 | 8.22 | — |
+
+Builds are 2.4× (1 lane) to 4–5× (2 lanes) the u32 index: one stable sort per
+32 active key bits (2 and 4 passes) against one. Merges match it. CPU reads,
+65,536 probes over 262,144 keys, ~50% hits, lookup + range + expansion: 1 lane
+1.69–1.86 ms with a 12-bit directory and 4.6 ms without; 2 lanes 3.7–3.9 ms.
+The 10-27 spline reader measured 2.2–3.5 ms on u32 keys (other fixtures), so
+the exact directory is not slower on the CPU; a matched comparison is still
+due. Reproduce from `experiments/mac`:
+`cargo test --release -p mccl --test words_runs -- --ignored --nocapture` and
+`cargo test --release -p mccl --test word_read lookup_timing -- --ignored --nocapture`.

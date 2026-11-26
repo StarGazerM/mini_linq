@@ -463,6 +463,33 @@ MCCL_API int mccl_build_word_run(
     uint32_t active_bits, uint32_t radix_bits, uint32_t offset_bytes,
     mlx_stream s);
 
+/*
+ * mccl_build_word_run plus item_count (<= 12, CUDA's item tuple arity) item
+ * columns, each uint32/int32/uint64/int64 [rows]: items_out[c] is items[c]
+ * gathered through the stable order, same dtype. item_count 0 is
+ * mccl_build_word_run; items and items_out may then be null.
+ */
+MCCL_API int mccl_build_word_run_items(
+    mccl_word_run* out, mlx_array* items_out, mlx_array keys,
+    const mlx_array* items, uint32_t item_count, uint32_t lanes, int ms_first,
+    uint32_t active_bits, uint32_t radix_bits, uint32_t offset_bytes,
+    mlx_stream s);
+
+/*
+ * Merges two published runs with identical lanes, ms_first, active_bits,
+ * radix_bits and offset_bytes, and item columns of identical dtypes, into
+ * the run a build of the concatenation older ++ newer would publish: stable
+ * merge-path over distinct keys (equal keys: all older occurrences first),
+ * offsets, order (newer rows rebased by older->rows), item columns and the
+ * directory rebuilt. One count readback. Merged rows must be at most 1<<30.
+ * Outputs must be distinct from each other and from every input, and are
+ * installed only on success.
+ */
+MCCL_API int mccl_merge_word_runs(
+    mccl_word_run* out, mlx_array* items_out, const mccl_word_run* older,
+    const mlx_array* older_items, const mccl_word_run* newer,
+    const mlx_array* newer_items, uint32_t item_count, mlx_stream s);
+
 /* Thread-local message, valid until the next mccl operation on this thread.
  * Empty after a successful operation. The returned pointer must not be freed.
  */
