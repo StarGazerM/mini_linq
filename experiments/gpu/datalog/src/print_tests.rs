@@ -397,11 +397,12 @@ fn tc_emits_resident_waves_admission_and_publication() {
     assert!(source.contains("while"));
     assert!(source.contains("translate_arena"));
     assert_eq!(source.matches("Rows :: rows").count(), 1);
-    assert_eq!(source.matches(". hole (").count(), program.holes.len());
+    // A detached (batch-validated) hole names its own hint twice: at launch and
+    // at epoch validation. No hole may borrow another hole's reservation.
     for hole in 0..program.holes.len() {
-        assert_eq!(
-            source.matches(&quote!(.hole(#hole)).to_string()).count(),
-            1,
+        let uses = source.matches(&quote!(.hole(#hole)).to_string()).count();
+        assert!(
+            (1..=2).contains(&uses),
             "each hole must retain its own previous-capacity reservation"
         );
     }
@@ -771,8 +772,8 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
     // Explicit legacy is legal even when the whole head could use a cursor.
     check(&mixed).unwrap();
     let source = print::compile(&grouped).unwrap().to_token_stream().to_string();
-    assert_eq!(source.matches("HeadCursors :: new").count(), 2);
-    assert_eq!(source.matches(". read ()").count(), 2);
+    assert_eq!(source.matches("HeadCursors :: for_epoch").count(), 2);
+    assert_eq!(source.matches(". read_epoch (").count(), 2);
     assert_eq!(source.matches(". begin_head (").count(), 4);
     assert_eq!(source.matches(". finish_head (").count(), 4);
     assert_eq!(source.matches(". retry_head (").count(), 4);
@@ -787,7 +788,7 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
     assert!(source.contains("checked_sub (* __cq_gpu_last)"));
     // The seed group's first read precedes every retry. All retry call sites
     // retain the original wave order and occur before the first admission.
-    let (_, retry) = source.split_once("__cq_gpu_seed_group_0 . read ()").unwrap();
+    let (_, retry) = source.split_once("__cq_gpu_seed_group_0 . read_epoch (").unwrap();
     let (mut retry, _) = retry.split_once(". fresh_batches (").unwrap();
     for wave in grouped.schedule.strata[0].waves.iter().filter(|w| w.phase == "seed") {
         for &i in &wave.holes {
@@ -796,6 +797,11 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
             retry = retry.split_once(function.as_str()).unwrap().1;
         }
     }
+    let mixed_source = print::compile(&mixed).unwrap().to_token_stream().to_string();
+    assert!(mixed_source.contains(". defer_to ("));
+    assert!(mixed_source.contains(". is_pending ()"));
+    assert!(mixed_source.contains(". validate ("));
+    assert_eq!(mixed_source.matches("consumer :: output").count(), mixed.holes.len());
 }
 
 #[test]
@@ -836,7 +842,7 @@ fn hooked_version_keeps_its_whole_head_legacy_without_disabling_other_heads_or_p
     assert_eq!(source.matches("done (batch . len ())").count(), 1);
     if enabled {
         // Both hooks are on the initial legacy launch, outside all retry loops.
-        let (initial, replay) = source.split_once("__cq_gpu_seed_group_0 . read ()").unwrap();
+        let (initial, replay) = source.split_once("__cq_gpu_seed_group_0 . read_epoch (").unwrap();
         assert!(initial.contains("first_manual (") && initial.contains("first_observer ("));
         assert!(!replay.contains("first_manual (") && !replay.contains("first_observer ("));
     }

@@ -184,7 +184,7 @@ pub(crate) fn epochs<'a>(
 /// A nested function may call an enclosing item, but that does not imply the
 /// call is safe to evaluate twice. Replay only ordinary relational expressions
 /// over the checked snapshot, not arbitrary Rust captures, calls or blocks.
-fn replay_safe(cq: &round::cq::Program) -> bool {
+pub(crate) fn replay_safe(cq: &round::cq::Program) -> bool {
     fn scalar(expr: &syn::Expr, bound: &BTreeSet<String>) -> bool {
         use syn::Expr;
         match expr {

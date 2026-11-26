@@ -4686,6 +4686,11 @@ fn translate_with_metadata(
             })?;
         // GPU-ResidentMeta: a resident dispatch neither allocates nor clears
         // per-attempt metadata, and its local fold has no block partials.
+        let defer_terminal = resident && arena_final && !head && row_width == 0 && range_width == 0
+            && !expansion_counters && dispatch.concatenation == OutputProtocol::ReservePrevious;
+        let result_header = if defer_terminal {
+            quote!(__cq_arena.deferred_result().unwrap_or_else(|| __cq_resident.ptr()))
+        } else { quote!(__cq_resident.ptr()) };
         let (
             partials_setup,
             partials_pointer,
@@ -4701,7 +4706,7 @@ fn translate_with_metadata(
                 quote!(),
                 vec![
                     abi_argument(format_ident!("__meta"), quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER))),
-                    abi_argument(format_ident!("__meta_result"), quote!(__cq_resident.ptr())),
+                    abi_argument(format_ident!("__meta_result"), result_header),
                 ],
                 quote!(()),
             )
@@ -4776,6 +4781,13 @@ fn translate_with_metadata(
                 if __cq_capacity > u32::MAX as usize { return Err("Sequence output exceeds u32 positions".into()); }
             }
         });
+        let defer_result = defer_terminal.then(|| quote! {
+            if __cq_arena.deferred_result().is_some() {
+                // No downstream Sequence operation consumes this final prefix.
+                // Its owner validates count and failure at the publication cut.
+                return Ok(unsafe { ::gpu_datalog_runtime::CandidateBatch::pending(#output_keys, __cq_run_owners) });
+            }
+        });
         let publication_launch = if head { attempt } else { quote! {
             let mut __cq_capacity=#initial;
             let (#stores #output_keys,#store_meta,#store_length)=loop {
@@ -4784,6 +4796,7 @@ fn translate_with_metadata(
                 #key_allocation
                 #meta_allocation
                 #attempt
+                #defer_result
                 #count_readback
                 #record_readback
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}

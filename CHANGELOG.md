@@ -13,6 +13,26 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog host loop: replay-safe non-head holes in a publication epoch
+  reserve from their per-hole hint. They write count and failure into a
+  private resident slot. The host reads all of an epoch's slots with one
+  `read_epoch` download instead of one blocking readback per hole; only
+  overflowing holes replay (about 1-2%).
+  - This removes 32.6% of the fixpoint's blocking device-to-host reads.
+  - Interleaved A/B against the previous commit, 5 pairs, faster in 20/20.
+    Median fixpoint deltas:
+
+    | Dataset | Median delta |
+    |---|---|
+    | scala | -65 ms |
+    | soot | -91 ms |
+    | kotlin | -52 ms |
+    | jython | -44 ms |
+
+  - Digests exact; xalan 26/26; gate 5/5.
+  - Diagnostic modes (trace, profiling, arena timing) keep per-hole reads.
+  - Evidence: `/data/design-notes/join-lab/round5/device-sizing.md`.
+
 - GPU Datalog UnionProject assigns the 32-child windows of each source span
   to 16 warps. Representative and striped bitmap unions compact live source
   references when the worst-case queue fits the 256 MiB scratch limit.

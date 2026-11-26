@@ -51,11 +51,36 @@ fn head_capacity_hint(rows: usize, packing: &Packing) -> usize {
 /// any prefix is published. Dispatch-local scratch is not shared here.
 pub struct HeadCursors {
     words: Arc<Buffer<u32>>,
+    heads: usize,
+    deferred_base: usize,
 }
 impl HeadCursors {
     pub fn new(pool: Arc<Pool>, heads: usize) -> Result<Self> {
-        let words = heads.checked_mul(2).ok_or("head cursor group too large")?;
-        Ok(Self { words: Arc::new(Buffer::zeroed(pool, words)?) })
+        Self::for_epoch(pool, heads, 0)
+    }
+
+    pub fn for_epoch(pool: Arc<Pool>, heads: usize, terminals: usize) -> Result<Self> {
+        let n = heads.checked_mul(2).ok_or("head cursor group too large")?;
+        let base = if terminals == 0 { n } else {
+            n.checked_next_multiple_of(8).ok_or("publication metadata too large")?
+        };
+        let total = terminals.checked_mul(8).and_then(|slots| base.checked_add(slots))
+            .ok_or("publication metadata too large")?;
+        Ok(Self { words: Arc::new(Buffer::zeroed(pool, total)?), heads, deferred_base: base })
+    }
+
+    pub fn read_epoch(&self, pending: &[bool]) -> Result<Vec<u32>> {
+        let prefix = 2 * self.heads;
+        if !pending.contains(&true) {
+            if prefix == 0 { return Ok(Vec::new()); }
+            crate::record_readback();
+            return self.words.to_host_prefix(prefix);
+        }
+        self.read()
+    }
+
+    pub fn result<'a>(&self, words: &'a [u32], slot: usize) -> &'a [u32] {
+        &words[self.deferred_base + 8*slot..][..4]
     }
 
     /// Download all pairs in slot order, recording one metadata readback.
@@ -110,6 +135,7 @@ pub struct CandidateArena {
     head: Option<HeadAttempt>,
     head_hints: [usize; 2],
     mixed_head: [bool; 2],
+    deferred: Option<(Arc<Buffer<u32>>, usize)>,
 }
 impl CandidateArena {
     pub fn new(pool: Arc<Pool>) -> Self {
@@ -122,7 +148,25 @@ impl CandidateArena {
             head: None,
             head_hints: [0; 2],
             mixed_head: [false; 2],
+            deferred: None,
         }
+    }
+    pub fn defer_to(&mut self, group: &HeadCursors, slot: usize) -> Result<()> {
+        if !Arc::ptr_eq(&self.pool, group.words.pool()) || self.deferred.is_some()
+            || slot >= (group.words.len() - group.deferred_base) / 8
+        {
+            return Err("invalid or active deferred candidate slot".into());
+        }
+        self.deferred = Some((group.words.clone(), group.deferred_base + 8*slot));
+        Ok(())
+    }
+
+    pub fn end_defer(&mut self) { self.deferred = None; }
+
+    /// An eight-word resident result header, including the last-block counter.
+    /// The kernel clears that counter itself at the end of each dispatch.
+    pub fn deferred_result(&self) -> Option<*mut u32> {
+        self.deferred.as_ref().map(|(buf, i)| buf.ptr().wrapping_add(*i))
     }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
@@ -139,7 +183,7 @@ impl CandidateArena {
         if self.head.is_some() {
             return Err("candidate head attempt already active".into());
         }
-        if !Arc::ptr_eq(group.words.pool(), &self.pool) || slot >= group.words.len() / 2 {
+        if !Arc::ptr_eq(group.words.pool(), &self.pool) || slot >= group.heads {
             return Err("candidate head cursor pool or slot differs".into());
         }
         let &hint = self.head_hints.get(phase).ok_or("invalid candidate head phase")?;
@@ -463,12 +507,12 @@ impl CandidateLease {
             unsafe { Buffer::shared_slice(self.buffer, 0, lanes)? }
         };
         Ok(CandidateBatch {
-            storage: Arc::new(BatchStorage {
+            storage: Arc::new(BatchState::Ready(BatchStorage {
                 buffer,
                 packing: self.packing,
                 rows: live_len,
                 _owners: owners,
-            }),
+            })),
         })
     }
 }
@@ -485,14 +529,55 @@ impl AsRef<Buffer<u64>> for BatchStorage {
     }
 }
 
+enum BatchState {
+    Ready(BatchStorage),
+    Pending(Option<(CandidateLease, Vec<Arc<dyn Any + Send + Sync>>)>),
+}
+impl std::ops::Deref for BatchState {
+    type Target = BatchStorage;
+    fn deref(&self) -> &BatchStorage {
+        match self {
+            Self::Ready(batch) => batch,
+            Self::Pending(_) => panic!("candidate prefix consumed before epoch validation"),
+        }
+    }
+}
+impl AsRef<Buffer<u64>> for BatchState {
+    fn as_ref(&self) -> &Buffer<u64> { &self.buffer }
+}
+
 /// An immutable, not necessarily sorted or unique device candidate batch.
 /// The buffer exposes exactly the initialized lane prefix, not spare capacity.
 /// Cloning or taking an owner token retains both storage and input dependencies.
 #[derive(Clone)]
 pub struct CandidateBatch {
-    storage: Arc<BatchStorage>,
+    storage: Arc<BatchState>,
 }
 impl CandidateBatch {
+    /// # Safety
+    /// The terminal must initialize precisely the counted prefix if it fits,
+    /// and its result record must be supplied to `validate` before any use.
+    pub unsafe fn pending(lease: CandidateLease, owners: Vec<Arc<dyn Any + Send + Sync>>) -> Self {
+        Self { storage: Arc::new(BatchState::Pending(Some((lease, owners)))) }
+    }
+    pub fn is_pending(&self) -> bool { matches!(&*self.storage, BatchState::Pending(_)) }
+
+    /// Formal rule GPU-EpochValidation: no speculative prefix becomes a
+    /// candidate until its private header has been validated at the epoch cut.
+    /// # Safety
+    /// `words` is this writer's stream-completed, private resident result.
+    pub unsafe fn validate(&mut self, arena: &mut CandidateArena, words: &[u32]) -> Result<bool> {
+        if words[2] != 0 { return Err("Sequence device count or fold overflow".into()); }
+        let rows = words[0] as usize;
+        let Some(BatchState::Pending(state)) = Arc::get_mut(&mut self.storage) else {
+            return Err("expected a unique pending candidate".into());
+        };
+        let (lease, owners) = state.take().ok_or("pending candidate already validated")?;
+        arena.record_count(rows);
+        if rows > lease.capacity() { return Ok(false); }
+        *self = unsafe { lease.finish(rows, owners)? };
+        Ok(true)
+    }
     pub fn len(&self) -> usize {
         self.storage.rows
     }
@@ -712,6 +797,44 @@ mod tests {
         let retained = RETAINED_SLOT_BYTES / 8;
         assert_eq!(head_capacity_hint(retained - 1, &narrow), retained);
         assert_eq!(head_capacity_hint(u32::MAX as usize, &narrow), u32::MAX as usize);
+        Ok(())
+    }
+
+    #[test]
+    fn detached_writers_validate_at_one_cut_with_grouped_heads() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let group = HeadCursors::for_epoch(pool.clone(), 1, 2)?;
+        let mut arena = CandidateArena::new(pool);
+        let packing = Packing::new(&[64])?;
+        let mut words = [0u32; 24];
+        words[0] = 5;
+        arena.defer_to(&group, 0)?;
+        assert_eq!(arena.deferred_result(), Some(group.words.ptr().wrapping_add(8)));
+        assert!(arena.defer_to(&group, 1).is_err());
+        let lease = arena.hole(0).reserve(packing.clone(), 2)?;
+        words[8] = 2;
+        // SAFETY: the first writer initializes both counted rows before validation.
+        let mut ready = unsafe {
+            lease.buffer().write_async(&[11, 13])?;
+            CandidateBatch::pending(lease, vec![])
+        };
+        arena.end_defer();
+        arena.defer_to(&group, 1)?;
+        let lease = arena.hole(1).reserve(packing, 0)?;
+        words[16] = u32::try_from(lease.capacity() + 1)?;
+        // SAFETY: the second writer overflows, and its candidate is never published.
+        let mut miss = unsafe { CandidateBatch::pending(lease, vec![]) };
+        arena.end_defer();
+        assert!(arena.defer_to(&group, 2).is_err());
+        unsafe { group.words.write_async(&words)?; }
+        let before = crate::readback_count();
+        let result = group.read_epoch(&[true, true])?;
+        assert_eq!(&result[..2], &[5, 0]);
+        assert_eq!(crate::readback_count(), before + 1);
+        assert!(unsafe { ready.validate(arena.hole(0), group.result(&result, 0))? });
+        assert!(!unsafe { miss.validate(arena.hole(1), group.result(&result, 1))? });
+        assert_eq!(ready.buffer().to_host()?, [11, 13]);
+        assert_eq!(arena.previous_count(), words[16] as usize);
         Ok(())
     }
 

@@ -1709,7 +1709,14 @@ same inputs with capacity at least the observed total. On success its cursor
 resets. Retry capacity and the next hint for that head and phase allow bounded
 headroom over the observed total, and all available rows in the leased slot
 are writable. Spare rows are never part of the published prefix.
-Intermediate stores and ungrouped terminals retain their own protocol.
+Intermediate stores retain their own protocol. A replay-safe detached final
+writer with no immediate consumer can instead place its resident count and
+failure header in a disjoint epoch slot. The host retains the unpublished
+lease and its input owners. At the publication cut, one read of the grouped
+and detached headers validates all candidates; arithmetic failure aborts
+and a capacity miss replays only that producer against unchanged inputs.
+Its original bag position is retained. Per-hole observers use immediate
+validation instead.
 \begin{mathpar}
 \Rule{GPU-HeadCursor}{H=\text{head at a checked publication point}\quad
  B_i=\text{candidate bag of producer }i\text{ on unchanged inputs}\quad
@@ -1718,6 +1725,13 @@ Intermediate stores and ungrouped terminals retain their own protocol.
  N_H=\sum_i|B_i|;\quad
  \neg\mathsf{failure}_H\ \land\ N_H\le C_H
  \Rightarrow \mathsf{prefix}(H,N_H)=_{\rm bag}\biguplus_i B_i}
+
+ \Rule{GPU-EpochValidation}{D_i\text{ independent final producer at this cut}\quad
+  h_i=(N_i,f_i)\text{ private, stream-complete header}\quad
+  C_i\text{ initialized-prefix capacity}}
+  {\neg f_i\ \land\ N_i\le C_i\Rightarrow
+    \mathsf{publish}_i(\mathsf{prefix}(D_i,N_i));\quad
+    \neg f_i\ \land\ N_i>C_i\Rightarrow\mathsf{replay}_i}
 \end{mathpar}
 
 \paragraph{Closed host captures.}
