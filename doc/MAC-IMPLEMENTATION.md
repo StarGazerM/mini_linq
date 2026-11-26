@@ -287,11 +287,12 @@ they still apply.
    `tests/radix_{run,layout,candidates}.rs` ported and exact against
    `cq_storage::RadixRun`. Explore: exact-prefix versus spline directory for CPU
    and GPU reads (matched build + read); multi-lane sort cost at 1M/16M/60M;
-   private versus shared scratch. Status: 1a–1c done
-   ([word runs](#step-1a-cuda-word-runs-on-metal-2026-11-24),
-   [items, merge, sets, CPU reader](#steps-1b1c-items-merge-ratio-law-sets-and-the-cpu-reader-2026-11-26));
-   next 1d: fewer build sort passes, remaining CUDA cases (layout views,
-   candidates/distinct), private scratch.
+   private versus shared scratch. Status: done
+   ([1a](#step-1a-cuda-word-runs-on-metal-2026-11-24),
+   [1b–1c](#steps-1b1c-items-merge-ratio-law-sets-and-the-cpu-reader-2026-11-26),
+   [1d](#step-1d-build-passes-layout-views-and-the-directory-decision-2026-11-26)).
+   Decisions: exact directory replaces the spline (12 bits default, 16 for
+   large probe-heavy runs); scratch stays shared.
 2. **MCCL operators on the shared layout.** Join, semijoin, distinct and the
    fused chain read typed item columns instead of row-ID gathers; `metal_h09`
    loses the u32 key domain; packed `MacRun` and its maintained owner retire.
@@ -2350,3 +2351,63 @@ the exact directory is not slower on the CPU; a matched comparison is still
 due. Reproduce from `experiments/mac`:
 `cargo test --release -p mccl --test words_runs -- --ignored --nocapture` and
 `cargo test --release -p mccl --test word_read lookup_timing -- --ignored --nocapture`.
+
+## Step 1d: build passes, layout views and the directory decision (2026-11-26)
+
+**Build.** Each 64-bit lane is gathered once and sorted by up to eight byte
+passes over `{u64 key, u32 row}` (CUDA sorts per lane too), with SIMD-ballot
+tile ranking and staged writes. A GPU plan skips byte passes that are constant
+across rows and sorts a narrow lane as `key − min` (stored keys unchanged);
+constant lanes skip their gather. Group heads come from the sorted lane, with
+a whole-key compare only where the lane ties. Results are bit-identical
+(`sort_plan_edges_match_the_oracle`: constant bytes, all-equal, single row,
+high-/low-lane-only differences, ranges across 2^32 and 2^56, narrow
+`active_bits`, odd/even pass counts). Warm medians (ms; two alternated
+before/after runs each, other GPU jobs on the machine):
+
+| Build | 16M before | 16M after | 60M before | 60M after |
+|---|---:|---:|---:|---:|
+| 1 lane, random | 25.9–26.8 | 22.4–23.7 | 104–107 | 82.6–83.2 |
+| 1 lane, 16 rows/key | 21.3–23.8 | 19.9–20.9 | 86.1–88.5 | 72.6–74.4 |
+| 2 lanes, random | 46.5–49.0 | 46.3–46.7 | 219–223 | 191–194 |
+| 1 lane, ids < 2^24 | 23.4–24.4 | 11.1–11.6 | 88.6–90.7 | 41.2–41.6 |
+| 1 lane, 2^24 span at 2^32 | 23.7–25.2 | 11.1–11.8 | 89.7–90.5 | 41.4–41.9 |
+| u32 `build_radix_index` | 10.7–11.3 | 10.9–12.1 | 41.4–42.3 | 42.0–42.1 |
+
+Narrow keys (the TPC-H case) now build like the u32 index. Random 64-bit keys
+have no skippable bytes: a byte pass costs about 2.1 ms at 16M (histogram
+0.46, scan 0.19, scatter 1.4, near bandwidth), so 2 lanes still pay 16 passes.
+Metal lacks CUB's forward-progress guarantee for a onesweep sort, so each pass
+keeps histogram, scan and scatter; skipped passes are still encoded and exit
+early (MLX cannot launch a GPU-sized grid). Not adopted: top-lane-first with
+tie fallback (halves 2-lane random, costs 25–50% on low-cardinality top lanes);
+histogram fused into the scatter (atomics +2.1/+5.3 ms). **Scratch:** fresh
+private buffers lose badly (16M 1 lane 32–58 vs 22 ms) and cached private
+buffers equal shared, so scratch stays on MLX's shared allocator.
+
+**Layout views** (`mccl::word_layout`, CPU): CUDA `RadixLayout` over
+`WordRunSet` snapshots — MS-first field packing with sign-flipped signed
+fields, `prefix_interval`/`encode_prefix`, typed item columns checked by
+`LaneKind::holds` (never narrowing), republication identity. Ported
+`radix_layout.rs` (factorization, stable order across runs, extrema, empty key
+tuples, six unmerged runs, rejection) and `radix_candidates.rs` (distinct and
+`distinct_at` once per key in its oldest run, 2-/3-way smallest candidates)
+as 15 tests. Deviations: key fields up to 64 bits (CUDA 32); Metal item lanes
+are 32/64-bit only; no device-side count pointer or pool checks.
+
+**Directory decision** (`tests/word_directory_compare.rs`, same 262,144 u32
+keys and 65,536 probes, ~50% hits; spline run read by `cq_storage::RadixRunView`
+as cq-mac does; µs per batch, lookup + range + expansion):
+
+| Data | Spline | Exact 12 bits | Exact 16 bits |
+|---|---:|---:|---:|
+| Dense | 1,753 | 1,662 | 1,122 |
+| Sparse | 2,080 | 1,905 | 1,328 |
+| Skewed | 2,412 | 2,343 | 1,807 |
+| Duplicate-heavy | 2,227 | 1,886 | 1,381 |
+
+The exact directory is at least as fast everywhere with a 2–4× smaller
+directory at 12 bits, and 25–40% faster at 16 bits (256 KiB). The spline keeps
+only bare membership (10–30% faster off dense data; dense membership is the
+lazy bitmap, not the spline). Decision: retire the spline with the u32
+`RadixIndex` in step 2; a membership bitmap can become a reader option.

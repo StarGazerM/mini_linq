@@ -14,6 +14,7 @@ pub mod index;
 pub mod memory;
 pub mod radix;
 pub mod relation;
+pub mod word_layout;
 pub mod word_read;
 pub mod words;
 

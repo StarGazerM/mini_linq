@@ -275,6 +275,104 @@ fn resident_and_host_key_builds_agree() -> Result<()> {
     Ok(())
 }
 
+/// Keys of `rows` rows from `lane_value(row, random, lane)`, lane 0 least
+/// significant, stored in the layout's memory order.
+fn layout_keys(
+    rows: usize,
+    lanes: usize,
+    ms_first: bool,
+    lane_value: impl Fn(usize, u64, usize) -> u64,
+) -> Vec<u64> {
+    let mut state = 0x9e37_79b9_7f4a_7c15 ^ (rows * 31 + lanes) as u64;
+    let mut out = Vec::with_capacity(rows * lanes);
+    for row in 0..rows {
+        let random = xorshift(&mut state);
+        for word in 0..lanes {
+            let lane = if ms_first { lanes - 1 - word } else { word };
+            out.push(lane_value(row, random, lane));
+        }
+    }
+    out
+}
+
+/// The GPU sort plan: bytes constant over all rows and constant lanes are
+/// skipped, spans straddling byte boundaries sort relative to the minimum,
+/// and active-bit windows bound the passes. Every case, over several tiles
+/// and a single row, publishes exactly the oracle run.
+#[test]
+fn sort_plan_edges_match_the_oracle() -> Result<()> {
+    type LaneValue = fn(usize, u64, usize) -> u64;
+    let cases: [(&str, LaneValue); 7] = [
+        // Bytes 0 and 5 vary; 4096 distinct values per lane.
+        ("constant bytes", |_, x, _| {
+            0xab00_cd00_0000_0000 | (x & 0xff) | (x >> 8 & 0xf) << 40
+        }),
+        ("all equal", |_, _, lane| {
+            0x0123_4567_89ab_cdef ^ lane as u64
+        }),
+        (
+            "high lane only",
+            |_, x, lane| if lane == 0 { 0x5555 } else { x % 1000 },
+        ),
+        (
+            "low lane only",
+            |_, x, lane| if lane == 0 { x % 1000 } else { 7 },
+        ),
+        // 5 raw varying bytes, a 2-byte span above the minimum.
+        ("straddles 2^32", |_, x, _| (1 << 32) - 500 + x % 1000),
+        // Straddles 2^56 in the low lane only; distinct high lanes by row.
+        ("straddles 2^56", |row, x, lane| match lane {
+            0 => (1 << 56) - 3 + x % 7,
+            _ => (row / 3) as u64,
+        }),
+        // Extremes around the full lane range in every byte.
+        ("extremes", |_, x, _| match x % 4 {
+            0 => 0,
+            1 => u64::MAX,
+            2 => u64::MAX - x % 300,
+            _ => x % 300,
+        }),
+    ];
+    let gpu = Gpu::new()?;
+    for (lanes, ms_first) in LAYOUTS {
+        for rows in [1, 3 * 2048 + 77] {
+            for (name, lane_value) in cases {
+                let keys = layout_keys(rows, lanes, ms_first, lane_value);
+                let params = params(lanes, ms_first, 8, OffsetWidth::U32);
+                let run = gpu.build_word_run(&keys, params)?.expect("run");
+                assert_eq!(
+                    HostRun::of(&run)?,
+                    oracle(&keys, None, params),
+                    "{name} {params:?} rows {rows}"
+                );
+            }
+            // Narrow windows: the top lane keeps its low `top` bits.
+            for top in [0, 12, 64] {
+                let keys = layout_keys(rows, lanes, ms_first, |_, x, lane| {
+                    if lane + 1 < lanes {
+                        x.rotate_left(lane as u32 * 7)
+                    } else if top == 64 {
+                        x
+                    } else {
+                        x & ((1 << top) - 1)
+                    }
+                });
+                let params = WordRunParams {
+                    active_bits: (lanes as u32 - 1) * 64 + top,
+                    ..params(lanes, ms_first, 8, OffsetWidth::U32)
+                };
+                let run = gpu.build_word_run(&keys, params)?.expect("run");
+                assert_eq!(
+                    HostRun::of(&run)?,
+                    oracle(&keys, None, params),
+                    "window {params:?} rows {rows}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Older and newer key sets with overlap, disjoint ranges and extremes.
 fn merge_cases(lanes: usize) -> Vec<(Vec<u64>, Vec<u64>)> {
     let shifted = |keys: Vec<u64>, by: u64| -> Vec<u64> {
@@ -725,6 +823,23 @@ fn word_run_timing() -> Result<()> {
                 })?;
                 report(&format!("word merge +10% {lanes}L {kind}"), n + n / 10, ms);
             }
+        }
+        // Narrow keys: 2^24 values at 0 (3 varying bytes) and straddling
+        // 2^32 (5 varying bytes, a 3-byte span above the minimum).
+        for (kind, origin) in [
+            ("ids<2^24", 0),
+            ("2^24 span @2^32", (1u64 << 32) - (1 << 23)),
+        ] {
+            let mut state = 0x2545_f491 ^ n as u64;
+            let host: Vec<u64> = (0..n)
+                .map(|_| origin + xorshift(&mut state) % (1 << 24))
+                .collect();
+            let resident = gpu.upload_word_keys(&host, 1)?;
+            let ms = median_ms(|| {
+                gpu.build_word_run_from(&resident, &[], params(1))?;
+                Ok(())
+            })?;
+            report(&format!("word build 1L {kind}"), n, ms);
         }
         if merges(n) {
             // One u32 and one u64 item column through build and merge.

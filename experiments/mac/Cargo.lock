@@ -1097,6 +1097,7 @@ dependencies = [
 name = "mccl"
 version = "0.1.0"
 dependencies = [
+ "cq-storage",
  "libc",
  "serde_json",
 ]

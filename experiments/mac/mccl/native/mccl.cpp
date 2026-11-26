@@ -2593,6 +2593,7 @@ constexpr uint32_t kMaxWordItems = 12;     // CUDA item tuple arity.
 // Merge-path slots per thread; measured on M3 Max, 16M + 10% random keys:
 // 2-4 fastest (~7.8 ms), 16: 11.6 ms, 32: 12.9 ms (strided tiles coalesce poorly).
 constexpr uint32_t kWordMergeTile = 4;
+constexpr uint32_t kWordPlanSize = 89;     // Sort plan length; must match words.metal.
 
 struct WordRunShape {
   uint32_t lanes, ms_first, active_bits, radix_bits, offset_bytes;
@@ -2643,49 +2644,103 @@ class WordRunOperation final : public mx::Primitive {
     const auto& keys = inputs[0];
     const auto n = static_cast<uint32_t>(keys.shape(0));
     const bool wide = shape_.offset_bytes == 8;
-    auto gathered = allocate_leaf({static_cast<int>(n), 2}, device);
-    auto sorted = allocate_leaf({static_cast<int>(n), 2}, device);
-    encoder.add_temporary(gathered);
-    encoder.add_temporary(sorted);
-    // LSD over the active 32-bit slices: each pass gathers one slice through
-    // the previous stable order and sorts it stably, so ties keep source order.
-    const uint32_t slices = (shape_.active_bits + 31) / 32;
-    auto* gather = index_kernel(device, "words_gather_slice");
-    for (uint32_t slice = 0; slice == 0 || slice < slices; ++slice) {
-      const uint32_t args[] = {n, shape_.lanes, shape_.ms_first, slice, slice == 0};
-      encoder.set_compute_pipeline_state(gather);
-      encoder.set_input_array(keys, 0);
-      encoder.set_input_array(sorted, 1);
-      encoder.set_output_array(gathered, 2);
-      encoder.set_bytes(args, 5, 3);
-      dispatch(encoder, ceil_div(n, kThreads));
-      if (slices == 0) {
-        // No active bits: one key, identity order.
-        sorted = gathered;
-        break;
+    // CUDA RowSortScratch: per active 64-bit lane, least significant first,
+    // gather the lane through the current stable order and sort {lane, row}
+    // by stable byte passes (8-bit multisplit ranks). A GPU plan from each
+    // lane's OR/AND/min/max bounds skips bytes constant over all rows, or
+    // sorts key - min when its span has fewer bytes, skips constant lanes'
+    // gathers and tracks which ping-pong array holds the order. Every pass
+    // is encoded; skipped ones exit at once. Ties keep source order.
+    const auto rows = static_cast<int>(n);
+    std::array<mx::array, 4> sort{
+        allocate_leaf({rows}, device, mx::uint64), allocate_leaf({rows}, device),
+        allocate_leaf({rows}, device, mx::uint64), allocate_leaf({rows}, device)};
+    auto control = allocate_leaf({static_cast<int>(8 * shape_.lanes)}, device);
+    auto plan = allocate_leaf({static_cast<int>(kWordPlanSize)}, device);
+    for (uint32_t lane = 0; lane < shape_.lanes; ++lane) {
+      // {or, and, min, max} identities; min and max are little-endian u64.
+      auto* bounds = control.data<uint32_t>() + 8 * lane;
+      bounds[0] = bounds[1] = bounds[6] = bounds[7] = 0;
+      bounds[2] = bounds[3] = bounds[4] = bounds[5] = ~uint32_t{0};
+    }
+    for (const auto& array : sort) encoder.add_temporary(array);
+    encoder.add_temporary(control);
+    encoder.add_temporary(plan);
+    const auto bind_sort = [&](int first, bool written = true) {
+      for (int i = 0; i < 4; ++i) {
+        if (written) encoder.set_output_array(sort[i], first + i);
+        else encoder.set_input_array(sort[i], first + i);
       }
-      const uint32_t bits = std::min<uint32_t>(32, shape_.active_bits - slice * 32);
-      encode_sort(gathered, sorted, device, encoder, nullptr, (bits + 7) / 8);
+    };
+    const uint32_t first_args[] = {n, shape_.lanes, shape_.ms_first};
+    encoder.set_compute_pipeline_state(index_kernel(device, "words_sort_first"));
+    encoder.set_input_array(keys, 0);
+    encoder.set_output_array(sort[0], 1);
+    encoder.set_output_array(sort[1], 2);
+    encoder.set_output_array(control, 3);
+    encoder.set_bytes(first_args, 3, 4);
+    dispatch(encoder, ceil_div(n, kThreads * 8));
+    const uint32_t plan_args[] = {shape_.lanes, shape_.active_bits};
+    encoder.set_compute_pipeline_state(index_kernel(device, "words_sort_plan"));
+    encoder.set_input_array(control, 0);
+    encoder.set_output_array(plan, 1);
+    encoder.set_bytes(plan_args, 2, 2);
+    dispatch(encoder, 1);
+    const auto tile = index_tile(device, "words_sort_scatter8", "words_sort_scatter4", 8);
+    auto* histogram = index_kernel(device,
+        tile.items == 8 ? "words_sort_histogram8" : "words_sort_histogram4");
+    const size_t tiles = ceil_div(n, kThreads * tile.items);
+    auto levels = allocate_scan(tiles * 256, device, encoder);
+    for (uint32_t lane = 0; lane * 64 < shape_.active_bits; ++lane) {
+      if (lane > 0) {
+        const uint32_t args[] = {n, shape_.lanes, shape_.ms_first, lane};
+        encoder.set_compute_pipeline_state(index_kernel(device, "words_sort_gather"));
+        encoder.set_input_array(keys, 0);
+        bind_sort(1);
+        encoder.set_input_array(plan, 5);
+        encoder.set_bytes(args, 4, 6);
+        dispatch(encoder, ceil_div(n, kThreads));
+      }
+      const uint32_t bytes = std::min<uint32_t>(8, (shape_.active_bits - lane * 64 + 7) / 8);
+      for (uint32_t byte = 0; byte < bytes; ++byte) {
+        const uint32_t args[] = {n, static_cast<uint32_t>(tiles), lane * 8 + byte};
+        encoder.set_compute_pipeline_state(histogram);
+        encoder.set_input_array(sort[0], 0);
+        encoder.set_input_array(sort[2], 1);
+        encoder.set_output_array(levels[0], 2);
+        encoder.set_input_array(plan, 3);
+        encoder.set_bytes(args, 3, 4);
+        dispatch(encoder, tiles);
+        encode_scan(levels, device, encoder);
+        encoder.set_compute_pipeline_state(tile.kernel);
+        bind_sort(0);
+        encoder.set_input_array(levels[0], 4);
+        encoder.set_input_array(plan, 5);
+        encoder.set_bytes(args, 3, 6);
+        dispatch(encoder, tiles);
+      }
     }
     auto prefix = flag_prefix(n, device, encoder);
     const uint32_t group_args[] = {n, shape_.lanes};
     encoder.set_compute_pipeline_state(index_kernel(device, "words_group_flags"));
     encoder.set_input_array(keys, 0);
-    encoder.set_input_array(sorted, 1);
-    encoder.set_output_array(prefix, 2);
-    encoder.set_bytes(group_args, 2, 3);
+    bind_sort(1, false);
+    encoder.set_input_array(plan, 5);
+    encoder.set_output_array(prefix, 6);
+    encoder.set_bytes(group_args, 2, 7);
     dispatch(encoder, ceil_div(n + 1, kThreads));
     scan_flags(prefix, device, encoder);
     encoder.set_compute_pipeline_state(index_kernel(device,
         wide ? "words_group_scatter_o64" : "words_group_scatter_o32"));
     encoder.set_input_array(keys, 0);
-    encoder.set_input_array(sorted, 1);
-    encoder.set_input_array(prefix, 2);
-    encoder.set_output_array(outputs[0], 3);
-    encoder.set_output_array(outputs[1], 4);
-    encoder.set_output_array(outputs[2], 5);
-    encoder.set_output_array(outputs[4], 6);
-    encoder.set_bytes(group_args, 2, 7);
+    bind_sort(1, false);
+    encoder.set_input_array(plan, 5);
+    encoder.set_input_array(prefix, 6);
+    encoder.set_output_array(outputs[0], 7);
+    encoder.set_output_array(outputs[1], 8);
+    encoder.set_output_array(outputs[2], 9);
+    encoder.set_output_array(outputs[4], 10);
+    encoder.set_bytes(group_args, 2, 11);
     dispatch(encoder, ceil_div(n, kThreads));
     encode_word_directory(outputs, shape_, device, encoder);
     for (size_t column = 1; column < inputs.size(); ++column) {

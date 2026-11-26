@@ -410,6 +410,24 @@ impl<'r, 'a> WordRunsView<'r, 'a> {
         }
     }
 
+    /// Groups (per-run slots, summed) and items of the keys in inclusive
+    /// `[low, high]` (CUDA `IntervalProbe`).
+    pub fn interval_counts(&self, low: &[u64], high: &[u64]) -> (usize, usize) {
+        self.runs.iter().fold((0, 0), |(groups, items), run| {
+            let (first, last) = run.interval(low, high);
+            (
+                groups + last - first,
+                items + run.offset(last) - run.offset(first),
+            )
+        })
+    }
+
+    /// Whether a run older than `before` holds `key`.
+    #[inline]
+    fn older(&self, before: usize, key: &[u64]) -> bool {
+        self.runs[..before].iter().any(|run| run.contains(key))
+    }
+
     /// Distinct keys in inclusive `[low, high]` over the union of runs; each
     /// key counts once, in its oldest run (CUDA `distinct`).
     pub fn distinct(&self, low: &[u64], high: &[u64]) -> usize {
@@ -419,12 +437,41 @@ impl<'r, 'a> WordRunsView<'r, 'a> {
             if index == 0 {
                 total += last - first;
             } else {
-                let older = &self.runs[..index];
                 total += (first..last)
-                    .filter(|&slot| !older.iter().any(|old| old.contains(run.key(slot))))
+                    .filter(|&slot| !self.older(index, run.key(slot)))
                     .count();
             }
         }
         total
+    }
+
+    /// The `ordinal`-th key of [`distinct`](Self::distinct)'s enumeration
+    /// (runs oldest first, keys ascending within a run, each key in its
+    /// oldest run) as `(run, slot)`; `None` past the last (CUDA `distinct_at`).
+    pub fn distinct_at(
+        &self,
+        low: &[u64],
+        high: &[u64],
+        mut ordinal: usize,
+    ) -> Option<(usize, usize)> {
+        for (index, run) in self.runs.iter().enumerate() {
+            let (first, last) = run.interval(low, high);
+            if index == 0 {
+                if ordinal < last - first {
+                    return Some((0, first + ordinal));
+                }
+                ordinal -= last - first;
+                continue;
+            }
+            for slot in first..last {
+                if !self.older(index, run.key(slot)) {
+                    if ordinal == 0 {
+                        return Some((index, slot));
+                    }
+                    ordinal -= 1;
+                }
+            }
+        }
+        None
     }
 }

@@ -310,22 +310,49 @@ fn multiple_runs_read_as_their_merge() -> Result<()> {
             };
             assert_eq!(runs.range(&key), range, "merged range {probe:x?}");
         }
+        let per_run: Vec<Oracle> = inputs
+            .iter()
+            .map(|keys| oracle(keys, lanes, ms_first))
+            .collect();
         let mut state = 77;
         for _ in 0..256 {
             let low = &probes[xorshift(&mut state) as usize % probes.len()];
             let high = &probes[xorshift(&mut state) as usize % probes.len()];
-            let expected = if low > high {
-                0
-            } else {
-                merged
-                    .range::<[u64], _>((
-                        Bound::Included(low.as_slice()),
-                        Bound::Included(high.as_slice()),
-                    ))
-                    .count()
+            let within = |map: &Oracle| -> Vec<Vec<u64>> {
+                if low > high {
+                    return Vec::new();
+                }
+                map.range::<[u64], _>((
+                    Bound::Included(low.as_slice()),
+                    Bound::Included(high.as_slice()),
+                ))
+                .map(|(key, _)| key.clone())
+                .collect()
             };
+            let expected = within(&merged);
+            let groups: usize = per_run.iter().map(|map| within(map).len()).sum();
+            let occurrences: usize = expected.iter().map(|key| merged[key].len()).sum();
+            // CUDA's enumeration: runs oldest first, ascending within a run,
+            // each key once, in its oldest run.
+            let mut seen = std::collections::BTreeSet::new();
+            let mut enumeration = Vec::new();
+            for map in &per_run {
+                for key in within(map) {
+                    if seen.insert(key.clone()) {
+                        enumeration.push(key);
+                    }
+                }
+            }
             let (low, high) = (layout(low, ms_first), layout(high, ms_first));
-            assert_eq!(runs.distinct(&low, &high), expected);
+            assert_eq!(runs.distinct(&low, &high), expected.len());
+            assert_eq!(runs.interval_counts(&low, &high), (groups, occurrences));
+            for (ordinal, key) in enumeration.iter().enumerate() {
+                let (run, slot) = runs
+                    .distinct_at(&low, &high, ordinal)
+                    .expect("ordinal below the distinct count");
+                assert_eq!(numeric(views[run].key(slot), ms_first), *key);
+            }
+            assert_eq!(runs.distinct_at(&low, &high, enumeration.len()), None);
         }
     }
     let empty = WordRunsView::new(&[])?;
