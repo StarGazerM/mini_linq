@@ -421,7 +421,7 @@ fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result
     let word = word_type(types.iter().copied())?;
     let active_bits = active_bits(&types);
     let state: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>);
-    let radix_bits = 0u32;
+    let radix_bits = 16u32;
     let (merge_tile_rows, block_threads, permutation_threads) = (32u32, 256u32, 256u32);
     Ok(DeviceState {
         token: Ident::new(RADIX_RELATION, proc_macro2::Span::call_site()),
@@ -1483,7 +1483,7 @@ mod tests {
             assert_eq!(state.offset, syn::parse_quote!(u64));
             assert_eq!(state.construction, "full_key_set");
             assert_eq!(state.read, "key_prefix");
-            assert_eq!(state.radix_bits, 0);
+            assert_eq!(state.radix_bits, 16);
             assert_eq!(state.input.key_count, state.input.columns.len());
         }
         for (before, after) in source

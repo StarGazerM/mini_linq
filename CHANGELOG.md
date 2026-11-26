@@ -13,6 +13,40 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog storage: DOOP device relations now build a 16-bit radix
+  directory per published run (`radix_bits` 0 -> 16 in
+  `datalog/src/storage.rs`). Previously no directory was ever built, so every
+  key-prefix lookup was an unindexed binary search over packed keys.
+  - On 14 captured join rounds, midpoint steps per search fall from 15.6 to 3.8
+    and summed device time from 26.18 to 21.60 ms, build cost included.
+  - DOOP `--gpu-only` fixpoint, 3 interleaved runs, every range disjoint from
+    the control:
+
+    | Dataset | Speedup |
+    |---|---|
+    | Scala | -9.3% |
+    | Soot | -7.3% |
+    | Kotlin | -10.3% |
+    | Jython | -5.2% |
+
+  - Directory builds total 95.9 ms across 23,657 builds. Peak pool memory
+    grows by 84-88 MB.
+  - Digests are unchanged; xalan matches exactly on all 26 outputs; GPU gate
+    5/5. `final-validate.sh`, base -> this change, runs 1 / 2:
+
+    | Binary | Dataset | Base (s) | This change (s) |
+    |---|---|---|---|
+    | doop-gpu | scala | 3.23 | 2.92 / 2.92 |
+    | doop-gpu | soot | 3.58 | 3.33 / 3.32 |
+    | doop-gpu | kotlin | 3.28 | 2.96 / 2.99 |
+    | doop-gpu | jython | 2.82 | 2.70 / 2.70 |
+    | srd-doop-gpu | scala | 7.56 | 5.92 / 6.04 |
+    | srd-doop-gpu | soot | 4.82 | 3.85 / 3.85 |
+    | srd-doop-gpu | kotlin | 7.76 | 6.32 / 6.36 |
+
+  - Evidence: `/data/design-notes/join-lab/round4/radix-prod.md` and
+    `radix-search.md`.
+
 - GPU Sequence/TPC-H: six code-generation performance bugs found by profiling
   against DuckDB 2.0.1 + Sirius (nsys, ncu, perf; RTX 6000 Ada) are fixed.
   Plans stay exact; all 26 advised queries match DuckDB at SF1 and SF10.
