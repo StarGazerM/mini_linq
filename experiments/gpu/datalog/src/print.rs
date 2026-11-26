@@ -653,6 +653,14 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
         }
         shared_epochs.insert(epoch,(state,prepare));
     }
+    // Only final rule writers are members: a key-set hole has an immediate
+    // consumer, and a shared sink publishes without a Sequence result header.
+    let private: BTreeSet<_> = context.strata.iter().flat_map(|s| s.seeds.iter().chain(&s.steps))
+        .map(|rule| rule.hole).filter(|i| {
+            let h = &program.holes[*i];
+            !observes_witnesses && !non_replayable.contains(i) && !shared_sinks.contains_key(i)
+                && !crate::bindings::head_argument(h) && crate::bindings::replay_safe(&h.cq)
+        }).collect();
     // Each hole is a separate function item: rustc type-checks a closure with
     // its enclosing body, so closures would keep the whole program one query.
     // A hole whose query reads a local of the code around `datalog!` keeps the
@@ -680,6 +688,10 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             let terminal = pipeline.passes.last_mut().expect("checked GPU batch terminal");
             let (choice, ordinary) = crate::union_project::split(&crate::shared::unpack(&terminal.arguments)?.1)?;
             terminal.arguments = ordinary;
+            if private.contains(&index) {
+                let arena = &terminal.arguments;
+                terminal.arguments = quote!(private; #arena);
+            }
             if frontier.contains(&index) {
                 let arena = &terminal.arguments;
                 terminal.arguments = quote!(frontier; #arena);
@@ -699,7 +711,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             };
             let (driver, lookup) = (source(&plan.driver)?, source(&plan.lookup)?);
             let (witness, group) = (plan.witness_second, plan.group_first);
-            let result = if crate::bindings::head_argument(hole) { quote!(Some(batch)) } else { quote!(batch) };
+            let result = if crate::bindings::head_argument(hole) || private.contains(&index) { quote!(Some(batch)) } else { quote!(batch) };
             syn::parse2(quote!({
                 match ::gpu_datalog_runtime::union_project::execute(
                     &mut *__cq_gpu_arena, #driver, #lookup, #witness, #group
@@ -731,7 +743,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             let arena = &device.relations[owners[index]].arena;
             let declared = parameters.iter().map(|(parameter, _, ty)| quote!(#parameter: &#ty));
             let batch = quote!(::gpu_datalog_runtime::CandidateBatch);
-            let result = if crate::bindings::head_argument(hole) {
+            let result = if crate::bindings::head_argument(hole) || private.contains(&index) {
                 quote!(::core::option::Option<#batch>)
             } else {
                 batch
@@ -948,9 +960,9 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
         };
         let (stratum_runner, seed_runner, step_runner) = (runner(0), runner(1), runner(2));
-        let (seed_groups, seed) = phase(program, &full_states, index, round::schedule::SEED, &holes, &shared_epochs, &non_replayable)?;
+        let (seed_groups, seed) = phase(program, &full_states, index, round::schedule::SEED, &holes, &shared_epochs, &private)?;
         let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
-        let (step_groups, step) = phase(program, &full_states, index, round::schedule::STEP, &holes, &shared_epochs, &non_replayable)?;
+        let (step_groups, step) = phase(program, &full_states, index, round::schedule::STEP, &holes, &shared_epochs, &private)?;
         let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
         let lengths = stratum
             .termination
@@ -1051,10 +1063,6 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             ::gpu_datalog_runtime::phases::start();
             let __cq_gpu_trace_rounds = ::std::env::var_os("GPU_DATALOG_TRACE_ROUNDS").is_some();
             let __cq_gpu_trace_memory = ::std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some();
-            // Per-hole diagnostics observe lengths immediately after launch.
-            let __cq_gpu_batch_validation = !__cq_gpu_trace_memory
-                && !::gpu_datalog_runtime::trace_kernels()
-                && !::gpu_datalog_runtime::profiling() && !::cq_gpu_runtime::arena_timing_enabled();
             ::gpu_datalog_runtime::reset_work_counters();
             let mut __cq_gpu_memory_usage = if __cq_gpu_trace_memory {
                 ::std::vec![::gpu_datalog_runtime::MemoryUse::default(); #relation_count]
@@ -1083,66 +1091,81 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     }))
 }
 
-/// Validate all active heads against one stream snapshot. A capacity miss is
-/// replayable; arithmetic/kernel failure is not. No publication takes place
-/// between the first launch and the last successful attempt.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Member {
+    // Validation follows the original order: private writers in wave order,
+    // then grouped heads by relation. Member number need not be a word offset.
+    Private { ordinal: usize, hole: usize, relation: usize },
+    Head(usize),
+}
+
+/// One cut and one replay loop. Head appends replay in the original wave
+/// order; a private shortfall re-enters its ordinary checked terminal.
 fn head_attempts(
-    group: &Ident,
-    slots: &BTreeMap<usize, usize>,
-    phase: &str,
-    functions: &[TokenStream],
-    launches: &[TokenStream],
-    replays: &[TokenStream],
-    detached: &[TokenStream],
+    group: &Ident, members: &BTreeMap<Member, usize>, phase: &str,
+    functions: &[TokenStream], launches: &[TokenStream], replays: &[TokenStream],
+    publish: &[TokenStream],
 ) -> TokenStream {
-    let heads = slots.len();
-    let terminals = detached.len();
     let phase_index = usize::from(phase == round::schedule::STEP);
-    let begin = slots.iter().map(|(&head, &slot)| {
-        let arena = local("arena", head);
-        let packing = local("packing", head);
-        quote!(#arena.begin_head(&#group, #slot, #packing.clone(), #phase_index)?;)
-    });
-    let validate = slots.iter().map(|(&head, &slot)| {
-        let arena = local("arena", head);
-        let candidates = local("candidates", head);
-        quote! {
-            if __cq_gpu_active[#slot] {
-                if __cq_gpu_words[2 * #slot + 1] != 0 {
-                    return Err("Sequence device count or fold overflow".into());
-                }
-                let rows = __cq_gpu_words[2 * #slot] as usize;
-                if rows > #arena.head_capacity() {
-                    // Discard Some(batch) fallback results of this attempt too.
-                    #candidates.clear();
-                    #arena.retry_head(rows)?;
-                    if __cq_gpu_trace_rounds { __cq_gpu_head_replays += 1; }
-                    __cq_gpu_previous[#slot] = 0;
-                } else {
-                    // SAFETY: same-stream dispatches initialized the prefix,
-                    // and both total count and failure have been checked.
-                    let batch = unsafe { #arena.finish_head(rows)? };
-                    if !batch.is_empty() { #candidates.push(batch); }
-                    __cq_gpu_active[#slot] = false;
+    let mut begin = TokenStream::new();
+    let validate = members.iter().map(|(&member, &slot)| {
+        let action = match member {
+            Member::Private { hole, relation, .. } => {
+                let arena = local("arena", relation);
+                let batch = local("result", hole);
+                let launch = local("launch", hole);
+                quote! {
+                    // SAFETY: the arena parks only this writer's lease, and
+                    // private records are consumed in launch order.
+                    #batch = unsafe { #arena.finish_private(record)? };
+                    if #batch.is_none() { #batch = #launch(&mut #arena)?; }
+                    #group.complete(#slot);
                 }
             }
+            Member::Head(head) => {
+                let arena = local("arena", head);
+                let candidates = local("candidates", head);
+                let packing = local("packing", head);
+                let previous = local("previous", head);
+                begin.extend(quote! {
+                    #arena.begin_head(&#group, #slot, #packing.clone(), #phase_index)?;
+                    let mut #previous = 0usize;
+                });
+                quote! {
+                    let (rows, failure) = record;
+                    if failure { return Err("Sequence device count or fold overflow".into()); }
+                    if rows > #arena.head_capacity() {
+                        #candidates.clear();
+                        #arena.retry_head(rows)?;
+                        if __cq_gpu_trace_rounds { __cq_gpu_head_replays += 1; }
+                        #previous = 0;
+                        retry = true;
+                    } else {
+                        // SAFETY: every append fit and the sticky failure bit is clear.
+                        let batch = unsafe { #arena.finish_head(rows)? };
+                        if !batch.is_empty() { #candidates.push(batch); }
+                        #group.complete(#slot);
+                    }
+                }
+            }
+        };
+        quote! {
+            if #group.active(#slot) {
+                let record = #group.record(&__cq_gpu_words, #slot);
+                #action
+            }
         }
-    });
+    }).collect::<TokenStream>();
     quote!({
-        #(#begin)*
-        let mut __cq_gpu_active = [true; #heads];
-        let mut __cq_gpu_previous = [0usize; #heads];
-        let mut __cq_gpu_pending = [false; #terminals];
-        let mut __cq_gpu_positions = [0usize; #terminals];
-        #(#functions)*
-        #(#launches)*
+        #begin #(#functions)* #(#launches)*
         loop {
-            let __cq_gpu_words = #group.read_epoch(&__cq_gpu_pending)?;
-            #(#detached)*
-            #(#validate)*
-            if !__cq_gpu_active.contains(&true) { break; }
+            let __cq_gpu_words = #group.read()?;
+            let mut retry = false;
+            #validate
+            if !retry { break; }
             #(#replays)*
         }
+        #(#publish)*
     })
 }
 
@@ -1153,7 +1176,7 @@ fn phase(
     phase: &str,
     holes: &[TokenStream],
     shared: &BTreeMap<(usize,&str,usize),(TokenStream,TokenStream)>,
-    non_replayable: &BTreeSet<usize>,
+    private: &BTreeSet<usize>,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let context = &program.context;
     let device = device(program);
@@ -1179,12 +1202,12 @@ fn phase(
             groups.extend(defs.clone());
             prepare
         });
-        let mut slots = BTreeMap::new();
+        let mut members = BTreeMap::new();
         let mut functions = Vec::new();
         let mut launches = Vec::new();
         let mut replays = Vec::new();
         let group = format_ident!("__cq_gpu_{}_group_{}", phase, point);
-        let mut detached = Vec::new();
+        let mut publish = Vec::new();
         for rule_index in epoch.rules {
             let rule = &rules[rule_index];
             let candidates = local("candidates", rule.head);
@@ -1274,8 +1297,13 @@ fn phase(
                         }
                     }
                 }
+            } else if private.contains(&hole) {
+                quote! {
+                    if let Some(__cq_gpu_batch) = &__cq_gpu_batch { #trace_batch }
+                    __cq_gpu_batch
+                }
             } else {
-                quote!(#trace_batch #candidates.push(__cq_gpu_batch);)
+                quote!(#trace_batch __cq_gpu_batch)
             };
             let launch = quote!({
                 if ::gpu_datalog_runtime::profiling() {
@@ -1295,8 +1323,8 @@ fn phase(
                 #deliver
             });
             if head {
-                let next = slots.len();
-                let slot = *slots.entry(rule.head).or_insert(next);
+                let next = members.len();
+                let slot = *members.entry(Member::Head(rule.head)).or_insert(next);
                 // Share one body (and one expansion of its kernels) across
                 // the original and retry call sites.
                 let function = local("launch", hole);
@@ -1308,56 +1336,43 @@ fn phase(
                         Ok(())
                     };
                 });
-                let call = quote!(#function(&mut #arena, &mut #candidates, &mut __cq_gpu_previous[#slot])?;);
-                replays.push(quote!(if __cq_gpu_active[#slot] { #call }));
+                let previous = local("previous", rule.head);
+                let call = quote!(#function(&mut #arena, &mut #candidates, &mut #previous)?;);
+                replays.push(quote!(if #group.active(#slot) { #call }));
                 launches.push(call);
-            } else if !non_replayable.contains(&hole) && crate::bindings::replay_safe(&program.holes[hole].cq) {
-                let slot = detached.len();
+            } else if private.contains(&hole) {
+                let slot = members.len();
+                members.insert(Member::Private { ordinal: slot, hole, relation: rule.head }, slot);
+                let batch = local("result", hole);
                 let function = local("launch", hole);
                 let arena_ty = &device.relations[rule.head].arena;
-                let batches_ty = &device.relations[rule.head].candidates;
                 functions.push(quote! {
-                    let #function = |#arena: &mut #arena_ty, #candidates: &mut #batches_ty| -> ::gpu_datalog_runtime::Result<()> {
-                        #launch
-                        Ok(())
+                    let #function = |#arena: &mut #arena_ty| -> ::gpu_datalog_runtime::Result<Option<::gpu_datalog_runtime::CandidateBatch>> {
+                        Ok(#launch)
                     };
                 });
                 launches.push(quote! {
-                    let pos = #candidates.len();
-                    if __cq_gpu_batch_validation { #arena.defer_to(&#group, #slot)?; }
-                    #function(&mut #arena, &mut #candidates)?;
-                    #arena.end_defer();
-                    __cq_gpu_positions[#slot] = pos;
-                    __cq_gpu_pending[#slot] = #candidates[pos].is_pending();
+                    #arena.begin_private(&#group, #slot)?;
+                    let mut #batch = #function(&mut #arena)?;
+                    #arena.end_private(&#group, #slot);
                 });
-                detached.push(quote! {
-                    if __cq_gpu_pending[#slot] {
-                        let pos = __cq_gpu_positions[#slot];
-                        let arena = #arena.hole(#hole);
-                        // SAFETY: this slot's only writer was this hole. read_epoch
-                        // completed the stream and no inputs were published since.
-                        if !unsafe { #candidates[pos].validate(arena, #group.result(&__cq_gpu_words, #slot))? } {
-                            #function(arena, &mut #candidates)?;
-                            let replay = #candidates.pop().expect("replay returns one validated candidate");
-                            #candidates[pos] = replay;
-                        }
-                        __cq_gpu_pending[#slot] = false;
-                    }
-                });
+                publish.push(quote!(#candidates.push(#batch.expect("epoch validated private writer"));));
             } else {
-                launches.push(launch);
+                let batch = local("result", hole);
+                launches.push(quote!(let #batch = #launch;));
+                publish.push(quote!(#candidates.push(#batch);));
             }
         }
-        if slots.is_empty() && detached.is_empty() {
-            steps.push(quote!({ #shared_prepare #(#launches)* }));
+        if members.is_empty() {
+            steps.push(quote!({ #shared_prepare #(#launches)* #(#publish)* }));
         } else {
-            let terminals = detached.len();
-            let heads = slots.len();
-            groups.extend(quote! {
-                let #group = ::gpu_datalog_runtime::HeadCursors::for_epoch(__cq_gpu_pool.clone(), #heads,
-                    if __cq_gpu_batch_validation { #terminals } else { 0 })?;
-            });
-            let attempts = head_attempts(&group, &slots, phase, &functions, &launches, &replays, &detached);
+            let mut slots = vec![quote!(); members.len()];
+            for (&member, &slot) in &members {
+                let kind = match member { Member::Private { .. } => quote!(Private), Member::Head(_) => quote!(Head) };
+                slots[slot] = quote!(::gpu_datalog_runtime::EpochMember::#kind);
+            }
+            groups.extend(quote!(let #group = ::gpu_datalog_runtime::EpochCut::new(__cq_gpu_pool.clone(), &[#(#slots),*])?;));
+            let attempts = head_attempts(&group, &members, phase, &functions, &launches, &replays, &publish);
             steps.push(quote!({ #shared_prepare #attempts }));
         }
         for transaction in epoch.publications {

@@ -1,6 +1,6 @@
 //! Caller-owned reusable candidate storage. Publication never downloads rows.
 use crate::{Buffer, Packing, Pool, Result, Word};
-use std::{any::Any, sync::Arc};
+use std::{any::Any, cell::Cell, collections::VecDeque, sync::Arc};
 
 /// Largest slot an arena keeps for reuse. A larger slot belongs to its batch
 /// alone and is freed once admission has consumed the rows: holding a
@@ -46,63 +46,94 @@ fn head_capacity_hint(rows: usize, packing: &Packing) -> usize {
     rows.saturating_add(extra).min(limit)
 }
 
-/// One publication point's interleaved `[cursor, failure]` pairs. Each head
-/// appends on this pool's stream; a single download checks every head before
-/// any prefix is published. Dispatch-local scratch is not shared here.
-pub struct HeadCursors {
-    words: Arc<Buffer<u32>>,
-    heads: usize,
-    deferred_base: usize,
+/// A head's shared [cursor, failure] pair or one Sequence resident header.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EpochMember { Head, Private }
+
+struct Slot {
+    member: EpochMember,
+    start: usize,
+    active: Cell<bool>,
 }
-impl HeadCursors {
-    pub fn new(pool: Arc<Pool>, heads: usize) -> Result<Self> {
-        Self::for_epoch(pool, heads, 0)
+
+/// Formal rule GPU-EpochValidation: validate every active head and private
+/// writer at one stream cut, before admitting any candidate to a relation.
+pub struct EpochCut {
+    words: Arc<Buffer<u32>>,
+    slots: Box<[Slot]>,
+    private_enabled: bool,
+}
+
+impl EpochCut {
+    pub fn new(pool: Arc<Pool>, members: &[EpochMember]) -> Result<Self> {
+        use EpochMember::*;
+        // Per-hole diagnostics require immediate counts, even for private writers.
+        let private_enabled = std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_none()
+            && !crate::trace_kernels() && !crate::profiling() && !cq_gpu_runtime::arena_timing_enabled();
+        let heads = members.iter().filter(|&&m| m == Head).count();
+        let mut tail = heads.checked_mul(2).ok_or("epoch metadata too large")?;
+        let mut head = 0;
+        let slots = members.iter().map(|&member| {
+            let start = match member {
+                Head => { head += 2; head - 2 }
+                Private if private_enabled => {
+                    let start = tail.checked_next_multiple_of(8).ok_or("epoch metadata too large")?;
+                    tail = start.checked_add(8).ok_or("epoch metadata too large")?;
+                    start
+                }
+                Private => 0,
+            };
+            Ok(Slot { member, start, active: Cell::new(false) })
+        }).collect::<Result<_>>()?;
+        Ok(Self { words: Arc::new(Buffer::zeroed(pool, tail)?), slots, private_enabled })
     }
 
-    pub fn for_epoch(pool: Arc<Pool>, heads: usize, terminals: usize) -> Result<Self> {
-        let n = heads.checked_mul(2).ok_or("head cursor group too large")?;
-        let base = if terminals == 0 { n } else {
-            n.checked_next_multiple_of(8).ok_or("publication metadata too large")?
-        };
-        let total = terminals.checked_mul(8).and_then(|slots| base.checked_add(slots))
-            .ok_or("publication metadata too large")?;
-        Ok(Self { words: Arc::new(Buffer::zeroed(pool, total)?), heads, deferred_base: base })
-    }
-
-    pub fn read_epoch(&self, pending: &[bool]) -> Result<Vec<u32>> {
-        let prefix = 2 * self.heads;
-        if !pending.contains(&true) {
-            if prefix == 0 { return Ok(Vec::new()); }
-            crate::record_readback();
-            return self.words.to_host_prefix(prefix);
+    fn begin(&self, pool: &Arc<Pool>, index: usize, kind: EpochMember) -> Result<usize> {
+        let slot = self.slots.get(index).ok_or("invalid epoch slot")?;
+        if !Arc::ptr_eq(pool, self.words.pool()) || slot.member != kind || slot.active.replace(true) {
+            return Err("invalid or active epoch member".into());
         }
-        self.read()
+        Ok(slot.start)
     }
 
-    pub fn result<'a>(&self, words: &'a [u32], slot: usize) -> &'a [u32] {
-        &words[self.deferred_base + 8*slot..][..4]
-    }
+    pub fn active(&self, index: usize) -> bool { self.slots[index].active.get() }
+    pub fn complete(&self, index: usize) { self.slots[index].active.set(false); }
 
-    /// Download all pairs in slot order, recording one metadata readback.
+    /// Exactly one blocking download when at least one member still needs validation.
     pub fn read(&self) -> Result<Vec<u32>> {
-        let words = self.words.to_host()?;
-        if !words.is_empty() {
-            crate::record_readback();
-        }
+        let end = self.slots.iter().filter(|s| s.active.get()).map(|s| {
+            s.start + match s.member { EpochMember::Head => 2, EpochMember::Private => 8 }
+        }).max().unwrap_or(0);
+        if end == 0 { return Ok(Vec::new()); }
+        let words = self.words.to_host_prefix(end)?;
+        crate::record_readback();
         Ok(words)
     }
+
+    pub fn record(&self, words: &[u32], index: usize) -> (usize, bool) {
+        let slot = &self.slots[index];
+        let failure = match slot.member { EpochMember::Head => 1, EpochMember::Private => 2 };
+        (words[slot.start] as usize, words[slot.start + failure] != 0)
+    }
+}
+
+/// Private writers from one arena finish in the same order they launched.
+struct PrivateAttempt {
+    hole: usize,
+    lease: CandidateLease,
+    owners: Vec<Arc<dyn Any + Send + Sync>>,
 }
 
 struct HeadAttempt {
     words: Arc<Buffer<u32>>,
-    slot: usize,
+    offset: usize,
     phase: usize,
     lease: CandidateLease,
     owners: Vec<Arc<dyn Any + Send + Sync>>,
 }
 impl HeadAttempt {
     fn cursor(&self) -> *mut u32 {
-        self.words.ptr().wrapping_add(2 * self.slot)
+        self.words.ptr().wrapping_add(self.offset)
     }
 
     fn reset(&self) -> Result<()> {
@@ -135,7 +166,8 @@ pub struct CandidateArena {
     head: Option<HeadAttempt>,
     head_hints: [usize; 2],
     mixed_head: [bool; 2],
-    deferred: Option<(Arc<Buffer<u32>>, usize)>,
+    private_target: Option<(Arc<Buffer<u32>>, usize)>,
+    private_attempts: VecDeque<PrivateAttempt>,
 }
 impl CandidateArena {
     pub fn new(pool: Arc<Pool>) -> Self {
@@ -148,25 +180,45 @@ impl CandidateArena {
             head: None,
             head_hints: [0; 2],
             mixed_head: [false; 2],
-            deferred: None,
+            private_target: None,
+            private_attempts: VecDeque::new(),
         }
     }
-    pub fn defer_to(&mut self, group: &HeadCursors, slot: usize) -> Result<()> {
-        if !Arc::ptr_eq(&self.pool, group.words.pool()) || self.deferred.is_some()
-            || slot >= (group.words.len() - group.deferred_base) / 8
-        {
-            return Err("invalid or active deferred candidate slot".into());
+
+    pub fn begin_private(&mut self, cut: &EpochCut, slot: usize) -> Result<()> {
+        if self.private_target.is_some() { return Err("private candidate writer already active".into()); }
+        if cut.private_enabled {
+            let start = cut.begin(&self.pool, slot, EpochMember::Private)?;
+            self.private_target = Some((cut.words.clone(), start));
         }
-        self.deferred = Some((group.words.clone(), group.deferred_base + 8*slot));
         Ok(())
     }
 
-    pub fn end_defer(&mut self) { self.deferred = None; }
+    pub fn private_result(&self) -> Option<*mut u32> {
+        self.private_target.as_ref().map(|(buf, start)| buf.ptr().wrapping_add(*start))
+    }
 
-    /// An eight-word resident result header, including the last-block counter.
-    /// The kernel clears that counter itself at the end of each dispatch.
-    pub fn deferred_result(&self) -> Option<*mut u32> {
-        self.deferred.as_ref().map(|(buf, i)| buf.ptr().wrapping_add(*i))
+    /// # Safety
+    /// The writer targeted this slot and initialized the counted prefix if it fit.
+    pub unsafe fn park_private(&mut self, lease: CandidateLease, owners: Vec<Arc<dyn Any + Send + Sync>>) -> Result<()> {
+        self.private_target.take().ok_or("no active private candidate writer")?;
+        self.private_attempts.push_back(PrivateAttempt { hole: self.hole, lease, owners });
+        Ok(())
+    }
+
+    /// A gate or an immediate terminal did not use its offered slot.
+    pub fn end_private(&mut self, cut: &EpochCut, slot: usize) {
+        if self.private_target.take().is_some() { cut.complete(slot); }
+    }
+
+    /// # Safety
+    /// Supply each parked writer's stream-completed record in launch order.
+    pub unsafe fn finish_private(&mut self, (rows, failure): (usize, bool)) -> Result<Option<CandidateBatch>> {
+        if failure { return Err("Sequence device count or fold overflow".into()); }
+        let PrivateAttempt { hole, lease, owners } = self.private_attempts.pop_front().ok_or("no parked private writer")?;
+        self.hole(hole).record_count(rows);
+        if rows > lease.capacity() { return Ok(None); }
+        Ok(Some(unsafe { lease.finish(rows, owners)? }))
     }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
@@ -178,18 +230,16 @@ impl CandidateArena {
     /// slot for each head; finish or retry its attempt before reusing the slot.
     /// Phase 0 (seed) and 1 (step) have independent hints with bounded slack.
     pub fn begin_head(
-        &mut self, group: &HeadCursors, slot: usize, packing: Packing, phase: usize,
+        &mut self, cut: &EpochCut, slot: usize, packing: Packing, phase: usize,
     ) -> Result<()> {
         if self.head.is_some() {
             return Err("candidate head attempt already active".into());
         }
-        if !Arc::ptr_eq(group.words.pool(), &self.pool) || slot >= group.heads {
-            return Err("candidate head cursor pool or slot differs".into());
-        }
         let &hint = self.head_hints.get(phase).ok_or("invalid candidate head phase")?;
         let lease = self.reserve_ordered(packing, hint, self.mixed_head[phase])?;
+        let offset = cut.begin(&self.pool, slot, EpochMember::Head)?;
         self.head = Some(HeadAttempt {
-            words: group.words.clone(), slot, phase, lease, owners: Vec::new(),
+            words: cut.words.clone(), offset, phase, lease, owners: Vec::new(),
         });
         Ok(())
     }
@@ -507,12 +557,12 @@ impl CandidateLease {
             unsafe { Buffer::shared_slice(self.buffer, 0, lanes)? }
         };
         Ok(CandidateBatch {
-            storage: Arc::new(BatchState::Ready(BatchStorage {
+            storage: Arc::new(BatchStorage {
                 buffer,
                 packing: self.packing,
                 rows: live_len,
                 _owners: owners,
-            })),
+            }),
         })
     }
 }
@@ -529,55 +579,14 @@ impl AsRef<Buffer<u64>> for BatchStorage {
     }
 }
 
-enum BatchState {
-    Ready(BatchStorage),
-    Pending(Option<(CandidateLease, Vec<Arc<dyn Any + Send + Sync>>)>),
-}
-impl std::ops::Deref for BatchState {
-    type Target = BatchStorage;
-    fn deref(&self) -> &BatchStorage {
-        match self {
-            Self::Ready(batch) => batch,
-            Self::Pending(_) => panic!("candidate prefix consumed before epoch validation"),
-        }
-    }
-}
-impl AsRef<Buffer<u64>> for BatchState {
-    fn as_ref(&self) -> &Buffer<u64> { &self.buffer }
-}
-
 /// An immutable, not necessarily sorted or unique device candidate batch.
 /// The buffer exposes exactly the initialized lane prefix, not spare capacity.
 /// Cloning or taking an owner token retains both storage and input dependencies.
 #[derive(Clone)]
 pub struct CandidateBatch {
-    storage: Arc<BatchState>,
+    storage: Arc<BatchStorage>,
 }
 impl CandidateBatch {
-    /// # Safety
-    /// The terminal must initialize precisely the counted prefix if it fits,
-    /// and its result record must be supplied to `validate` before any use.
-    pub unsafe fn pending(lease: CandidateLease, owners: Vec<Arc<dyn Any + Send + Sync>>) -> Self {
-        Self { storage: Arc::new(BatchState::Pending(Some((lease, owners)))) }
-    }
-    pub fn is_pending(&self) -> bool { matches!(&*self.storage, BatchState::Pending(_)) }
-
-    /// Formal rule GPU-EpochValidation: no speculative prefix becomes a
-    /// candidate until its private header has been validated at the epoch cut.
-    /// # Safety
-    /// `words` is this writer's stream-completed, private resident result.
-    pub unsafe fn validate(&mut self, arena: &mut CandidateArena, words: &[u32]) -> Result<bool> {
-        if words[2] != 0 { return Err("Sequence device count or fold overflow".into()); }
-        let rows = words[0] as usize;
-        let Some(BatchState::Pending(state)) = Arc::get_mut(&mut self.storage) else {
-            return Err("expected a unique pending candidate".into());
-        };
-        let (lease, owners) = state.take().ok_or("pending candidate already validated")?;
-        arena.record_count(rows);
-        if rows > lease.capacity() { return Ok(false); }
-        *self = unsafe { lease.finish(rows, owners)? };
-        Ok(true)
-    }
     pub fn len(&self) -> usize {
         self.storage.rows
     }
@@ -803,36 +812,45 @@ mod tests {
     #[test]
     fn detached_writers_validate_at_one_cut_with_grouped_heads() -> Result<()> {
         let pool = Pool::new(0, 0, 0)?;
-        let group = HeadCursors::for_epoch(pool.clone(), 1, 2)?;
+        use EpochMember::{Head, Private};
+        let group = EpochCut::new(pool.clone(), &[Private, Head, Private])?;
         let mut arena = CandidateArena::new(pool);
         let packing = Packing::new(&[64])?;
         let mut words = [0u32; 24];
         words[0] = 5;
-        arena.defer_to(&group, 0)?;
-        assert_eq!(arena.deferred_result(), Some(group.words.ptr().wrapping_add(8)));
-        assert!(arena.defer_to(&group, 1).is_err());
+        arena.begin_head(&group, 1, packing.clone(), 0)?;
+        assert!(arena.begin_private(&group, 1).is_err());
+        arena.begin_private(&group, 0)?;
+        assert_eq!(arena.private_result(), Some(group.words.ptr().wrapping_add(8)));
+        assert!(arena.begin_private(&group, 2).is_err());
         let lease = arena.hole(0).reserve(packing.clone(), 2)?;
         words[8] = 2;
         // SAFETY: the first writer initializes both counted rows before validation.
-        let mut ready = unsafe {
+        unsafe {
             lease.buffer().write_async(&[11, 13])?;
-            CandidateBatch::pending(lease, vec![])
-        };
-        arena.end_defer();
-        arena.defer_to(&group, 1)?;
+            arena.park_private(lease, vec![])?;
+        }
+        arena.end_private(&group, 0);
+        arena.begin_private(&group, 2)?;
         let lease = arena.hole(1).reserve(packing, 0)?;
         words[16] = u32::try_from(lease.capacity() + 1)?;
         // SAFETY: the second writer overflows, and its candidate is never published.
-        let mut miss = unsafe { CandidateBatch::pending(lease, vec![]) };
-        arena.end_defer();
-        assert!(arena.defer_to(&group, 2).is_err());
+        unsafe { arena.park_private(lease, vec![])?; }
+        arena.end_private(&group, 2);
+        assert!(arena.begin_private(&group, 3).is_err());
         unsafe { group.words.write_async(&words)?; }
         let before = crate::readback_count();
-        let result = group.read_epoch(&[true, true])?;
-        assert_eq!(&result[..2], &[5, 0]);
+        let result = group.read()?;
+        assert_eq!(group.record(&result, 1), (5, false));
         assert_eq!(crate::readback_count(), before + 1);
-        assert!(unsafe { ready.validate(arena.hole(0), group.result(&result, 0))? });
-        assert!(!unsafe { miss.validate(arena.hole(1), group.result(&result, 1))? });
+        let ready = unsafe { arena.finish_private(group.record(&result, 0))? }.unwrap();
+        assert!(unsafe { arena.finish_private(group.record(&result, 2))? }.is_none());
+        group.complete(0);
+        group.complete(2);
+        assert_eq!(group.read()?, [5, 0]); // head-only retry, no private headers
+        group.complete(1);
+        assert!(group.read()?.is_empty());
+        assert_eq!(crate::readback_count(), before + 2);
         assert_eq!(ready.buffer().to_host()?, [11, 13]);
         assert_eq!(arena.previous_count(), words[16] as usize);
         Ok(())
@@ -842,7 +860,7 @@ mod tests {
     fn grouped_heads_retry_and_publish_exact_prefixes() -> Result<()> {
         let pool = Pool::new(0, 0, 0)?;
         let packing = Packing::new(&[64])?;
-        let group = HeadCursors::new(pool.clone(), 2)?;
+        let group = EpochCut::new(pool.clone(), &[EpochMember::Head; 2])?;
         let mut a = CandidateArena::new(pool.clone());
         let mut b = CandidateArena::new(pool);
         let retained = a.reserve(packing.clone(), 19)?.capacity();
@@ -873,8 +891,8 @@ mod tests {
         }
         let result = group.read()?;
         // SAFETY: each lease initialized exactly the prefix reported above.
-        let full = unsafe { a.finish_head(result[0] as usize)? };
-        let peer = unsafe { b.finish_head(result[2] as usize)? };
+        let full = unsafe { a.finish_head(group.record(&result, 0).0)? };
+        let peer = unsafe { b.finish_head(group.record(&result, 1).0)? };
         assert!(a.head_target(&packing).is_err());
         assert_eq!(full.buffer().to_host()?, [41, 42, 43]);
         assert_eq!(peer.buffer().to_host()?, [99]);
@@ -882,11 +900,14 @@ mod tests {
         drop(full);
         assert!(weak.upgrade().is_none());
         assert_eq!(group.read()?, [0; 4]);
+        group.complete(0);
+        group.complete(1);
         a.release_unused(); // Test phase hints without masking them with recycled space.
         a.begin_head(&group, 0, packing.clone(), 1)?;
         assert_eq!(a.head_hints[1], 0);
         // SAFETY: no appends in this step; its zero hint is independent of seed.
         assert!(unsafe { a.finish_head(0)? }.buffer().is_empty());
+        group.complete(0);
         a.begin_head(&group, 0, packing, 0)?;
         assert_eq!(a.head_hints[0], 5);
         assert!(a.head_capacity() >= 5);

@@ -353,7 +353,11 @@ fn negative_device_bindings_preserve_fork_declarations() {
         declaration.hosts.is_empty(),
         "device inputs do not declare CPU host reads"
     );
-    print::compile(&bound).unwrap();
+    let syn::Expr::Block(printed) = print::compile(&bound).unwrap() else { panic!("expected generated block") };
+    let key_function = quote::format_ident!("__cq_gpu_hole_{}", key.hole);
+    assert!(printed.block.stmts.iter().any(|stmt| matches!(stmt, syn::Stmt::Item(syn::Item::Fn(f))
+        if f.sig.ident == key_function && f.sig.output == syn::parse_quote!(-> ::gpu_datalog_runtime::CandidateBatch))),
+        "immediate key-set consumers cannot park at a later rule cut");
     let records = bound.storage.device.as_ref().unwrap();
     for record in records.layouts.iter()
         .chain(&records.delta_layouts).chain(&records.negations)
@@ -397,12 +401,10 @@ fn tc_emits_resident_waves_admission_and_publication() {
     assert!(source.contains("while"));
     assert!(source.contains("translate_arena"));
     assert_eq!(source.matches("Rows :: rows").count(), 1);
-    // A detached (batch-validated) hole names its own hint twice: at launch and
-    // at epoch validation. No hole may borrow another hole's reservation.
+    // The parked lease retains its hole; validation never guesses a hint.
     for hole in 0..program.holes.len() {
-        let uses = source.matches(&quote!(.hole(#hole)).to_string()).count();
-        assert!(
-            (1..=2).contains(&uses),
+        assert_eq!(
+            source.matches(&quote!(.hole(#hole)).to_string()).count(), 1,
             "each hole must retain its own previous-capacity reservation"
         );
     }
@@ -772,8 +774,8 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
     // Explicit legacy is legal even when the whole head could use a cursor.
     check(&mixed).unwrap();
     let source = print::compile(&grouped).unwrap().to_token_stream().to_string();
-    assert_eq!(source.matches("HeadCursors :: for_epoch").count(), 2);
-    assert_eq!(source.matches(". read_epoch (").count(), 2);
+    assert_eq!(source.matches("EpochCut :: new").count(), 2);
+    assert_eq!(source.matches(". read ()").count(), 2);
     assert_eq!(source.matches(". begin_head (").count(), 4);
     assert_eq!(source.matches(". finish_head (").count(), 4);
     assert_eq!(source.matches(". retry_head (").count(), 4);
@@ -782,13 +784,13 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
     assert_eq!(source.matches(". trace_head_count ()").count(), grouped.holes.len());
     // Each macro queue appears in a standalone item, not at both call sites.
     assert_eq!(source.matches("consumer :: output").count(), grouped.holes.len());
-    assert!(source.contains("if __cq_gpu_active"));
+    assert!(source.contains(". active ("));
     assert!(source.contains("if let Some (__cq_gpu_batch)"));
     assert!(source.contains("else if __cq_gpu_trace_memory || :: gpu_datalog_runtime :: trace_kernels ()"));
     assert!(source.contains("checked_sub (* __cq_gpu_last)"));
     // The seed group's first read precedes every retry. All retry call sites
     // retain the original wave order and occur before the first admission.
-    let (_, retry) = source.split_once("__cq_gpu_seed_group_0 . read_epoch (").unwrap();
+    let (_, retry) = source.split_once("__cq_gpu_seed_group_0 . read ()").unwrap();
     let (mut retry, _) = retry.split_once(". fresh_batches (").unwrap();
     for wave in grouped.schedule.strata[0].waves.iter().filter(|w| w.phase == "seed") {
         for &i in &wave.holes {
@@ -798,9 +800,17 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
         }
     }
     let mixed_source = print::compile(&mixed).unwrap().to_token_stream().to_string();
-    assert!(mixed_source.contains(". defer_to ("));
-    assert!(mixed_source.contains(". is_pending ()"));
-    assert!(mixed_source.contains(". validate ("));
+    assert_eq!(mixed_source.matches("begin_private").count(), a_seeds.len());
+    assert_eq!(mixed_source.matches("finish_private").count(), a_seeds.len());
+    assert_eq!(mixed_source.matches(". read ()").count(), 2);
+    // Private candidates are appended only after validation, at their original
+    // bag positions, regardless of which writers needed an immediate replay.
+    let (_, published) = mixed_source.split_once("__cq_gpu_seed_group_0 . read ()").unwrap();
+    let (published, _) = published.split_once(". fresh_batches (").unwrap();
+    let mut remaining = published;
+    for &hole in &a_seeds {
+        remaining = remaining.split_once(&format!(". push (__cq_gpu_result_{hole} . expect")).unwrap().1;
+    }
     assert_eq!(mixed_source.matches("consumer :: output").count(), mixed.holes.len());
 }
 
@@ -842,7 +852,7 @@ fn hooked_version_keeps_its_whole_head_legacy_without_disabling_other_heads_or_p
     assert_eq!(source.matches("done (batch . len ())").count(), 1);
     if enabled {
         // Both hooks are on the initial legacy launch, outside all retry loops.
-        let (initial, replay) = source.split_once("__cq_gpu_seed_group_0 . read_epoch (").unwrap();
+        let (initial, replay) = source.split_once("__cq_gpu_seed_group_0 . read ()").unwrap();
         assert!(initial.contains("first_manual (") && initial.contains("first_observer ("));
         assert!(!replay.contains("first_manual (") && !replay.contains("first_observer ("));
     }
@@ -857,7 +867,7 @@ fn hooked_version_keeps_its_whole_head_legacy_without_disabling_other_heads_or_p
         if i == first.hole {
             assert!(signature.is_none(), "manual replacement should compile no kernel");
         } else {
-            let expected: syn::ReturnType = if head_argument(hole) {
+            let expected: syn::ReturnType = if head_argument(hole) || (enabled && crate::bindings::replay_safe(&hole.cq)) {
                 syn::parse_quote!(-> ::core::option::Option<::gpu_datalog_runtime::CandidateBatch>)
             } else {
                 syn::parse_quote!(-> ::gpu_datalog_runtime::CandidateBatch)

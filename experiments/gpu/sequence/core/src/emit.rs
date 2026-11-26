@@ -2559,7 +2559,7 @@ pub fn translate(
     program: &Program,
     analysis: &Analysis,
 ) -> syn::Result<syn::Expr> {
-    translate_impl(physical, structures, program, analysis, None)
+    translate_impl(physical, structures, program, analysis, Terminal::Columns)
 }
 
 /// Carry checked producer-origin facts independently of resident measured bounds.
@@ -2579,9 +2579,15 @@ pub fn translate_with_origins(
         }
     }
     translate_with_metadata(
-        physical, structures, program, analysis, None,
+        physical, structures, program, analysis, Terminal::Columns,
         std::env::var_os("CQ_EXPANSION_COUNTERS").is_some(), computed_inputs, Some(device_captures),
     )
+}
+
+pub(crate) enum Terminal<'a> {
+    Columns,
+    Arena(&'a syn::Expr),
+    Private(&'a syn::Expr),
 }
 
 pub(crate) fn translate_impl(
@@ -2589,14 +2595,14 @@ pub(crate) fn translate_impl(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    terminal: Terminal<'_>,
 ) -> syn::Result<syn::Expr> {
     translate_observed(
         physical,
         structures,
         program,
         analysis,
-        arena,
+        terminal,
         std::env::var_os("CQ_EXPANSION_COUNTERS").is_some(),
     )
 }
@@ -2606,10 +2612,10 @@ pub(crate) fn translate_observed(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    terminal: Terminal<'_>,
     expansion_counters: bool,
 ) -> syn::Result<syn::Expr> {
-    translate_with_metadata(physical, structures, program, analysis, arena, expansion_counters, &BTreeSet::new(), None)
+    translate_with_metadata(physical, structures, program, analysis, terminal, expansion_counters, &BTreeSet::new(), None)
 }
 
 fn translate_with_metadata(
@@ -2617,11 +2623,16 @@ fn translate_with_metadata(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    terminal: Terminal<'_>,
     expansion_counters: bool,
     computed_inputs: &BTreeSet<(String, usize)>,
     device_captures: Option<&crate::DeviceCaptureBindings>,
 ) -> syn::Result<syn::Expr> {
+    let (arena, private) = match terminal {
+        Terminal::Columns => (None, false),
+        Terminal::Arena(arena) => (Some(arena), false),
+        Terminal::Private(arena) => (Some(arena), true),
+    };
     if program
         .graded
         .as_ref()
@@ -4688,8 +4699,12 @@ fn translate_with_metadata(
         // per-attempt metadata, and its local fold has no block partials.
         let defer_terminal = resident && arena_final && !head && row_width == 0 && range_width == 0
             && !expansion_counters && dispatch.concatenation == OutputProtocol::ReservePrevious;
-        let result_header = if defer_terminal {
-            quote!(__cq_arena.deferred_result().unwrap_or_else(|| __cq_resident.ptr()))
+        let defer_private = private && defer_terminal;
+        let private_result = defer_private.then(|| quote! {
+            let __cq_private_result = __cq_arena.private_result();
+        });
+        let result_header = if defer_private {
+            quote!(__cq_private_result.unwrap_or_else(|| __cq_resident.ptr()))
         } else { quote!(__cq_resident.ptr()) };
         let (
             partials_setup,
@@ -4702,7 +4717,10 @@ fn translate_with_metadata(
             (
                 quote!(),
                 quote!(::core::ptr::null_mut::<i64>()),
-                quote!(let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;),
+                quote! {
+                    let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;
+                    #private_result
+                },
                 quote!(),
                 vec![
                     abi_argument(format_ident!("__meta"), quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER))),
@@ -4781,11 +4799,12 @@ fn translate_with_metadata(
                 if __cq_capacity > u32::MAX as usize { return Err("Sequence output exceeds u32 positions".into()); }
             }
         });
-        let defer_result = defer_terminal.then(|| quote! {
-            if __cq_arena.deferred_result().is_some() {
-                // No downstream Sequence operation consumes this final prefix.
-                // Its owner validates count and failure at the publication cut.
-                return Ok(unsafe { ::gpu_datalog_runtime::CandidateBatch::pending(#output_keys, __cq_run_owners) });
+        let defer_result = defer_private.then(|| quote! {
+            if __cq_private_result.is_some() {
+                // The private cut validates this terminal's result header and
+                // owns the lease and inputs until that validation completes.
+                unsafe { __cq_arena.park_private(#output_keys, __cq_run_owners)?; }
+                return Ok(::core::option::Option::None);
             }
         });
         let publication_launch = if head { attempt } else { quote! {
@@ -4832,9 +4851,9 @@ fn translate_with_metadata(
                     let __cq_result = ::core::option::Option::<::gpu_datalog_runtime::CandidateBatch>::None;
                 }
             } else if arena.is_some() {
-                quote! {
-                    let __cq_result = unsafe { #output_keys.finish(#store_length, __cq_run_owners)? };
-                }
+                let ready = quote!(unsafe { #output_keys.finish(#store_length, __cq_run_owners)? });
+                let result = if private { quote!(::core::option::Option::Some(#ready)) } else { ready };
+                quote!(let __cq_result = #result;)
             } else if canonical {
                 quote! {
                     let __cq_keys=unsafe {<#provider>::build_set(
@@ -5029,7 +5048,8 @@ fn translate_with_metadata(
         .map(|(expression, packing)| if head_terminal {
             quote!(Ok(::core::option::Option::None))
         } else {
-            packing.empty(expression)
+            let empty = packing.empty(expression);
+            if private { quote!(#empty.map(::core::option::Option::Some)) } else { empty }
         })
         .unwrap_or_else(|| {
             quote!(::cq_gpu_runtime::DeviceColumns::empty(
@@ -5183,8 +5203,8 @@ mod tests {
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
-        let plain = super::translate_observed(&physical, &structures, &program, &analysis, None, false).unwrap();
-        let observed = super::translate_observed(&physical, &structures, &program, &analysis, None, true).unwrap();
+        let plain = super::translate_observed(&physical, &structures, &program, &analysis, Terminal::Columns, false).unwrap();
+        let observed = super::translate_observed(&physical, &structures, &program, &analysis, Terminal::Columns, true).unwrap();
         let plain = quote::quote!(#plain).to_string();
         let observed = quote::quote!(#observed).to_string();
         assert!(!plain.contains("__cq_expansions"));
@@ -5358,7 +5378,7 @@ mod tests {
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_bindings.realization.launches, [Launch::ProgramOccupancy]);
         let arena: syn::Expr = syn::parse_quote!(arena);
-        let printed = translate_observed(&physical, &structures, &program, &analysis, Some(&arena), false)
+        let printed = translate_observed(&physical, &structures, &program, &analysis, Terminal::Arena(&arena), false)
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("ProgramLaunchCache"));
         assert!(printed.contains("__cq_prepare_program_"));
@@ -5370,7 +5390,7 @@ mod tests {
         let mut alternate = analysis.clone();
         alternate.gpu_bindings.realization.launches[0] = Launch::InvocationOccupancy;
         crate::realize::check(&physical, &structures, &program, &structure_analysis, &alternate, &alternate.gpu_bindings.realization).unwrap();
-        let printed = translate_observed(&physical, &structures, &program, &alternate, Some(&arena), false)
+        let printed = translate_observed(&physical, &structures, &program, &alternate, Terminal::Arena(&arena), false)
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("let __cq_probe"));
         assert!(!printed.contains("__cq_prepare_program_"));
@@ -5379,10 +5399,38 @@ mod tests {
         let mut missing = analysis.clone();
         missing.gpu_bindings.realization.launches.clear();
         assert!(crate::realize::check(&physical, &structures, &program, &structure_analysis, &missing, &missing.gpu_bindings.realization).is_err());
-        assert!(translate_observed(&physical, &structures, &program, &missing, Some(&arena), false).is_err());
+        assert!(translate_observed(&physical, &structures, &program, &missing, Terminal::Arena(&arena), false).is_err());
         let mut wrong_partition = analysis.clone();
         wrong_partition.gpu_bindings.realization.launches[0] = Launch::ProgramOne;
         assert!(crate::realize::check(&physical, &structures, &program, &structure_analysis, &wrong_partition, &wrong_partition.gpu_bindings.realization).is_err());
+    }
+
+    #[test]
+    fn only_private_resident_terminals_can_park_before_readback() {
+        let Stack { mut physical, structures, mut program } = arena_program(false);
+        physical.program.captures.items.push(syn::parse_quote!(if (publish)));
+        let arena = syn::parse_quote!(&mut *arena);
+        for (protocol, private, counters, parks) in [
+            (OutputProtocol::ReservePrevious, true, false, true),
+            (OutputProtocol::ReservePrevious, false, false, false),
+            (OutputProtocol::ReservePrevious, true, true, false),
+            (OutputProtocol::Count, true, false, false),
+        ] {
+            program.sequence.output = Some(protocol);
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let terminal = if private { Terminal::Private(&arena) } else { Terminal::Arena(&arena) };
+            let printed = translate_observed(&physical, &structures, &program, &analysis, terminal, counters)
+                .unwrap().to_token_stream().to_string();
+            assert_eq!(printed.contains("private_result ()"), parks);
+            assert_eq!(printed.contains("park_private"), parks);
+            if parks {
+                assert!(printed.find("park_private").unwrap() < printed.find("let __cq_counts").unwrap());
+            }
+            // Both successful completion and the empty answer gate keep the
+            // requested ABI, even when the dispatch can't use a private cut.
+            assert_eq!(printed.contains("Option :: Some (unsafe"), private);
+            assert_eq!(printed.contains("map (:: core :: option :: Option :: Some)"), private);
+        }
     }
 
     #[test]
@@ -5438,12 +5486,12 @@ mod tests {
             records.get_mut("index").unwrap().arena = Some(arena.clone());
         }));
         let arena_expr: syn::Expr = syn::parse_quote!(arena);
-        translate_observed(&physical, &structures, &program, &analysis, Some(&arena_expr), false).unwrap();
+        translate_observed(&physical, &structures, &program, &analysis, Terminal::Arena(&arena_expr), false).unwrap();
         // A canonical terminal publishes no raw candidates into an arena.
         let Stack { physical, structures, program } = arena_program(true);
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_publications["output_rows"].arena, None);
-        assert!(translate_observed(&physical, &structures, &program, &analysis, Some(&arena_expr), false).is_err());
+        assert!(translate_observed(&physical, &structures, &program, &analysis, Terminal::Arena(&arena_expr), false).is_err());
     }
 
     /// Identifiers of generated code; independent of token spacing.

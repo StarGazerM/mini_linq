@@ -1702,37 +1702,47 @@ refines only a final raw arena dispatch with \code{reserve\_previous}, local
 fold completion, and no range-offset or other intermediate consumer.
 Dispatch-local claim cursors are still reset by the last block; the head's
 cursor and sticky failure bit are not. A failed count (including a wrapped
-reservation) rejects the whole attempt before admission. Heads due at the
-same publication point read their cursor/failure pairs in one transfer. Only
-a head that exceeds its capacity replays its producers, from zero on the
-same inputs with capacity at least the observed total. On success its cursor
-resets. Retry capacity and the next hint for that head and phase allow bounded
-headroom over the observed total, and all available rows in the leased slot
-are writable. Spare rows are never part of the published prefix.
-Intermediate stores retain their own protocol. A replay-safe detached final
-writer with no immediate consumer can instead place its resident count and
-failure header in a disjoint epoch slot. The host retains the unpublished
-lease and its input owners. At the publication cut, one read of the grouped
-and detached headers validates all candidates; arithmetic failure aborts
-and a capacity miss replays only that producer against unchanged inputs.
-Its original bag position is retained. Per-hole observers use immediate
-validation instead.
+reservation) rejects the whole attempt before admission. Head and phase
+determine the initial hint; retry capacity and the next hint allow bounded
+headroom over the observed total. All rows in the leased slot are writable.
+Intermediate stores retain their own protocol.
 \begin{mathpar}
-\Rule{GPU-HeadCursor}{H=\text{head at a checked publication point}\quad
- B_i=\text{candidate bag of producer }i\text{ on unchanged inputs}\quad
- C_H=\text{shared capacity}}
- {\text{each reservation claims disjoint positions in }[0,N_H),\
- N_H=\sum_i|B_i|;\quad
- \neg\mathsf{failure}_H\ \land\ N_H\le C_H
- \Rightarrow \mathsf{prefix}(H,N_H)=_{\rm bag}\biguplus_i B_i}
-
- \Rule{GPU-EpochValidation}{D_i\text{ independent final producer at this cut}\quad
-  h_i=(N_i,f_i)\text{ private, stream-complete header}\quad
-  C_i\text{ initialized-prefix capacity}}
-  {\neg f_i\ \land\ N_i\le C_i\Rightarrow
-    \mathsf{publish}_i(\mathsf{prefix}(D_i,N_i));\quad
-    \neg f_i\ \land\ N_i>C_i\Rightarrow\mathsf{replay}_i}
+\Rule{GPU-HeadCursor}{H=\text{grouped head member of the epoch cut}\quad
+ B_i=\text{bag appended by producer }i\text{ on unchanged inputs}}
+ {\text{reservations partition }[0,N_H),\quad N_H=\sum_i|B_i|;\quad
+ \neg f_H\land N_H\le C_H\Rightarrow
+ \mathsf{prefix}(H,N_H)=_{\rm bag}\biguplus_i B_i}
 \end{mathpar}
+
+Each publication cut has two kinds of member on one stream. A grouped head
+shares a two-word cursor/failure pair across its producers (GPU-HeadCursor).
+An independent replay-safe final writer with no immediate consumer can use
+a private eight-word Sequence result header and its per-hole reservation.
+The arena retains the unpublished lease and its owners. Manual or observed
+holes are not replayed by the cut; per-hole diagnostics validate private
+outputs immediately instead.
+
+In each validation pass, one stream-ordered download snapshots the prefix
+covering all active slots. Head pairs precede private headers, so a pass
+with only heads active downloads no private headers; an empty pass needs
+no download. For either kind of member $m$, the snapshot supplies the count
+$N_m$ and sticky failure bit $f_m$ to check against its leased capacity $C_m$:
+\begin{mathpar}
+\Rule{GPU-EpochValidation}{m\in\mathsf{active}(\mathit{cut})\quad
+ (N_m,f_m)=\mathsf{snapshot}(\mathit{cut})[m]\quad I=\text{unchanged inputs}}
+ {\begin{cases}
+ \bot & f_m \\
+ \mathsf{discardAndReplay}(m,I,N_m) & \neg f_m\land N_m>C_m \\
+ \mathsf{accept}(\mathsf{prefix}(m,N_m)) & \neg f_m\land N_m\le C_m
+ \end{cases}}
+\end{mathpar}
+A failure aborts before admission. A short member restarts from zero with
+capacity at least its observed count: rerun all producers of that head, or
+just that private writer, without rerunning successful members. Admission
+waits for the whole cut to succeed and sees only initialized prefixes.
+Private batches retain their producer's position among the relation's
+batches, even on replay; a nonempty grouped prefix follows its head's
+individual fallback batches.
 
 \paragraph{Closed host captures.}
 A query-closed operand of an explicit relational \code{where} predicate is

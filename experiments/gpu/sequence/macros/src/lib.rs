@@ -179,9 +179,16 @@ pub fn translate(input: TokenStream) -> TokenStream {
     .into()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ArenaMode {
+    Batch,
+    Head,
+    Private,
+}
+
 struct ArenaArgument {
     frontier: bool,
-    head: bool,
+    mode: ArenaMode,
     arena: syn::Expr,
 }
 
@@ -190,18 +197,25 @@ impl syn::parse::Parse for ArenaArgument {
         mod keyword {
             syn::custom_keyword!(frontier);
             syn::custom_keyword!(head);
+            syn::custom_keyword!(private);
         }
         let frontier = input.peek(keyword::frontier) && input.peek2(syn::Token![;]);
         if frontier {
             input.parse::<keyword::frontier>()?;
             input.parse::<syn::Token![;]>()?;
         }
-        let head = input.peek(keyword::head) && input.peek2(syn::Token![;]);
-        if head {
+        let mode = if input.peek(keyword::head) && input.peek2(syn::Token![;]) {
             input.parse::<keyword::head>()?;
             input.parse::<syn::Token![;]>()?;
-        }
-        Ok(Self { frontier, head, arena: input.parse()? })
+            ArenaMode::Head
+        } else if input.peek(keyword::private) && input.peek2(syn::Token![;]) {
+            input.parse::<keyword::private>()?;
+            input.parse::<syn::Token![;]>()?;
+            ArenaMode::Private
+        } else {
+            ArenaMode::Batch
+        };
+        Ok(Self { frontier, mode, arena: input.parse()? })
     }
 }
 
@@ -211,7 +225,9 @@ impl syn::parse::Parse for ArenaArgument {
 /// recorded output protocol still controls counting and capacity retries.
 /// `translate_arena(head; &mut arena)` requests grouped append and returns
 /// `Option<CandidateBatch>`: `None` for append, `Some` for legacy publication.
-/// Prefix either terminal with `frontier;` to require checked two-pass
+/// `translate_arena(private; &mut arena)` returns `None` for a parked private
+/// lease, `Some` for a ready batch (including a closed gate).
+/// Prefix any arena terminal with `frontier;` to require checked two-pass
 /// expansion. An ineligible terminal is an error, not a scheduling fallback.
 #[proc_macro]
 pub fn translate_arena(input: TokenStream) -> TokenStream {
@@ -222,16 +238,16 @@ pub fn translate_arena(input: TokenStream) -> TokenStream {
                 "GPU Sequence translate_arena requires an explicit arena expression",
             ));
         }
-        let ArenaArgument { frontier, head, arena } = syn::parse2(arguments)?;
+        let ArenaArgument { frontier, mode, arena } = syn::parse2(arguments)?;
         let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
         let mut analysis = cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
         if frontier {
             cq_lang_sequence::gpu::request_frontier(&source, &mut analysis)?;
         }
-        if head {
-            cq_gpu_sequence_core::translate_arena_head(physical, structures, &source, analysis, &arena)
-        } else {
-            cq_gpu_sequence_core::translate_arena(physical, structures, &source, &analysis, &arena)
+        match mode {
+            ArenaMode::Head => cq_gpu_sequence_core::translate_arena_head(physical, structures, &source, analysis, &arena),
+            ArenaMode::Private => cq_gpu_sequence_core::translate_arena_private(physical, structures, &source, &analysis, &arena),
+            ArenaMode::Batch => cq_gpu_sequence_core::translate_arena(physical, structures, &source, &analysis, &arena),
         }
     })
     .into()
@@ -285,28 +301,43 @@ mod tests {
     use quote::quote;
 
     #[test]
-    fn only_a_leading_head_marker_requests_grouped_append() {
-        let plain: ArenaArgument = syn::parse_quote!(head);
-        assert!(!plain.head);
-        let marked: ArenaArgument = syn::parse_quote!(head; &mut *arena);
-        assert!(marked.head);
-        assert_eq!(marked.arena, syn::parse_quote!(&mut *arena));
-        assert!(syn::parse2::<ArenaArgument>(quote!(head;)).is_err());
-        assert!(syn::parse2::<ArenaArgument>(quote!(other; &mut arena)).is_err());
+    fn arena_modes_require_a_marker_and_an_expression() {
+        for (bare, marked, mode) in [
+            (quote!(head), quote!(head; &mut *arena), ArenaMode::Head),
+            (quote!(private), quote!(private; &mut *arena), ArenaMode::Private),
+        ] {
+            assert_eq!(syn::parse2::<ArenaArgument>(bare).unwrap().mode, ArenaMode::Batch);
+            let marked = syn::parse2::<ArenaArgument>(marked).unwrap();
+            assert_eq!(marked.mode, mode);
+            assert_eq!(marked.arena, syn::parse_quote!(&mut *arena));
+        }
+        for invalid in [quote!(head;), quote!(private;), quote!(other; &mut arena),
+                        quote!(head; private; arena), quote!(private; head; arena)] {
+            assert!(syn::parse2::<ArenaArgument>(invalid).is_err());
+        }
     }
 
     #[test]
-    fn frontier_precedes_the_optional_head_and_requires_an_arena() {
+    fn frontier_precedes_the_optional_mode_and_requires_an_arena() {
         let bare: ArenaArgument = syn::parse_quote!(frontier);
-        assert!(!bare.frontier && !bare.head);
+        assert!(!bare.frontier);
+        assert_eq!(bare.mode, ArenaMode::Batch);
         let ordinary: ArenaArgument = syn::parse_quote!(frontier; head);
-        assert!(ordinary.frontier && !ordinary.head);
+        assert!(ordinary.frontier);
+        assert_eq!(ordinary.mode, ArenaMode::Batch);
         assert_eq!(ordinary.arena, syn::parse_quote!(head));
-        let grouped: ArenaArgument = syn::parse_quote!(frontier; head; &mut arena);
-        assert!(grouped.frontier && grouped.head);
-        assert_eq!(grouped.arena, syn::parse_quote!(&mut arena));
-        for invalid in [quote!(frontier;), quote!(frontier; head;),
-                        quote!(head; frontier; arena), quote!(frontier; frontier; arena)] {
+        for (tokens, mode) in [
+            (quote!(frontier; head; &mut arena), ArenaMode::Head),
+            (quote!(frontier; private; &mut arena), ArenaMode::Private),
+        ] {
+            let marked = syn::parse2::<ArenaArgument>(tokens).unwrap();
+            assert!(marked.frontier);
+            assert_eq!(marked.mode, mode);
+            assert_eq!(marked.arena, syn::parse_quote!(&mut arena));
+        }
+        for invalid in [quote!(frontier;), quote!(frontier; head;), quote!(frontier; private;),
+                        quote!(head; frontier; arena), quote!(private; frontier; arena),
+                        quote!(frontier; frontier; arena)] {
             assert!(syn::parse2::<ArenaArgument>(invalid).is_err());
         }
     }
