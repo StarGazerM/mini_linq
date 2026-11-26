@@ -20,6 +20,8 @@ mod key_partition;
 mod placement;
 mod planner;
 mod retain;
+mod root_tile;
+pub use root_tile::authored_tile;
 pub use key_partition::{KeyPartitionPolicy, decompose_with_key_partitions};
 pub mod rewrites;
 pub use planner::Planner;

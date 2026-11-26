@@ -670,9 +670,22 @@ pub fn hand_schedule(
         .unwrap()
         .name
         .clone();
+    // GR-RootTile: the recipe's partition is the width; the planner's root
+    // estimate cuts a few-tile root into enough tiles to fill the device.
+    let machine = cq_gpu_sequence::machine();
+    let root_tile = |planned: &cq_sequence_plan::Planned, store: &syn::Ident| {
+        cq_sequence_plan::authored_tile(
+            &planned.physical,
+            &planned.structures,
+            &planned.program,
+            &machine,
+            store,
+            recipe.partition,
+        )
+    };
     let mut schedule = vec![Advice::Partition {
+        n: root_tile(&planned, &output)?,
         name: output,
-        n: recipe.partition,
         items: None,
     }];
     // Partition every independent device-side numeric filter. Tiling only join
@@ -699,7 +712,7 @@ pub fn hand_schedule(
         {
             schedule.push(Advice::Partition {
                 name: definition.name.clone(),
-                n: recipe.partition,
+                n: root_tile(&planned, &definition.name)?,
                 items: Some(recipe.items),
             });
         }

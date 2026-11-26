@@ -337,6 +337,50 @@ impl Manifest {
         }
         Ok(values)
     }
+
+    /// Rows of `table` whose stored codes equal every `(column, value)`,
+    /// streamed in fixed blocks without decoding whole columns.
+    pub fn count_equal(&self, table: &str, conditions: &[(String, i64)]) -> Result<usize> {
+        use std::io::Read;
+        const BLOCK: usize = 1 << 16;
+        let rows = self.relations.get(table).ok_or_else(|| format!("missing manifest relation {table}"))?.rows;
+        let mut readers = Vec::with_capacity(conditions.len());
+        for (name, value) in conditions {
+            let column = self.column(table, name)?;
+            let width = match column.ty.as_str() {
+                "i32" => 4,
+                "i64" => 8,
+                other => return Err(format!("unsupported stored type {other}").into()),
+            };
+            let file = fs::File::open(self.root.join(&column.file))?;
+            if file.metadata()?.len() != (rows as u64).checked_mul(width as u64).ok_or("column size overflow")? {
+                return Err(format!("{table}.{name}: byte count does not match manifest").into());
+            }
+            readers.push((std::io::BufReader::new(file), width, *value, vec![0u8; BLOCK * width]));
+        }
+        let mut keep = vec![true; BLOCK.min(rows)];
+        let mut count = 0;
+        let mut done = 0;
+        while done < rows {
+            let block = BLOCK.min(rows - done);
+            keep[..block].fill(true);
+            for (reader, width, wanted, bytes) in &mut readers {
+                let bytes = &mut bytes[..block * *width];
+                reader.read_exact(bytes)?;
+                for (keep, value) in keep.iter_mut().zip(bytes.chunks_exact(*width)) {
+                    let value = if *width == 4 {
+                        i64::from(i32::from_le_bytes(value.try_into().unwrap()))
+                    } else {
+                        i64::from_le_bytes(value.try_into().unwrap())
+                    };
+                    *keep &= value == *wanted;
+                }
+            }
+            count += keep[..block].iter().filter(|keep| **keep).count();
+            done += block;
+        }
+        Ok(count)
+    }
 }
 
 #[cfg(test)]

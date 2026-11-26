@@ -28,13 +28,37 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   h19 write their single-value equalities as atom literals. GPU census: 13
   of 26 advised queries move plan (point selects on literal columns become
   restricted renames; d27 probes Part before Orders); written orders are
-  unchanged. All 26 validate at SF1 and SF10. Paired against `80d602fa`
-  (one suite run each): SF10 sum 158.61 -> 158.24 ms, SF1 19.34 -> 19.94 ms;
-  h02 SF10 0.887x and h19 SF10 0.885x (filtered roots are build-phase
-  position selections), but h08 SF1 1.44x (about 1.3k selected Part rows,
-  200k/150 types, give a ~6-block root grid) and h11 SF10 1.27x (the now-bounded one-row Nation root
-  triggers GR-RetainPrefix: one extra dispatch). Root tile sizing and
-  retention still ignore expansion evidence for small selected roots (open).
+  unchanged. All 26 validate at SF1 and SF10.
+  Filtered roots then ran slower where planning still used whole-table
+  bounds: h08 SF1 1.44x (1,451 selected Part rows in 256-row tiles: a
+  6-block grid; ncu: dispatch_0 is 1.43M warp instructions, not 7.04M, so
+  the work shrank and the grid starved) and h11 SF10 1.27x (GR-RetainPrefix
+  fired on a Supplier prefix bounded at 100,000 rows; 4,049 are German).
+  Fixes, each a formal rule:
+  - **Estimates beside bounds** (`BE-PrefixEstimate`): each prefix record
+    carries a nonsemantic estimate (a recorded result count, else a
+    transfer; a key-covered probe scales by the keyed side's estimate/bound).
+    `GPU-FilteredCount` records each literal-restricted rename's measured
+    row count at build (one streamed column scan per dataset, table and
+    literals). Bounds still decide `One` and capacities.
+  - **`GR-RootTile`**: a GPU store root estimated between one and 284 tiles
+    is cut into `ceil(estimate/284)`-row tiles (h08 SF10 256 -> 48, h02 140,
+    d19/d85 212, d27/h21_positive 15). Hand schedules use the same rule
+    (`authored_tile`).
+  - **`GR-RetainPrefix` and `GPU-DistributeExpansion` read estimates**; h11
+    no longer retains.
+  - **`GPU-SelectRows`**: one-pass selection; each warp reserves its
+    256-row chunk with one atomic and writes ids in row order (replaces
+    flags + thrust select: three launches and a temporary).
+  - **`GPU-SelectedCount`**: the selected count stays on the device; a
+    dispatch over selected positions launches over the capacity and its
+    kernel reads the count as its domain (spread tiles are resized from it).
+  Physical and structure plans are unchanged versus the atom-literal commit;
+  only Sequence tiles move. Paired against `80d602fa` (one suite each, all
+  26 validated): SF10 sum 158.60 -> 147.81 ms (geomean 0.916), SF1 19.41 ->
+  18.66 ms (0.952); h19 SF10 0.460x, h07 0.721x, h10 0.791x, h04 0.833x,
+  h02 0.864x, d27 0.910x, h08 0.924x; h11 1.014x (four repeats each side
+  overlap: base 1.357-1.504, new 1.367-1.473 ms) and h03 1.005x.
 
 - GPU Sequence/TPC-H: six code-generation performance bugs found by profiling
   against DuckDB 2.0.1 + Sirius (nsys, ncu, perf; RTX 6000 Ada) are fixed.

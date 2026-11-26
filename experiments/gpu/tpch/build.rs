@@ -300,6 +300,86 @@ fn checked<T>(
     })
 }
 
+/// Formal rule GPU-FilteredCount: Record, for each literal-restricted rename of a loaded table, the number of table rows whose restricted columns equal the literal (dictionary columns compare text ids); the count is advice (BE-PrefixEstimate, PL-Cost input sizes), never a bound.
+fn filtered_counts(
+    physical: &cq_lang_physical::Program,
+    kernel: &source::Kernel,
+    manifest: &Manifest,
+) -> Result<Vec<cq_lang_sequence::EvidenceFact>> {
+    use cq_lang_physical::syntax::constraint::Term;
+    let literal = |value: &Term| -> Option<syn::Expr> {
+        match value {
+            Term::Literal(literal) => Some((**literal).clone()),
+            // A-DomainLiteral: the capture's operand is the written literal.
+            Term::Closed(syn::Expr::Path(path)) => {
+                let name = path.path.get_ident()?;
+                physical.program.captures.items.iter().find_map(|capture| match capture {
+                    cq_lang_physical::syntax::Capture::Domain(capture) if capture.name == *name => {
+                        Some(capture.operand.clone())
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
+    };
+    // One streamed scan per (dataset, table, equalities), shared by stages.
+    static SCANNED: std::sync::Mutex<
+        std::collections::BTreeMap<(PathBuf, String, Vec<(String, i64)>), usize>,
+    > = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let mut facts = Vec::new();
+    for definition in &physical.program.definitions {
+        let cq_lang_physical::Operator::Rename(rename) = &definition.operator else {
+            continue;
+        };
+        let Some(constants) = &rename.constants else {
+            continue;
+        };
+        let Some(relation) = kernel.relations.iter().find(|relation| relation.name == rename.relation) else {
+            continue;
+        };
+        let table = relation.table.to_string();
+        let mut conditions = Vec::with_capacity(constants.bindings.len());
+        for binding in &constants.bindings {
+            let column = binding.column.to_string();
+            let encoding = manifest.column(&table, &column)?.encoding.clone();
+            let wanted = match (literal(&binding.value), encoding.as_str()) {
+                (Some(syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. })), "dictionary") => {
+                    i64::from(manifest.text_id(&table, &column, &text.value())?)
+                }
+                (Some(syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(value), .. })), "plain") => {
+                    value.base10_parse::<i64>()?
+                }
+                _ => break,
+            };
+            conditions.push((column, wanted));
+        }
+        if conditions.len() != constants.bindings.len() {
+            continue;
+        }
+        let key = (manifest.root.clone(), table.clone(), conditions);
+        let cached = SCANNED.lock().unwrap().get(&key).copied();
+        let rows = match cached {
+            Some(rows) => rows,
+            None => {
+                let rows = manifest.count_equal(&table, &key.2)?;
+                SCANNED.lock().unwrap().insert(key, rows);
+                rows
+            }
+        };
+        facts.push(cq_lang_sequence::EvidenceFact::Count {
+            source: cq_lang_sequence::EvidenceSource::Authored {
+                provenance: syn::LitStr::new(
+                    &format!("{} column scan of {table}", manifest.root.display()),
+                    proc_macro2::Span::call_site(),
+                ),
+            },
+            subject: definition.name.clone(),
+            rows,
+        });
+    }
+    Ok(facts)
+}
 
 fn compile_stage(
     kernel: &source::Kernel,
@@ -735,6 +815,11 @@ fn compile_stage(
         cq_sequence_lowering::check(&physical, &structures, &sequence),
     )?;
     if !pipeline.complete {
+        let filtered = filtered_counts(&physical, kernel, manifest).map_err(|error| Rejected {
+            phase: "GPU-FilteredCount",
+            error: error.to_string(),
+            term: physical.to_token_stream().to_string(),
+        })?;
         let evidence = cq_lang_sequence::Evidence {
             facts: kernel
                 .relations
@@ -752,6 +837,7 @@ fn compile_stage(
                     subject: relation.name.clone(),
                     rows: manifest.relations[&relation.table.to_string()].rows,
                 })
+                .chain(filtered)
                 .collect(),
         };
         pipeline.sequence.insert(

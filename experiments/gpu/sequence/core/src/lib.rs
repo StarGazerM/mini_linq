@@ -68,6 +68,9 @@ pub fn machine() -> Machine {
             block_threads: BLOCK_THREADS,
             reserve_rows: 256,
             retain_prefix_rows: 65536,
+            // GR-RootTile: two resident blocks on each of the target's 142 SMs
+            // (RTX 6000 Ada); measured root-tile sweeps peak near this count.
+            root_tiles: 284,
             bindings: bindings::select,
             realize: realize::select,
         }),

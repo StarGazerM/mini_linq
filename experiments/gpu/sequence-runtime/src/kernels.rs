@@ -172,23 +172,56 @@ pub mod build {
         }
     }
 
-    /// Selection uses decoded integers, including negative signed payloads.
+    /// Formal rule GPU-SelectRows: one pass. Each warp owns contiguous 256-row
+    /// chunks: eight ballots decide the chunk's selected rows, one atomic
+    /// reserves their output range, and the warp writes them in source order.
+    /// Chunks land in unspecified order; the device count is the selected total.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn range_flags(column: SourceView, rows: u32, start: i64, end: i64, flags: *mut u32) {
-        let mut row = thread::index_1d().get() as u32;
-        let stride = thread::gridDim_x() * 256;
-        while row < rows {
-            unsafe {
-                // DECODE V: range selection decodes before relational comparison; P6 translate bounds into the encoded domain.
-                let value = decode_source(column, row as u64);
-                *flags.add(row as usize) = (start <= value && value < end) as u32;
+    pub fn range_select(column: SourceView, rows: u32, start: i64, end: i64, out: *mut u32, count: *mut u32) {
+        use cuda_device::warp;
+        const CHUNK_BALLOTS: u64 = 8;
+        let lane = warp::lane_id();
+        let below = warp::lanemask_lt();
+        let warps = thread::gridDim_x() as u64 * 8;
+        let mut chunk = (thread::blockIdx_x() as u64 * 256 + thread::threadIdx_x() as u64) / 32;
+        while chunk * 32 * CHUNK_BALLOTS < rows as u64 {
+            let base = chunk * 32 * CHUNK_BALLOTS;
+            let mut ballots = [0u32; 8];
+            let mut total = 0u32;
+            let mut k = 0u64;
+            while k < CHUNK_BALLOTS {
+                let row = base + k * 32 + lane as u64;
+                let keep = row < rows as u64 && {
+                    // DECODE V: range selection decodes before relational comparison; P6 translate bounds into the encoded domain.
+                    let value = unsafe { decode_source(column, row) };
+                    start <= value && value < end
+                };
+                let ballot = warp::ballot_sync(u32::MAX, keep);
+                ballots[k as usize] = ballot;
+                total += ballot.count_ones();
+                k += 1;
             }
-            row = match row.checked_add(stride) {
-                Some(next) => next,
-                None => break,
-            };
+            if total != 0 {
+                let mut at = 0u32;
+                if lane == 0 {
+                    at = unsafe { cuda_device::atomic::DeviceAtomicU32::from_ptr(count) }
+                        .fetch_add(total, cuda_device::atomic::AtomicOrdering::Relaxed);
+                }
+                let mut at = warp::shuffle_sync(u32::MAX, at, 0);
+                let mut k = 0u64;
+                while k < CHUNK_BALLOTS {
+                    let ballot = ballots[k as usize];
+                    if (ballot >> lane) & 1 != 0 {
+                        let row = base + k * 32 + lane as u64;
+                        unsafe { *out.add((at + (ballot & below).count_ones()) as usize) = row as u32; }
+                    }
+                    at += ballot.count_ones();
+                    k += 1;
+                }
+            }
+            chunk += warps;
         }
     }
 }

@@ -3634,28 +3634,31 @@ fn translate_with_metadata(
         let mut dispatch_share: Option<ShareSites> = None;
         // GPU-RootSelect: the select kernel's per-row test, its chain domain,
         // and the row planner's parameter uses for that test.
-        let mut root_select: Option<(TokenStream, syn::Ident, syn::Ident)> = None;
+        let mut root_select: Option<(TokenStream, syn::Ident, syn::Ident, Option<syn::Ident>)> = None;
         let mut select_uses = BTreeSet::new();
         for (chain_index, chain) in chains.iter().enumerate() {
             let domain = format_ident!("__cq_domain_{chain_index}");
             let enabled = format_ident!("__cq_enabled_{chain_index}");
             let condition = &chain.condition;
-            let source_length = if let Some((prior, _)) = compiler
+            let (source_length, count) = if let Some((prior, _)) = compiler
                 .stored
                 .iter()
                 .enumerate()
                 .find(|(_, store)| store.name == dispatch.outer_store)
             {
                 let length = format_ident!("__cq_store_length_{prior}");
-                quote!(#length)
+                (quote!(#length), None)
             } else {
                 let source = analysis
                     .results
                     .get(&dispatch.outer_store)
                     .map(String::as_str)
                     .unwrap_or(&dispatch.outer_store);
-                compiler.rows.source_len(source)?
+                compiler.rows.source_domain(source)?
             };
+            // GPU-SelectedCount: the host launches over a selected source's
+            // capacity; the kernel's domain is the selection's device count.
+            let count_shadow = count.as_ref().map(|count| quote!(let #domain: u32 = *#count;));
             parameters.extend([abi_parameter(domain.clone(), syn::parse_quote!(u32)), abi_parameter(enabled.clone(), syn::parse_quote!(bool))]);
             arguments.extend([abi_argument(domain.clone(), quote!(#domain)), abi_argument(enabled.clone(), quote!(#enabled))]);
             host_domains.push(quote! {
@@ -3765,7 +3768,7 @@ fn translate_with_metadata(
                     parameters.push(abi_parameter(id.clone(), syn::parse_quote!(*const u32)));
                     arguments.push(abi_argument(id.clone(), quote!(#id.ptr() as *const u32)));
                 }
-                root_select = Some((test, domain.clone(), enabled.clone()));
+                root_select = Some((test, domain.clone(), enabled.clone(), count.clone()));
                 quote! {
                     let __position = *__cq_select.add(__position as usize) as u64;
                     #source
@@ -4043,8 +4046,8 @@ fn translate_with_metadata(
                     }
                 }
             };
-            // GPU-RootSelect: the root domain is the selected count, and the
-            // spread tile is resized from it (GPU-RootSpread's formula).
+            // GPU-RootSelect / GPU-SelectedCount: the root domain is a device
+            // count, so the spread tile is resized from it (GPU-RootSpread's formula).
             let select_shadow = match (&root_select, &execution.partition) {
                 (Some(_), cq_lang_sequence::gpu::Partition::Spread { max_rows }) => {
                     let max_rows = *max_rows as u64;
@@ -4053,10 +4056,17 @@ fn translate_with_metadata(
                         let #tile: u32 = ((#domain as u64).div_ceil((__blocks as u64).max(1)).clamp(1, #max_rows)) as u32;
                     }
                 }
+                (None, cq_lang_sequence::gpu::Partition::Spread { max_rows }) if count.is_some() => {
+                    let max_rows = *max_rows as u64;
+                    quote! {
+                        let #tile: u32 = ((#domain as u64).div_ceil((__blocks as u64).max(1)).clamp(1, #max_rows)) as u32;
+                    }
+                }
                 _ => quote!(),
             };
             bodies.push(quote! {
                 if #enabled {
+                    #count_shadow
                     #select_shadow
                     let __partial_base = #chain_index * __blocks as usize;
                     #outside_declare
@@ -4294,8 +4304,9 @@ fn translate_with_metadata(
         kernels.push(dispatch_abi.definition());
         // GPU-RootSelect: the select kernel (one warp-aggregated append per
         // warp of kept root positions) and its launch before the dispatch.
-        let select_launch = if let Some((test, domain, enabled)) = &root_select {
+        let select_launch = if let Some((test, domain, enabled, count)) = &root_select {
             let name = format_ident!("__cq_sequence_select_{index}_{module_name}");
+            let count_shadow = count.as_ref().map(|count| quote!(let #domain: u32 = *#count;));
             let mut declarations = parameters.clone();
             let mut call_arguments = arguments.clone();
             for (declaration, argument) in declarations.iter_mut().zip(call_arguments.iter_mut()) {
@@ -4307,6 +4318,7 @@ fn translate_with_metadata(
             }
             let body = quote! {
                 unsafe {
+                    #count_shadow
                     let __lane = ::cuda_device::warp::lane_id();
                     let __below = ::cuda_device::warp::lanemask_lt();
                     let __stride = ::cuda_device::thread::gridDim_x() as u64 * 256;
@@ -4337,6 +4349,7 @@ fn translate_with_metadata(
             // The row planner's uses for the test, plus the select scalars.
             let mut kernel_uses = select_uses.clone();
             kernel_uses.extend([domain.to_string(), "__cq_select".to_owned(), "__cq_select_count".to_owned()]);
+            kernel_uses.extend(count.iter().map(ToString::to_string));
             let abi = CheckedKernel::lower(&name, quote! {
                 #[kernel]
                 #[launch_bounds(256)]
