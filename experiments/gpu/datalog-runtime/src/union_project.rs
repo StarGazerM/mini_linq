@@ -45,6 +45,7 @@ fn up_value(x: u32, signed: bool) -> u32 {
 }
 
 const MASK: u32 = u32::MAX;
+const FRAGMENT_WARPS: usize = 16;
 
 #[device]
 fn up_thread() -> (usize, usize) {
@@ -90,6 +91,36 @@ fn up_prefix32(value: u32) -> (u32, u32) {
         step *= 2;
     }
     (sum - value, warp::shuffle_u64_sync(MASK, sum as u64, 31) as u32)
+}
+
+/// Consume compact `(destination group, zero-based source)` pairs. All four
+/// representative workers share a source but own disjoint fragment windows.
+#[device]
+unsafe fn up_take_jobs(
+    jobs: *const u64, count: *const u32, offset: *const u64, length: *const u32,
+    frag: *const u64, words: usize, bits: *mut u32, warps_per_ref: usize,
+) {
+    unsafe {
+        let warps_per_block = thread::blockDim_x() as usize / 32;
+        let warp = thread::blockIdx_x() as usize * warps_per_block + thread::threadIdx_x() as usize / 32;
+        let stride = thread::gridDim_x() as usize * warps_per_block;
+        let end = *count as usize * warps_per_ref;
+        let mut worker = warp;
+        while worker < end {
+            let job = *jobs.add(worker / warps_per_ref);
+            let source = job as u32 as usize;
+            let list = frag.add(*offset.add(source) as usize);
+            let n = *length.add(source) as usize;
+            let dst = bits.add((job >> 32) as usize * words);
+            let mut j = warp::lane_id() as usize + (worker % warps_per_ref) * 32;
+            while j < n {
+                let v = *list.add(j);
+                DeviceAtomicU32::from_ptr(dst.add((v >> 32) as usize)).fetch_or(v as u32, Relaxed);
+                j += warps_per_ref * 32;
+            }
+            worker += stride;
+        }
+    }
 }
 
 #[cuda_device::cuda_module]
@@ -449,8 +480,8 @@ mod union_project_kernels {
 
     /// Encode windows of sorted children into sparse `(word, bits)` fragments.
     #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    #[launch_bounds(128)]
+    #[launch_contract(domain = 1, block = (128, 1, 1))]
     pub fn up_fragments<W: Copy + Word>(
         v: RadixLayoutView<W, u64>,
         spans: *const u64,
@@ -461,13 +492,14 @@ mod union_project_kernels {
         wmap: *mut u32,
     ) {
         unsafe {
-            let (id, stride) = up_thread();
+            // Four 128-thread CTAs per span; warp j owns windows j, j+16, ...
+            let warp = thread::blockIdx_x() as usize * 4 + thread::threadIdx_x() as usize / 32;
             let lane = warp::lane_id();
-            let mut span = id / 32;
+            let mut span = warp / FRAGMENT_WARPS;
             while span < n {
                 let parent = span / v.keys.run_count as usize;
                 let r = (span % v.keys.run_count as usize) as u32;
-                let mut a = *spans.add(span * 2);
+                let mut a = *spans.add(span * 2) + ((warp % FRAGMENT_WARPS) * 32) as u64;
                 let b = *spans.add(span * 2 + 1);
                 while a < b {
                     let valid = a + u64::from(lane) < b;
@@ -502,9 +534,9 @@ mod union_project_kernels {
                             (u64::from(word) << 32) | u64::from(mask);
                         DeviceAtomicU32::from_ptr(wmap.add(word as usize)).store(1, Relaxed);
                     }
-                    a += 32;
+                    a += (32 * FRAGMENT_WARPS) as u64;
                 }
-                span += stride / 32;
+                span += thread::gridDim_x() as usize * 4 / FRAGMENT_WARPS;
             }
         }
     }
@@ -558,6 +590,60 @@ mod union_project_kernels {
                 f += stride / 32;
             }
         }
+    }
+
+    /// One lane per edge, one ballot reservation for the live stripe references.
+    #[kernel] #[launch_bounds(128)] #[launch_contract(domain=1,block=(128,1,1))]
+    pub fn up_edge_jobs(edge: *const u64, n: usize, gmap: *const u32, first: usize,
+                        groups: usize, jobs: *mut u64, count: *mut u32) {
+        unsafe {
+            let i = thread::blockIdx_x() as usize * 128 + thread::threadIdx_x() as usize;
+            let e = if i < n { *edge.add(i) } else { 0 };
+            let source = e as u32;
+            let g = if source != 0 { (*gmap.add((e >> 32) as usize) - 1) as usize } else { 0 };
+            let live = source != 0 && g >= first && g - first < groups;
+            let pos = up_reserve(live, count);
+            if live {
+                *jobs.add(pos as usize) = (((g - first) as u64) << 32) | u64::from(source - 1);
+            }
+        }
+    }
+
+    /// One lane per membership word: enumerate its set bits into a single
+    /// warp-sized reservation, preserving representative (not catalog) IDs.
+    #[kernel] #[launch_bounds(128)] #[launch_contract(domain=1,block=(128,1,1))]
+    pub fn up_rep_jobs(members: *const u32, catalog: *const u32, reps: usize, width: usize,
+                       jobs: *mut u64, count: *mut u32) {
+        unsafe {
+            let i = thread::blockIdx_x() as usize * 128 + thread::threadIdx_x() as usize;
+            let rep = i / width;
+            let col = i % width;
+            let mut v = if rep < reps { *members.add(*catalog.add(rep) as usize * width + col) } else { 0 };
+            let (prefix, total) = up_prefix32(v.count_ones());
+            if total == 0 { return; }
+            let base = if warp::lane_id() == 0 {
+                DeviceAtomicU32::from_ptr(count).fetch_add(total, Relaxed)
+            } else { 0 };
+            let mut at = warp::shuffle_u64_sync(MASK, u64::from(base), 0) as usize + prefix as usize;
+            while v != 0 {
+                let source = col * 32 + v.trailing_zeros() as usize;
+                *jobs.add(at) = ((rep as u64) << 32) | source as u64;
+                at += 1;
+                v &= v - 1;
+            }
+        }
+    }
+
+    #[kernel] #[launch_bounds(256)] #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn up_take_edge_jobs(jobs: *const u64, count: *const u32, offset: *const u64,
+                             length: *const u32, frag: *const u64, words: usize, bits: *mut u32) {
+        unsafe { up_take_jobs(jobs, count, offset, length, frag, words, bits, 1) }
+    }
+
+    #[kernel] #[launch_bounds(128)] #[launch_contract(domain=1,block=(128,1,1))]
+    pub fn up_take_rep_jobs(jobs: *const u64, count: *const u32, offset: *const u64,
+                            length: *const u32, frag: *const u64, words: usize, bits: *mut u32) {
+        unsafe { up_take_jobs(jobs, count, offset, length, frag, words, bits, 4) }
     }
 
     /// Atomic bitwise union of source fragments into one stripe of groups.
@@ -996,6 +1082,7 @@ pub fn execute<KD: ScalarTuple, WD: Word + 'static, KR: ScalarTuple, WR: Word + 
         let nf = max[0] as usize + 1;
         let ng = max[1] as usize + 1;
         const MAX_WORDS: usize = 1 << 26; // 256 MiB per dense scratch array
+        const MAX_JOBS: usize = MAX_WORDS / 2; // one u64 per possible reference
         if nf > MAX_WORDS || ng > MAX_WORDS { return Ok(None); }
         let fmap = zero(nf)?;
         let src = u32s(n.min(nf))?;
@@ -1024,7 +1111,12 @@ pub fn execute<KD: ScalarTuple, WD: Word + 'static, KR: ScalarTuple, WR: Word + 
         let frag = u64s(children)?;
         let length = zero(sources)?;
         let wmap = zero(nw)?;
-        m.up_fragments(stream, &m.prepare_up_fragments::<WR>(cfg(segments * 32))?, rv, spans.ptr(), segments,
+        // Four CTAs form a complete cohort. Only a span count beyond CUDA's
+        // maximum grid-x needs the kernel's grid-stride continuation.
+        let blocks_per_span = FRAGMENT_WARPS / 4;
+        let span_blocks = segments.min(i32::MAX as usize / blocks_per_span) * blocks_per_span;
+        let fragment_cfg = LaunchConfig1D::new(span_blocks as u32, 128, 0);
+        m.up_fragments(stream, &m.prepare_up_fragments::<WR>(fragment_cfg)?, rv, spans.ptr(), segments,
                        off.ptr(), length.ptr(), frag.ptr(), wmap.ptr())?;
         let nc = zero(2)?;
         let gdecode = u32s(n.min(ng))?;
@@ -1057,8 +1149,20 @@ pub fn execute<KD: ScalarTuple, WD: Word + 'static, KR: ScalarTuple, WR: Word + 
             let reps = read(&count)?[0] as usize;
             if reps * 2 <= groups && reps.saturating_mul(words) <= MAX_WORDS {
                 let bits = zero(reps * words)?;
-                m.up_union_reps(stream, &m.prepare_up_union_reps(cfg(reps * width * 32))?, members.ptr(),
-                                catalog.ptr(), reps, width, off.ptr(), length.ptr(), frag.ptr(), words, bits.ptr())?;
+                let membership_words = reps * width;
+                if membership_words <= MAX_JOBS / 32 {
+                    let jobs = u64s(membership_words * 32)?;
+                    let count = zero(1)?;
+                    let gen_cfg = LaunchConfig1D::new(membership_words.div_ceil(128) as u32, 128, 0);
+                    m.up_rep_jobs(stream, &m.prepare_up_rep_jobs(gen_cfg)?, members.ptr(), catalog.ptr(),
+                                  reps, width, jobs.ptr(), count.ptr())?;
+                    let take_cfg = LaunchConfig1D::new(resident, 128, 0);
+                    m.up_take_rep_jobs(stream, &m.prepare_up_take_rep_jobs(take_cfg)?, jobs.ptr(), count.ptr(),
+                                       off.ptr(), length.ptr(), frag.ptr(), words, bits.ptr())?;
+                } else {
+                    m.up_union_reps(stream, &m.prepare_up_union_reps(cfg(membership_words * 32))?, members.ptr(),
+                                    catalog.ptr(), reps, width, off.ptr(), length.ptr(), frag.ptr(), words, bits.ptr())?;
+                }
                 let tiles = words.div_ceil(32);
                 let tile_offset = u32s(reps * tiles)?;
                 let counts = zero(reps)?;
@@ -1098,7 +1202,13 @@ pub fn execute<KD: ScalarTuple, WD: Word + 'static, KR: ScalarTuple, WR: Word + 
         // bitmap fits in one stripe we need not replay the union either.
         let stripe = ((1usize << 26) / words).max(1).min(groups);
         let bits = u32s(stripe * words)?;
-        let union = m.prepare_up_union(cfg(n * 32))?;
+        // Allocate once across stripes/retries; do not add a host count gate.
+        let compact = if n <= MAX_JOBS {
+            let gen_cfg = LaunchConfig1D::new(n.div_ceil(128) as u32, 128, 0);
+            // Keep all eight native warps per CTA (6,816 workers on Ada).
+            let take_cfg = LaunchConfig1D::new(resident, 256, 0);
+            Some((u64s(n)?, u32s(1)?, m.prepare_up_edge_jobs(gen_cfg)?, m.prepare_up_take_edge_jobs(take_cfg)?))
+        } else { None };
         let mut cap = arena.capacity_hint(&pack);
         let mut populated = false;
         loop {
@@ -1109,8 +1219,15 @@ pub fn execute<KD: ScalarTuple, WD: Word + 'static, KR: ScalarTuple, WR: Word + 
                 let size = gs * words;
                 if !populated || stripe < groups {
                     unsafe { cuda_core::simt::memory::memset_d8_async(bits.cu_deviceptr(), 0, 4 * size, stream.cu_stream())?; }
-                    m.up_union(stream, &union, edges.ptr(), n, gmap.ptr(), off.ptr(), length.ptr(), frag.ptr(),
-                               first, gs, words, bits.ptr())?;
+                    if let Some((jobs, count, gen_kernel, take_kernel)) = &compact {
+                        unsafe { cuda_core::simt::memory::memset_d8_async(count.cu_deviceptr(), 0, 4, stream.cu_stream())?; }
+                        m.up_edge_jobs(stream, gen_kernel, edges.ptr(), n, gmap.ptr(), first, gs, jobs.ptr(), count.ptr())?;
+                        m.up_take_edge_jobs(stream, take_kernel, jobs.ptr(), count.ptr(), off.ptr(), length.ptr(),
+                                            frag.ptr(), words, bits.ptr())?;
+                    } else {
+                        m.up_union(stream, &m.prepare_up_union(cfg(n * 32))?, edges.ptr(), n, gmap.ptr(),
+                                   off.ptr(), length.ptr(), frag.ptr(), first, gs, words, bits.ptr())?;
+                    }
                 }
                 m.up_publish(stream, &m.prepare_up_publish(cfg(size))?, bits.ptr(), size, words,
                              unsafe { gdecode.ptr().add(first) }, wdecode.ptr(), p, rows.ptr(),
@@ -1131,4 +1248,186 @@ pub fn execute<KD: ScalarTuple, WD: Word + 'static, KR: ScalarTuple, WR: Word + 
             populated = true;
         }
     })
+}
+
+#[cfg(test)]
+mod kernel_tests {
+    use super::union_project_kernels;
+    use crate::{Buffer, DeviceRadixRun, Pool, RadixLayout, RadixRunParams, Result, SortedBatch};
+    use cuda_core::LaunchConfig1D;
+
+    #[test]
+    fn fragments_match_each_parents_window_multiset() -> Result<()> {
+        type Layout = RadixLayout<(u16, u16), (), u64, u64, ()>;
+        let pool = Pool::new(0, 0, 0)?;
+        let pack = Layout::derive_packing()?;
+        let params = RadixRunParams {
+            ratio: 2, radix_bits: 0, merge_tile_rows: 32, block_threads: 256,
+        };
+        let mut set = DeviceRadixRun::new_set(pool.clone(), params, pack.bits())?;
+        // Each parent has two disjoint runs. Odd children start at 3 so a
+        // raw word straddles window boundaries, including the 16-warp wrap.
+        let parents: [[Vec<u16>; 2]; 5] = [
+            [(0..1091).map(|k| 3 + 2 * k).collect(), (0..65).map(|k| 2 * k).collect()],
+            [vec![], vec![4096]],
+            [vec![], vec![]],
+            [(8000..8032).collect(), vec![]],
+            [(200..233).collect(), (400..431).collect()],
+        ];
+        for r in 0..2 {
+            let mut keys: Vec<u64> = Vec::new();
+            for (parent, runs) in parents.iter().enumerate() {
+                for &member in &runs[r] {
+                    keys.push(pack.pack(&[parent as i128, i128::from(member)])?);
+                }
+            }
+            let buf = Buffer::from_host(pool.clone(), &keys)?;
+            // SAFETY: rows above are strictly increasing by (parent, member).
+            unsafe { set.append_sorted(SortedBatch::from_sorted(buf, keys.len())?)?; }
+        }
+        let rhs = Layout::publish(&set, pack)?;
+        assert_eq!(rhs.run_count(), 2);
+        let view = rhs.view_on(&pool)?;
+        let n = parents.len();
+        let segments = n * rhs.run_count();
+        let sources = Buffer::from_host(pool.clone(), &(0..n as u32).collect::<Vec<_>>())?;
+        let offsets = Buffer::<u64>::zeroed(pool.clone(), n)?;
+        let spans = Buffer::<u64>::zeroed(pool.clone(), 2 * segments)?;
+        let fmap = Buffer::<u32>::zeroed(pool.clone(), n)?;
+        let total = Buffer::<u64>::zeroed(pool.clone(), 1)?;
+        let maxword = Buffer::<u32>::zeroed(pool.clone(), 1)?;
+        let m = unsafe { union_project_kernels::load(pool.context())? };
+        let stream = pool.stream();
+        m.up_ranges(stream, &m.prepare_up_ranges::<u64>(LaunchConfig1D::new(1, 256, 0))?,
+            view, sources.ptr(), n, fmap.ptr(), spans.ptr(), offsets.ptr(), total.ptr(), maxword.ptr())?;
+        let lengths = Buffer::<u32>::zeroed(pool.clone(), n)?;
+        let fragments = Buffer::<u64>::zeroed(pool.clone(), rhs.len())?;
+        let words = usize::from(*parents.iter().flatten().flatten().max().unwrap()) / 32 + 1;
+        let marked = Buffer::<u32>::zeroed(pool.clone(), words)?;
+        // Two spans in flight, then grid-stride across the remaining parents.
+        m.up_fragments(stream, &m.prepare_up_fragments::<u64>(LaunchConfig1D::new(8, 128, 0))?,
+            view, spans.ptr(), segments, offsets.ptr(), lengths.ptr(), fragments.ptr(), marked.ptr())?;
+        let (lengths, offsets, fragments) = (lengths.to_host()?, offsets.to_host()?, fragments.to_host()?);
+        let mut expected_marks = vec![0; words];
+        for (parent, runs) in parents.iter().enumerate() {
+            let mut expected = Vec::new();
+            for window in runs.iter().flat_map(|run| run.chunks(32)) {
+                for segment in window.chunk_by(|a, b| a / 32 == b / 32) {
+                    let word = segment[0] / 32;
+                    let mask = segment.iter().fold(0u32, |bits, member| bits | (1 << (member % 32)));
+                    expected.push((u64::from(word) << 32) | u64::from(mask));
+                    expected_marks[usize::from(word)] = 1;
+                }
+            }
+            assert_eq!(lengths[parent] as usize, expected.len(), "length of parent {parent}");
+            let start = offsets[parent] as usize;
+            let mut actual = fragments[start..start + expected.len()].to_vec();
+            // Reservations are unordered. Don't dedup or OR across windows.
+            expected.sort_unstable();
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "fragments of parent {parent}");
+        }
+        assert_eq!(marked.to_host()?, expected_marks);
+        Ok(())
+    }
+
+    #[test]
+    fn compact_and_fallback_unions_match_every_bitmap_word() -> Result<()> {
+        const SOURCES: usize = 1057;
+        const WIDTH: usize = SOURCES.div_ceil(32);
+        const WORDS: usize = 557;
+        let pool = Pool::new(0, 0, 0)?;
+        let stream = pool.stream();
+        let m = unsafe { union_project_kernels::load(pool.context())? };
+        let cfg = |n: usize, block: u32| LaunchConfig1D::new(n.div_ceil(block as usize) as u32, block, 0);
+        let mut offsets = vec![0u64; SOURCES];
+        let mut lengths = vec![0u32; SOURCES];
+        let mut fragments = Vec::new();
+        // A missing window cannot hide behind another source: each source
+        // contributes a different bit, and no word repeats within its list.
+        let lists = [(0, 523), (2, 127), (31, 128), (32, 129), (63, 1), (96, 32), (1024, 33), (1056, 31)];
+        for (bit, (source, len)) in lists.into_iter().enumerate() {
+            offsets[source] = fragments.len() as u64;
+            lengths[source] = len as u32;
+            for j in 0..len {
+                let word = (73 * j + source) % WORDS;
+                fragments.push(((word as u64) << 32) | (1 << bit));
+            }
+        }
+        let rows: [&[usize]; 6] = [
+            &[0, 31, 1056], &[2, 31, 32, 1024], &[32, 63],
+            &[0, 31, 1056], &[63, 96, 1024], &[32, 63],
+        ];
+        let mut expected = vec![0u32; rows.len() * WORDS];
+        for (g, sources) in rows.iter().enumerate() {
+            for &f in *sources {
+                let first = offsets[f] as usize;
+                for &fragment in &fragments[first..first + lengths[f] as usize] {
+                    expected[g * WORDS + (fragment >> 32) as usize] |= fragment as u32;
+                }
+            }
+        }
+        let offsets = Buffer::from_host(pool.clone(), &offsets)?;
+        let lengths = Buffer::from_host(pool.clone(), &lengths)?;
+        let fragments = Buffer::from_host(pool.clone(), &fragments)?;
+        // Raw group IDs are not compact ranks. Group 6 has only failed lookups.
+        let group_map = [4u32, 1, 2, 5, 3, 6, 0];
+        let mut edges = Vec::new();
+        for f in 0..SOURCES {
+            if f % 8 == 0 { edges.push(6u64 << 32); }
+            for (raw, &rank) in group_map[..6].iter().enumerate() {
+                if rows[(rank - 1) as usize].contains(&f) {
+                    edges.push(((raw as u64) << 32) | (f as u64 + 1));
+                }
+            }
+        }
+        let n = edges.len();
+        let edges = Buffer::from_host(pool.clone(), &edges)?;
+        let gmap = Buffer::from_host(pool.clone(), &group_map)?;
+        let jobs = Buffer::<u64>::zeroed(pool.clone(), n)?;
+        for first in (0..rows.len()).step_by(4) {
+            let gs = 4.min(rows.len() - first);
+            let count = Buffer::<u32>::zeroed(pool.clone(), 1)?;
+            let compact = Buffer::<u32>::zeroed(pool.clone(), gs * WORDS)?;
+            let fallback = Buffer::<u32>::zeroed(pool.clone(), gs * WORDS)?;
+            m.up_edge_jobs(stream, &m.prepare_up_edge_jobs(cfg(n, 128))?,
+                edges.ptr(), n, gmap.ptr(), first, gs, jobs.ptr(), count.ptr())?;
+            let refs: usize = rows[first..first + gs].iter().map(|row| row.len()).sum();
+            assert_eq!(count.to_host()?[0] as usize, refs);
+            m.up_take_edge_jobs(stream, &m.prepare_up_take_edge_jobs(cfg(256, 256))?,
+                jobs.ptr(), count.ptr(), offsets.ptr(), lengths.ptr(), fragments.ptr(), WORDS, compact.ptr())?;
+            m.up_union(stream, &m.prepare_up_union(cfg(256, 256))?,
+                edges.ptr(), n, gmap.ptr(), offsets.ptr(), lengths.ptr(), fragments.ptr(),
+                first, gs, WORDS, fallback.ptr())?;
+            let stripe = &expected[first * WORDS..(first + gs) * WORDS];
+            assert_eq!(compact.to_host()?.as_slice(), stripe, "compact stripe {first}");
+            assert_eq!(fallback.to_host()?.as_slice(), stripe, "fallback stripe {first}");
+        }
+
+        let members = Buffer::<u32>::zeroed(pool.clone(), rows.len() * WIDTH)?;
+        m.up_members(stream, &m.prepare_up_members(cfg(n, 256))?, edges.ptr(), n, gmap.ptr(), WIDTH, members.ptr())?;
+        // Each distinct row exactly once, in non-rank order. WIDTH=34 puts
+        // sparse membership words on both sides of warp and CTA boundaries.
+        let representatives = [4u32, 2, 1, 3];
+        let reps = representatives.len();
+        let catalog = Buffer::from_host(pool.clone(), &representatives)?;
+        let count = Buffer::<u32>::zeroed(pool.clone(), 1)?;
+        let compact = Buffer::<u32>::zeroed(pool.clone(), reps * WORDS)?;
+        let fallback = Buffer::<u32>::zeroed(pool.clone(), reps * WORDS)?;
+        m.up_rep_jobs(stream, &m.prepare_up_rep_jobs(cfg(reps * WIDTH, 128))?,
+            members.ptr(), catalog.ptr(), reps, WIDTH, jobs.ptr(), count.ptr())?;
+        let refs: usize = representatives.iter().map(|&g| rows[g as usize].len()).sum();
+        assert_eq!(count.to_host()?[0] as usize, refs);
+        m.up_take_rep_jobs(stream, &m.prepare_up_take_rep_jobs(cfg(128, 128))?,
+            jobs.ptr(), count.ptr(), offsets.ptr(), lengths.ptr(), fragments.ptr(), WORDS, compact.ptr())?;
+        m.up_union_reps(stream, &m.prepare_up_union_reps(cfg(256, 256))?,
+            members.ptr(), catalog.ptr(), reps, WIDTH, offsets.ptr(), lengths.ptr(), fragments.ptr(), WORDS, fallback.ptr())?;
+        let (compact, fallback) = (compact.to_host()?, fallback.to_host()?);
+        for (r, g) in representatives.into_iter().enumerate() {
+            let row = &expected[g as usize * WORDS..(g as usize + 1) * WORDS];
+            assert_eq!(&compact[r * WORDS..(r + 1) * WORDS], row, "compact representative {r}");
+            assert_eq!(&fallback[r * WORDS..(r + 1) * WORDS], row, "fallback representative {r}");
+        }
+        Ok(())
+    }
 }

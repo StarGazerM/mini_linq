@@ -13,6 +13,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog UnionProject assigns the 32-child windows of each source span
+  to 16 warps. Representative and striped bitmap unions compact live source
+  references when the worst-case queue fits the 256 MiB scratch limit.
+  Representative jobs use four warps; striped jobs use one warp at the
+  original full consumer grid width. Raw bag enumeration is unchanged.
+
 - GPU Datalog storage: DOOP device relations now build a 16-bit radix
   directory per published run (`radix_bits` 0 -> 16 in
   `datalog/src/storage.rs`). Previously no directory was ever built, so every
