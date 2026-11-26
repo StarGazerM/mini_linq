@@ -24,6 +24,7 @@ pub(crate) fn advise(
     let Some(width) = width else {
         return Ok(planned);
     };
+    let mut analysis = checker.check_shared(physical, structures, program)?;
     for definition in &program.sequence.definitions {
         if !matches!(definition.term, Term::Store { .. }) {
             continue;
@@ -69,13 +70,16 @@ pub(crate) fn advise(
         }
         if let Some(name) = unstored_input(&planned.program, &definition.term) {
             crate::push(checker, &mut planned, Advice::Store(name))?;
+            // GR-RootTile reads the root through the planned program's results.
+            analysis = checker.check_shared(&planned.physical, &planned.structures, &planned.program)?;
         }
         let n = if let Some(tile) = blocked_vector_rows(&planned.structures, &planned.program, &definition.term) {
             width.div_ceil(tile).checked_mul(tile).ok_or_else(|| {
                 syn::Error::new_spanned(&definition.name, "BE-Blocks: source tile width overflows usize")
             })?
         } else {
-            width
+            // GR-RootTile: an estimated root of a few tiles fills the device.
+            crate::root_tile::tile(&planned.program, &analysis, machine, &definition.name, width)
         };
         let step = Advice::Partition {
             name: definition.name.clone(),

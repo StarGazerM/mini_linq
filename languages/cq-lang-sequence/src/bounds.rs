@@ -21,6 +21,63 @@ pub struct Bound {
     pub rows: Option<u128>,
     /// Column sets on which the result has at most one row.
     pub keys: Vec<BTreeSet<String>>,
+    /// BE-PrefixEstimate: a nonsemantic row estimate that also uses recorded
+    /// filtered counts; geometry advice reads it, never capacities.
+    pub estimate: Option<u128>,
+}
+
+/// Formal rule BE-PrefixEstimate: A recorded count for the result itself, else the relation count at a rename; filters, scalar binds, projections and semijoins keep their input's estimate; a key-covered probe scales the matched side's estimate by the keyed side's estimate/bound fraction; generators and Union are unknown.
+fn estimate(
+    definition: &crate::structures::physical::Definition,
+    program: &Program,
+    get: &dyn Fn(&syn::Ident) -> Bound,
+    covers: &dyn Fn(&Bound, &crate::structures::physical::Keyed) -> bool,
+) -> Option<u128> {
+    if let Some(rows) = program.evidence.count(&symbol_name(&definition.name)) {
+        return Some(rows as u128);
+    }
+    // The fraction of a keyed side's bound that its estimate keeps.
+    let scaled = |matched: Option<u128>, keyed: &Bound| {
+        let matched = matched?;
+        Some(match (keyed.estimate, keyed.rows) {
+            (Some(estimate), Some(rows)) if rows > 0 => {
+                matched.saturating_mul(estimate).div_ceil(rows)
+            }
+            _ => matched,
+        })
+    };
+    match &definition.operator {
+        Operator::Unit(_) => Some(1),
+        Operator::Rename(rename) => program
+            .evidence
+            .count(&symbol_name(&rename.relation))
+            .map(|rows| rows as u128),
+        Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+            get(&select.input).estimate
+        }
+        Operator::Guard(guard) => get(&guard.input).estimate,
+        Operator::Bind(bind) if bind.for_token.is_none() => get(&bind.input).estimate,
+        Operator::Project(project) => get(&project.input).estimate,
+        Operator::Group(group) if group.keys.is_empty() => Some(1),
+        Operator::Group(group) => get(&group.input).estimate,
+        Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => get(&keyed.left).estimate,
+        Operator::Probe(_, keyed) | Operator::Merge(_, keyed) => {
+            let (stream, provider) = (get(&keyed.left), get(&keyed.right));
+            if covers(&provider, keyed) {
+                scaled(stream.estimate, &provider)
+            } else if covers(&stream, keyed) {
+                scaled(provider.estimate, &stream)
+            } else {
+                None
+            }
+        }
+        Operator::Bind(_) | Operator::Union(_) => None,
+    }
+}
+
+fn covers_keyed(bound: &Bound, keyed: &crate::structures::physical::Keyed) -> bool {
+    let columns: BTreeSet<_> = keyed.columns.iter().map(symbol_name).collect();
+    bound.keys.iter().any(|key| key.is_subset(&columns))
 }
 
 /// Formal rule BE-PrefixBound: Record count estimates and full-heading input keys through Unit, Rename, filters, scalar Bind, Project, Group, Semi/Anti and keyed Probe/Merge; generators and Union have no bound.
@@ -33,16 +90,18 @@ pub(crate) fn record(physical: &crate::structures::physical::Program, program: &
         bound.keys.iter().any(|key| key.is_subset(columns))
     };
     for definition in &physical.program.definitions {
-        let bound = match &definition.operator {
+        let mut bound = match &definition.operator {
             Operator::Unit(_) => Bound {
                 rows: Some(1),
                 keys: vec![BTreeSet::new()],
+                estimate: None,
             },
             Operator::Rename(rename) => {
                 let relation = symbol_name(&rename.relation);
                 Bound {
                     rows: program.evidence.count(&relation).map(|rows| rows as u128),
                     keys: vec![rename.mapping.iter().map(|column| symbol_name(&column.target)).collect()],
+                    estimate: None,
                 }
             }
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
@@ -60,6 +119,7 @@ pub(crate) fn record(physical: &crate::structures::physical::Program, program: &
                         .into_iter()
                         .filter(|key| key.is_subset(&kept))
                         .collect(),
+                    estimate: None,
                 }
             }
             Operator::Group(group) => Bound {
@@ -69,6 +129,7 @@ pub(crate) fn record(physical: &crate::structures::physical::Program, program: &
                     get(&bounds, &group.input).rows
                 },
                 keys: vec![group.keys.iter().map(symbol_name).collect()],
+                estimate: None,
             },
             Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => get(&bounds, &keyed.left),
             Operator::Probe(_, keyed) | Operator::Merge(_, keyed) => {
@@ -84,6 +145,12 @@ pub(crate) fn record(physical: &crate::structures::physical::Program, program: &
             }
             Operator::Bind(_) | Operator::Union(_) => Bound::default(),
         };
+        bound.estimate = estimate(
+            definition,
+            program,
+            &|name| get(&bounds, name),
+            &covers_keyed,
+        );
         bounds.insert(symbol_name(&definition.name), bound);
     }
     bounds
@@ -138,6 +205,7 @@ pub fn check(physical: &crate::structures::physical::Program, program: &Program,
                 &Bound {
                     rows: Some(1),
                     keys: vec![BTreeSet::new()],
+                    estimate: None,
                 },
             ),
             Operator::Rename(rename) => {
@@ -176,6 +244,7 @@ pub fn check(physical: &crate::structures::physical::Program, program: &Program,
                         get(&group.input).rows
                     },
                     keys: vec![group.keys.iter().map(symbol_name).collect()],
+                    estimate: None,
                 },
             ),
             Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => weakens(bound, get(&keyed.left)),
@@ -191,6 +260,16 @@ pub fn check(physical: &crate::structures::physical::Program, program: &Program,
             return Err(syn::Error::new_spanned(
                 &definition.name,
                 "BE-PrefixBound: recorded rows or keys lack an evidence/transfer premise",
+            ));
+        }
+        // BE-PrefixEstimate: unknown, or exactly the transfer of the preceding records.
+        if bound.estimate.is_some()
+            && bound.estimate
+                != estimate(definition, program, &|name| get(name).clone(), &covers_keyed)
+        {
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "BE-PrefixEstimate: recorded estimate is not its evidence/transfer estimate",
             ));
         }
         preceding.insert(name, bound);

@@ -17,7 +17,7 @@ use gpu_compress::{Catalog, Domain};
 use gpu_compress_host::Kind;
 pub use gpu_device_columns::{MemoryResource, OutputCount};
 use rccl_cub::DoubleBuffer;
-use rccl_thrust::{arithmetic_range, gather, select_flagged, sort_columns_lexicographic};
+use rccl_thrust::{gather, sort_columns_lexicographic};
 use std::{cell::RefCell, sync::Arc};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -61,7 +61,7 @@ impl Geometry {
 /// Per-family auxiliary kernel geometry (formal rule GPU-Realization auxiliary record).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Auxiliary {
-    /// `range_flags`: selection predicates of `select`, `radix_layout` and range builds.
+    /// `range_select`: selection predicates of `select` and range builds (GPU-SelectRows).
     pub selection: Geometry,
     /// `offsets::scan` adjacent-prefix check.
     pub offsets: Geometry,
@@ -865,8 +865,10 @@ where
         .map(|selection| select(pool.clone(), selection, selection_geometry))
         .transpose()?;
     let (positions, count) = match &selected {
-        Some(selected) if selected.is_empty() => (std::ptr::null(), 0),
-        Some(selected) => (selected.ptr(), selected.len()),
+        Some(selected) => match selected.len()? {
+            0 => (std::ptr::null(), 0),
+            len => (selected.ptr(), len),
+        },
         None => (std::ptr::null(), rows),
     };
     if keys.len() != K::COLUMNS.len() {
@@ -1261,30 +1263,17 @@ impl<'pool> RangeBuilder<'pool> {
         let module = &self.module;
         let (rows, selected) = match &descriptor.selection {
             Some(selection) if base_rows > 0 => {
-                let flags = temporary::<u32>(pool, base_rows)?;
-                let shape = module.prepare_range_flags(self.selection.config(1))?;
-                let blocks = self.selection.grid(shape.function(), base_rows)?;
+                let selected = temporary::<u32>(pool, base_rows)?;
                 // DECODE V: index selection launch reconstructs values before range comparison; P6 translate predicates to codes.
-                module.range_flags(
-                    stream,
-                    &module.prepare_range_flags(self.selection.config(blocks))?,
-                    selection.column.view(),
-                    base_rows as u32,
-                    selection.start,
-                    selection.end,
-                    pointer(&flags),
-                )?;
-                let mut selected = temporary::<u32>(pool, base_rows)?;
-                let mut count = temporary::<u64>(pool, 1)?;
-                select_flagged(
-                    &exec,
-                    arithmetic_range(0_u32, 1, base_rows),
-                    &flags,
-                    &mut selected,
-                    &mut count,
+                let count = selected::launch_select(
+                    pool,
+                    module,
+                    self.selection,
+                    selection,
+                    base_rows,
+                    &selected,
                 )?;
                 let rows = count.to_host_vec()?[0] as usize;
-                release(stream, flags)?;
                 release(stream, count)?;
                 (rows, Some(selected))
             }

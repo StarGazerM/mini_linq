@@ -21,6 +21,7 @@
 //!
 pub mod blocks;
 mod domain;
+pub use domain::literal_code;
 pub mod group;
 pub mod hypergraph;
 pub mod normal;

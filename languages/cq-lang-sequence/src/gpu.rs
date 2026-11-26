@@ -15,6 +15,9 @@ pub struct Machine {
     /// GR-RetainPrefix: evidence-bounded rows a stored prefix must reach to
     /// replace a stream root smaller than one root tile as the distributed root.
     pub retain_prefix_rows: usize,
+    /// GR-RootTile: root tiles that fill the device (two resident blocks per
+    /// SM); a smaller estimated root is cut into about this many tiles.
+    pub root_tiles: usize,
     /// Target refinement records concrete provider/storage bindings upstream.
     pub bindings: fn(&crate::structures::physical::Program, &crate::structures::Program, &Program, &crate::structures::Analysis, &Analysis) -> syn::Result<bindings::Bindings>,
     /// Target realization after publication storage is recorded.
@@ -359,7 +362,7 @@ pub(crate) fn derive(
             {
                 execution.partition = Partition::Fanout { rows: width };
                 for (steps, chain) in chains.iter().zip(&mut execution.chains) {
-                    if chain.strips.len() > 1 && root_rows(steps, analysis).is_none_or(|n| n <= width as u128) {
+                    if chain.strips.len() > 1 && root_estimate(steps, analysis).is_none_or(|n| n <= width as u128) {
                         let children = root_loop_children(steps, chain);
                         chain.split_child = (children != 0).then_some(children);
                     }
@@ -403,13 +406,21 @@ fn spread_rows(program: &Program, execution: &Execution, parts: Option<usize>) -
         })
 }
 
+fn root_result<'a>(steps: &'a [Step], analysis: &'a Analysis) -> Option<&'a String> {
+    match steps.first()? {
+        Step::Rows(name) => Some(name),
+        Step::Stored(name) => analysis.results.get(name),
+        _ => None,
+    }
+}
+
 fn root_rows(steps: &[Step], analysis: &Analysis) -> Option<u128> {
-    let result = match steps.first()? {
-        Step::Rows(name) => name,
-        Step::Stored(name) => analysis.results.get(name)?,
-        _ => return None,
-    };
-    analysis.prefix_bounds.get(result)?.rows
+    analysis.prefix_bounds.get(root_result(steps, analysis)?)?.rows
+}
+
+/// BE-PrefixEstimate of the root: geometry advice, never a capacity.
+fn root_estimate(steps: &[Step], analysis: &Analysis) -> Option<u128> {
+    analysis.prefix_bounds.get(root_result(steps, analysis)?)?.estimate
 }
 
 // A whole fold's suffix executes in its combine kernel, not in the root loop.
@@ -438,7 +449,7 @@ fn underfilled_expansion(
         .all(|s| !matches!(s.fold, Some(FoldScope::Tiles(_))))
         && chains.iter().zip(&execution.chains).any(|(steps, chain)| {
             root_loop_children(steps, chain) != 0
-                && root_rows(steps, analysis).is_none_or(|rows| rows <= width as u128)
+                && root_estimate(steps, analysis).is_none_or(|rows| rows <= width as u128)
         })
 }
 

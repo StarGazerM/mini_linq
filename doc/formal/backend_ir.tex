@@ -1150,11 +1150,30 @@ remain available. Lazy demanded-initializer dispatch is outside the ordinary
  \bot&\text{otherwise}\end{cases}}}
  {|\alpha(p)|\le\beta(p).rows\text{ whenever the count estimates hold}}
 
-\Rule{GR-RetainPrefix}{M.gpu\quad \beta(\mathsf{root}(d))<w_M\quad
+\Rule{BE-PrefixEstimate}{\varepsilon(r)=\mathsf{count}_E(r)\text{ when recorded for the result }r\text{ itself, else}\\
+ \varepsilon(\mathsf{rename}\ R)=\mathsf{count}_E(R)\quad
+ \varepsilon(\sigma\,x)=\varepsilon(\mathsf{guard}\ x)=\varepsilon(\mathsf{scalarBind}\ x)
+ =\varepsilon(x\ltimes y)=\varepsilon(x\rhd y)=\varepsilon(x)\quad
+ \varepsilon(\pi_A x)=\varepsilon(x)\\
+ \varepsilon(\mathsf{probe}[\bar k]\,x,y)={\begin{cases}\lceil\varepsilon(x)\cdot f(y)\rceil&\exists K\in\mathsf{keys}(y).\ K\subseteq\bar k\\
+ \lceil\varepsilon(y)\cdot f(x)\rceil&\exists K\in\mathsf{keys}(x).\ K\subseteq\bar k\\
+ \bot&\text{otherwise}\end{cases}}\quad
+ f(z)=\varepsilon(z)/\beta(z).rows\text{ when both are known and }\beta(z).rows>0\text{, else }1}
+ {\varepsilon(p)\text{ is a nonsemantic row estimate; }\beta\text{ stays the upper bound}}
+
+\Rule{GR-RetainPrefix}{M.gpu\quad \varepsilon(\mathsf{root}(d))<w_M\quad
  e_1,\ldots,e_n\text{ the expansions of }d\text{ from its root}\\
- j=\min\{j\mid \beta(e_j).rows\ge M.retain\_prefix\_rows\}\quad
- \forall i\le j.\ \beta(e_i).rows\ne\bot\quad j<n}
- {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\beta(e_j).rows,w_M,M.retain\_prefix\_rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
+ j=\min\{j\mid \varepsilon(e_j)\ge M.retain\_prefix\_rows\}\quad
+ \forall i\le j.\ \varepsilon(e_i)\ne\bot\quad j<n}
+ {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\varepsilon(e_j),w_M,M.retain\_prefix\_rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
+
+\Rule{GR-RootTile}{M.gpu\quad d\text{ a device store dispatch with authored or preferred width }w\quad
+ F=M.gpu.root\_tiles\quad w<\varepsilon(\mathsf{root}(d))<w\cdot F}
+ {\mathsf{partition}(d,\lceil\varepsilon(\mathsf{root}(d))/F\rceil)\text{ instead of }\mathsf{partition}(d,w)}
+
+\Rule{GPU-FilteredCount}{r=\mathsf{rename}\ R\ \mathsf{constants}\ C\text{ in a GPU TPC-H stage}\quad
+ R\text{ loads table }T\quad v(c)=\text{the literal of }C(c)\text{, or its A-DomainLiteral operand}}
+ {E\text{ records }\mathsf{count}(r)=|\{t\in T\mid\forall c\in\dom C.\ t.c=v(c)\}|\text{, dictionary columns comparing text ids}}
 
 \Rule{GR-SegmentFanout}{\mathsf{retain}(e_j,\_,\_,\_)\text{ recorded}\quad j<i\le n\quad
  \neg\exists K\in\mathsf{keys}(\mathsf{provider}(e_i)).\ K\subseteq\mathsf{lookupKeys}(e_i)}
@@ -1162,17 +1181,28 @@ remain available. Lazy demanded-initializer dispatch is outside the ordinary
 \end{mathpar}
 
 Sequence Analysis records $\beta$ as \code{prefix\_bounds}, with explicit
-unknown rows and key sets. The checker checks each record against evidence
+unknown rows and key sets, and $\varepsilon$ beside it as each record's
+\code{estimate}. The checker checks each record against evidence
 and preceding recorded operands, not by invoking the planner: larger upper
-bounds, omitted keys, and either justified keyed-join side are legal.
+bounds, omitted keys, and either justified keyed-join side are legal; an
+estimate is either unknown or exactly its BE-PrefixEstimate transfer.
 Merge uses the same transfer as Probe; generating binds and Union are unknown.
+A recorded count for a result is a measured filtered size, such as a
+literal-restricted occurrence (GPU-FilteredCount); it is advice: it changes
+estimates and PL-Cost input sizes, never a bound.
+A key-covered probe scales the matched side's estimate by the fraction of the
+keyed side's bound that its estimate keeps, assuming independent keys.
 A recorded \code{retain(e, n, w, R)} is the checked \code{store\_level(e)} rewrite.
-Replay consumes these checked facts and requires $\beta(e).rows=n$,
-$w,R>0$, a root bound below $w$, $n\ge R$, a following expansion, and
-known earlier bounds below $R$. Width and threshold are explicit policy
+Replay consumes these checked facts and requires $\varepsilon(e)=n$,
+$w,R>0$, a root estimate below $w$, $n\ge R$, a following expansion, and
+known earlier estimates below $R$. Width and threshold are explicit policy
 parameters, like ordinary tile advice; replay never reruns advice selection.
-The GR-RetainPrefix search stops at the first unknown bound; it never skips
-it to retain a later bounded expansion.
+The GR-RetainPrefix search stops at the first unknown estimate; it never skips
+it to retain a later estimated expansion.
+GR-RootTile sizes a root that spans more than one but fewer than $F$ tiles so
+that it spans about $F$ tiles: two resident blocks per SM. A root that fits one
+tile keeps width $w$ and GPU-DistributeExpansion's child slicing; a root of at
+least $wF$ rows keeps full tiles. Tile size never changes the published bag.
 GR-RetainPrefix and GR-SegmentFanout change only execution shape (stores, tiles and offsets
 publication), never the recorded relational plan, and apply before
 placement, so ordinary decomposition, grading and PL-Cost continue from the
@@ -1475,7 +1505,7 @@ raw-candidate programs; checking accepts any legal recorded alternative.
   \ \land\ c\text{ has no materialized expansion}}
  {d\text{ may launch one root part; an absent or unknown bound is not evidence}}
 \Rule{GPU-DistributeExpansion}{d\text{ has a chain with materialized children}\quad
- \beta(\mathsf{root}(c)).rows=\bot\ \lor\ \beta(\mathsf{root}(c)).rows\le w_d\quad
+ \varepsilon(\mathsf{root}(c))=\bot\ \lor\ \varepsilon(\mathsf{root}(c))\le w_d\quad
  \text{no tile-local fold scope}}
  {\text{select }\mathsf{Fanout}(w_d)\text{ and the last pre-fold materialized child of each underfilled chain}}
 \Rule{GPU-FanoutLegal}{d.\mathsf{partition}=\mathsf{Fanout}(w)\quad w>0\quad
@@ -1943,6 +1973,13 @@ each row function and the host-bound selection conditions.
 \Rule{GPU-SourceAccess}{\rho=\text{recorded source of }r\quad
  \rho.\mathsf{interval}=\mathsf{fold}(\text{contiguous selections of }r)}
  {\mathsf{read}_{\rm gpu}(r)=\rho.\mathsf{access}(\rho.\mathsf{origin})}
+\Rule{GPU-SelectRows}{\rho.\mathsf{access}=\mathsf{positions}(I)\quad
+ \text{warp }w\text{ owns the 256-row chunk }[256c,256c+256)\text{ of the source}}
+ {w\text{ appends the chunk's row ids }i\text{ with }v_i\in I\text{ in ascending order at one reserved offset};\
+ \text{chunks follow in unspecified order; the positions are a set of rows, read only as dispatch roots}}
+\Rule{GPU-SelectedCount}{\rho.\mathsf{access}=\mathsf{positions}(I)\quad d\text{ a dispatch rooted at }\rho\quad n=|\rho.\mathsf{origin}|}
+ {\text{the host launches }d\text{ over }n\text{ rows; its kernel's domain is the device count }|\{i\mid v_i\in I\}|;\
+ \text{only host code needing the exact length reads the count back}}
 \Rule{GPU-Transfer}{e=\text{recorded host evaluation}\quad
  \tau\in e.\mathsf{transfers}\quad \tau.\mathsf{granularity}=\mathsf{completeRows}}
  {\mathsf{host}(e)\text{ reads }\tau.\mathsf{source}\text{ downloaded once per invocation}}
@@ -2013,14 +2050,15 @@ sticky failure word.
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,
-an equality selection against the literal (a closed capture), and a projection
+an equality selection against the same constant, and a projection
 that drops the fresh column. Its checker inspects the recorded rename--select--project
 chain: intermediate pipes are private single-use results, original mappings
-are preserved, added equalities bind only the source literals, and the final
+are preserved, added equalities bind only the source constants, and the final
 projection is exact. It does not regenerate fresh names or rerun the rewrite.
-Operands at code-domain columns arrive
-already translated by A-Domain into capture references; no string literal
-reaches this rewrite.
+A constant at a code-domain column arrives as its A-DomainLiteral capture
+reference \code{@(k)} and is compared as that closed operand; no string literal
+reaches this rewrite. The rewrite is opt-in: without it a literal-bearing
+rename stays an occurrence restriction.
 \begin{mathpar}
 \Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
  {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{select}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}

@@ -618,23 +618,72 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
             captures.host_relational(&mut condition, types, &facts.codecs);
             records.host.insert(name.clone(), condition);
         }
+        if let Some((constants, columns)) = closed_constants(facts.physical, definition) {
+            let condition = captures.host_constants(constants, columns, &facts.codecs);
+            records.host.insert(name.clone(), condition);
+        }
     }
     records.captures = captures.records;
     Ok(records)
 }
 
-/// Physical definitions with selection constants bound to host captures.
+/// A rename's occurrence constants with a closed capture value, and its
+/// declared source columns.
+pub(crate) fn closed_constants<'a>(
+    physical: &'a cq_lang_structures::physical::Program,
+    definition: &'a Definition,
+) -> Option<(
+    &'a cq_syntax::algebra::OccurrenceConstants,
+    &'a cq_syntax::CommaList<cq_syntax::ColumnDecl>,
+)> {
+    let Operator::Rename(rename) = &definition.operator else {
+        return None;
+    };
+    let constants = rename.constants.as_ref()?;
+    if !constants
+        .bindings
+        .iter()
+        .any(|binding| matches!(binding.value, cq_syntax::constraint::Term::Closed(_)))
+    {
+        return None;
+    }
+    let declaration = physical
+        .program
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == rename.relation)
+        .expect("checked rename relation");
+    Some((constants, &declaration.columns))
+}
+
+/// Physical definitions with selection and occurrence constants bound to host captures.
 pub(crate) fn host_bound(
     definitions: &BTreeMap<String, Definition>,
     captures: &Captures,
 ) -> BTreeMap<String, Definition> {
     let mut bound = definitions.clone();
     for (name, definition) in &mut bound {
-        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
-            &mut definition.operator
-            && let Some(condition) = captures.host.get(name)
-        {
-            select.condition = condition.clone();
+        let Some(condition) = captures.host.get(name) else {
+            continue;
+        };
+        match &mut definition.operator {
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                select.condition = condition.clone();
+            }
+            Operator::Rename(rename) => {
+                for binding in rename.constants.iter_mut().flat_map(|c| c.bindings.iter_mut()) {
+                    if let Some(cq_syntax::Constraint::Compare { right, .. }) =
+                        condition.constraints.iter().find(|constraint| {
+                            matches!(constraint, cq_syntax::Constraint::Compare {
+                                left: cq_syntax::constraint::Term::Variable(column), ..
+                            } if *column == binding.column)
+                        })
+                    {
+                        binding.value = right.clone();
+                    }
+                }
+            }
+            _ => {}
         }
     }
     bound
@@ -1774,6 +1823,7 @@ pub(crate) fn check(
     let facts = Facts::new(physical, structures, program, structure_analysis, analysis)?;
     crate::capture::check(
         &records.captures,
+        facts.physical,
         &facts.definitions,
         structure_analysis,
         analysis,
@@ -2604,11 +2654,10 @@ fn check_resident_chain(
         return Err(error("resident source columns are not its rename mapping"));
     }
     if let Some(constants) = &rename.constants {
-        for equality in &constants.equalities {
-            let EqualityValue::Literal(value) = &equality.right else {
-                return Err(error("a folded constant is not a literal"));
-            };
-            state(&current, symbol_name(&equality.left), "eq", encoded(value)?);
+        for binding in &constants.bindings {
+            let value = closed(&binding.value)
+                .map_err(|_| error("a folded constant is not a literal or capture"))?;
+            state(&current, symbol_name(&binding.column), "eq", value);
         }
     }
     for (definition, theta) in selections {

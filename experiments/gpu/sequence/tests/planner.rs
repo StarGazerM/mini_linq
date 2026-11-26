@@ -170,6 +170,50 @@ fn evidence_without_partial_keys_skips_unbounded_prefix_retention() {
     );
 }
 
+/// GR-RootTile / BE-PrefixEstimate: a filtered root measured at 1,451 of
+/// 200,000 rows spans six 256-row tiles; the plan cuts it into tiles of
+/// ceil(1451 / 284) rows so the dispatch fills the device. The bound stays
+/// the relation count, and a root that fits one tile keeps the width.
+#[test]
+fn estimated_few_tile_root_is_cut_to_fill_the_device() {
+    let machine = cq_gpu_sequence::machine();
+    let plan = |root_rows: usize| {
+        let (physical, structures) = step_r();
+        let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+        let source =
+            cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source).unwrap();
+        let evidence: cq_sequence_plan::Advice = syn::parse2(quote::quote!(evidence from authored("experiments/gpu/sequence/tests/planner.rs fixture") {
+            count Region = 200000;
+            count region_base = #root_rows;
+            count Nation = 25;
+            count Customer = 150000;
+            count Orders = 1500000;
+            count Lineitem = 6001215;
+            count Supplier = 10000;
+        }))
+        .unwrap();
+        let (physical, structures, source) = evidence.apply(&physical, &structures, &source).unwrap();
+        let result =
+            cq_sequence_plan::decompose(&physical, &structures, &source, &machine, &cq_gpu_sequence::catalog())
+                .unwrap();
+        let analysis = check_grading(&result.physical, &result.structures, &result.program, &machine).unwrap();
+        assert_eq!(analysis.prefix_bounds["region_base"].rows, Some(200000));
+        assert_eq!(analysis.prefix_bounds["region_base"].estimate, Some(root_rows as u128));
+        assert!(!result.trace.iter().any(|advice| matches!(advice, cq_sequence_plan::Advice::Retain { .. })));
+        result
+            .trace
+            .iter()
+            .filter_map(|advice| match advice {
+                cq_sequence_plan::Advice::Partition { n, .. } => Some(*n),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(plan(1451), vec![1451usize.div_ceil(284)]);
+    assert_eq!(plan(200), vec![256]);
+    assert_eq!(plan(100_000), vec![256]);
+}
+
 fn assert_cost_acceptance(name: &str, mut authored: Stack) {
     let machine = cq_gpu_sequence::machine();
     authored.program = cq_gpu_sequence_core::runs::record_representation(&authored.physical, &authored.structures, &authored.program).unwrap();

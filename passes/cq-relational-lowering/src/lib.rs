@@ -81,6 +81,7 @@ pub fn lower(checked: &Checked<'_>) -> (ra::Program, Steps) {
         atoms: &analysis.atoms,
         analysis,
         body: &cq.query.body,
+        captures: &cq.query.captures,
         steps: &source.valuation.steps,
         context: BTreeSet::new(),
         scope: Vec::new(),
@@ -184,6 +185,7 @@ struct State<'a> {
     atoms: &'a BTreeMap<usize, cq::Atom>,
     analysis: &'a valuation::Analysis,
     body: &'a cq::CommaList<valuation::cq::BodyItem>,
+    captures: &'a cq::Captures,
     steps: &'a [valuation::Step],
     context: BTreeSet<String>,
     /// Position of the current scope: empty at top level, else the enclosing
@@ -521,7 +523,7 @@ impl<'a> State<'a> {
                 })
             })
             .collect();
-        let constants = occurrence_constants(declaration, atom);
+        let constants = occurrence_constants(declaration, atom, self.captures);
         let mut result = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
             rename_token: Default::default(),
             relation: atom.relation.clone(),
@@ -930,24 +932,38 @@ impl<'a> State<'a> {
     }
 }
 
+/// RL-Occurrence's constant bindings: a literal at a code-domain column binds
+/// its A-DomainLiteral capture reference, any other literal binds itself.
 fn occurrence_constants(
     declaration: &cq::RelationDecl,
     atom: &cq::Atom,
+    captures: &cq::Captures,
 ) -> Option<ra::OccurrenceConstants> {
-    let equalities: cq::CommaList<_> = declaration
+    use cq::constraint::Term;
+    let bindings: cq::CommaList<_> = declaration
         .columns
         .iter()
         .zip(&atom.args)
         .filter(|(_, argument)| cq::equality::literal(argument))
-        .map(|(column, argument)| ra::Equality {
-            left: column.name.clone(),
-            eq_token: Default::default(),
-            right: ra::EqualityValue::Literal(argument.clone()),
+        .map(|(column, argument)| {
+            let value = match column.domain.as_ref().and_then(|domain| domain.id) {
+                Some(domain) => {
+                    let code = valuation::cq::literal_code(captures, domain, argument)
+                        .expect("WF-Domain: a code-domain atom literal has its capture");
+                    Term::Closed(syn::parse_quote!(#code))
+                }
+                None => Term::Literal(Box::new(argument.clone())),
+            };
+            cq::algebra::OccurrenceConstant {
+                column: column.name.clone(),
+                eq_token: Default::default(),
+                value,
+            }
         })
         .collect();
-    (!equalities.is_empty()).then_some(ra::OccurrenceConstants {
+    (!bindings.is_empty()).then_some(ra::OccurrenceConstants {
         constants_token: Default::default(),
         brace: Default::default(),
-        equalities,
+        bindings,
     })
 }

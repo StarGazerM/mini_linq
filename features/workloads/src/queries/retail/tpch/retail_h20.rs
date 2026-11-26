@@ -128,7 +128,7 @@ crate::tpch_runtime::standalone_configs! { $;
                 Partsupp(part_key, supplier_key, available), Shipped(part_key, supplier_key, quantity_units),
                 if i128::from(*available) * 200 > i128::from(*quantity_units),
                 Supplier(supplier_key, nation_key, supplier_name, address),
-                Nation(nation_key, nation_name), where nation_name == "CANADA";
+                Nation(nation_key, "CANADA");
         }.map(|(name, address)| {
             // DECODE P: publish the supplier name in the final answer.
             let name = data.dictionaries.publish("s_name", *name);

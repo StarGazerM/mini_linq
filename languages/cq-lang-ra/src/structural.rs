@@ -254,8 +254,8 @@ impl Structure {
                     .collect(),
                 constants: constants
                     .into_iter()
-                    .flat_map(|c| &c.equalities)
-                    .map(|e| (symbol_name(&e.left), e.right.to_token_stream().to_string()))
+                    .flat_map(|c| &c.bindings)
+                    .map(|e| (symbol_name(&e.column), e.value.to_token_stream().to_string()))
                     .collect(),
             },
         );
@@ -781,7 +781,7 @@ impl Structure {
                     let mut constants: Vec<_> = r
                         .constants
                         .iter()
-                        .flat_map(|c| &c.equalities)
+                        .flat_map(|c| &c.bindings)
                         .map(|e| e.to_token_stream().to_string())
                         .collect();
                     constants.sort();

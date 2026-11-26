@@ -1,6 +1,5 @@
 //! Expose literal atom arguments before selecting physical storage providers.
 use cq_lang_structures::physical::{self, Operator, Program, symbol_name};
-use cq_lang_structures::syntax::EqualityValue;
 use quote::{format_ident, quote};
 use std::collections::BTreeSet;
 
@@ -40,7 +39,7 @@ fn derive(source: &Program) -> syn::Result<Program> {
             definitions.push(definition.clone());
             continue;
         };
-        if constants.equalities.is_empty() {
+        if constants.bindings.is_empty() {
             definitions.push(definition.clone());
             continue;
         }
@@ -54,14 +53,10 @@ fn derive(source: &Program) -> syn::Result<Program> {
             .map(|mapping| mapping.target.clone())
             .collect();
         let mut conditions = Vec::new();
-        for equality in &constants.equalities {
-            let column = &equality.left;
-            let EqualityValue::Literal(value) = &equality.right else {
-                return Err(syn::Error::new_spanned(
-                    definition,
-                    "PH-ConstantGuard requires literal occurrence arguments",
-                ));
-            };
+        for binding in &constants.bindings {
+            let column = &binding.column;
+            // A literal or an A-DomainLiteral capture reference `@(k)`.
+            let value = &binding.value;
             let variable = fresh("column");
             renamed
                 .mapping

@@ -36,10 +36,10 @@ fn closed_operands_at_domain_columns_become_translation_captures() {
         ]
     );
     let body = normal.query.body.to_token_stream().to_string();
-    assert!(
-        body.contains("R (a , __cq_0_1) , where __cq_0_1 == (__cq_c_0)"),
-        "{body}"
-    );
+    // A-DomainLiteral: the atom literal stays an occurrence restriction; it
+    // is never rewritten into a `where` predicate read.
+    assert!(body.starts_with("R (a , \"AIR\") , R (a , m)"), "{body}");
+    assert!(!body.contains("__cq_0_1"), "{body}");
     assert!(body.contains("where m != (__cq_c_3)"), "{body}");
     cq::normal::check(&normal).unwrap();
     // Normalization is idempotent: translated operands stay translated.

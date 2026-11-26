@@ -106,3 +106,57 @@ fn retention_checks_policy_and_chain_premises_without_replaying_advice() {
         .is_err()
     );
 }
+
+/// BE-PrefixEstimate: a measured filtered count for a result changes only the
+/// estimate. A probe keyed by the filtered stream keeps the same fraction of
+/// the provider: 2 of 10 R rows match 100 S rows as about 20 rows.
+#[test]
+fn recorded_result_counts_scale_estimates_but_not_bounds() {
+    let (physical, structures, source) = fixture! {
+        physical {
+            relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,c:i32);
+            r = pipe rename R {a -> a};
+            s = let rename S {a -> a,b -> b};
+            t = let rename T {b -> b,c -> c};
+            joined = pipe probe first [a] r,s;
+            last = pipe probe first [b] joined,t;
+            answer = let canon project last keep {a,b,c};
+            return answer as answer(a,b,c);
+        }
+        structures {
+            providers {
+                reader = Reader { reads [exact, range, membership], build inferred };
+                index = Index { reads [exact, range, membership], build inferred };
+                sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
+            }
+            r host scan = @reader as Reader [];
+            s host scan = @reader as Reader [];
+            t host scan = @reader as Reader [];
+            s = @index as Index [a]; t = @index as Index [b];
+            answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
+        }
+        sequence {
+            r = rows r; s = store rows s; t = store rows t;
+            joined = flatten lookup s [a] r;
+            last = flatten lookup t [b] joined;
+            result = store canon map answer last;
+        }
+        evidence from authored("passes/cq-sequence-plan/tests/prefix_bounds.rs fixture") {
+            count R = 10;
+            count r = 2;
+            count S = 100;
+            count T = 1000;
+        }
+    };
+    let analysis = contract::check(&physical, &structures, &source).unwrap();
+    assert_eq!((analysis.prefix_bounds["r"].rows, analysis.prefix_bounds["r"].estimate), (Some(10), Some(2)));
+    assert_eq!((analysis.prefix_bounds["joined"].rows, analysis.prefix_bounds["joined"].estimate), (Some(100), Some(20)));
+    assert_eq!(analysis.prefix_bounds["last"].estimate, None);
+    // The checker accepts an unknown estimate and rejects any other value.
+    let mut unknown = analysis.prefix_bounds.clone();
+    unknown.get_mut("joined").unwrap().estimate = None;
+    bounds::check(&physical, &source, &unknown).unwrap();
+    let mut forged = analysis.prefix_bounds.clone();
+    forged.get_mut("joined").unwrap().estimate = Some(100);
+    assert!(bounds::check(&physical, &source, &forged).is_err());
+}
