@@ -1,7 +1,9 @@
 //! Device realization of the ordinary Datalog Storage and Round records.
 pub mod bindings;
 pub mod print;
+mod shared;
 pub mod storage;
+mod union_project;
 
 #[cfg(test)]
 mod print_tests;

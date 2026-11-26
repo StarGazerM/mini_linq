@@ -155,9 +155,12 @@ Conjunction and disjunction are classical connectives, not Rust evaluation.
 The representation laws are premises, and rustc checks required trait bounds;
 no \code{syn::Type} spelling establishes or refutes them.
 At a column with code domain $D$, every operand of a comparison, membership,
-range or atom position is compared as a code: normalization translates it into
-a capture of $D$'s code (A-Domain, Section~\ref{sec:passes}). There is no
-string comparison, string literal form or string scan in any later IR.
+range or negated-atom position is compared as a code: normalization translates
+it into a capture of $D$'s code (A-Domain, Section~\ref{sec:passes}). A
+positive-atom literal stays in its atom as an occurrence restriction;
+A-DomainLiteral only records its code capture, which RL-Occurrence uses as the
+rename's restriction. There is no string comparison, string literal form or
+string scan in any later IR.
 
 \paragraph{One Rust expression.}
 Every \code{if}, \code{let} and \code{for} expression is opaque, pure and total
@@ -204,6 +207,8 @@ Only its Rust realization prints \code{::cq\_storage::domain::f(\&(D), \&(t))}.
 An authored \code{let} containing that identical Rust call remains opaque.
 Normalization and WF-Domain inspect only the typed record, allowed function
 and recorded domain id, never Rust expression equality or the generated call.
+An atom literal's A-DomainLiteral capture is identified by its domain id, the
+\textsf{exact} function and the literal value, never by a Rust expression.
 This uniform rule applies at every closure nesting level and in every
 translator; direct reads use the original value. Rust requires \code{Clone}
 where a closure needs a copy. \code{Copy} values need no allocation;
@@ -238,6 +243,7 @@ names and have query-closed Rust operands; types are checked only by rustc.
 
 \Rule{WF-Domain}{\forall x.\ \text{all positive occurrences of }x\text{ sit at columns with one recorded domain id }d_x\ (\text{or none})\\
  \text{every closed operand compared with }x,\ d_x\ne\bot,\text{ names a typed capture }\mathsf{Domain}(k,T,f,d_x,D,t)\\
+ \text{every positive-atom literal }t\text{ at a column of domain id }d\text{ has a capture }\mathsf{Domain}(k,T,\mathsf{exact},d,D,t)\\
  f=\mathsf{exact}\text{ for }=,\ne;\quad f\in\{\mathsf{lower},\mathsf{upper}\}\text{ for }<,\geq\quad
  \text{a declared answer domain id equals its head variable's }d_x}
  {\mathsf{WF}_{Dom}(s)\Downarrow\ok}

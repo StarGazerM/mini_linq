@@ -385,10 +385,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 && let Some(constants) = &rename.constants
                 && definition.canon.is_none()
             {
-                let literals: BTreeSet<String> = constants
-                    .equalities
+                let constants: BTreeSet<String> = constants
+                    .bindings
                     .iter()
-                    .map(|equality| symbol_name(&equality.left))
+                    .map(|binding| symbol_name(&binding.column))
                     .collect();
                 let input = &analysis.hosts[&name];
                 if let Some(declaration) = source
@@ -399,7 +399,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                         .columns
                         .iter()
                         .map(|column| &column.name)
-                        .take_while(|column| literals.contains(&symbol_name(column)))
+                        .take_while(|column| constants.contains(&symbol_name(column)))
                         .collect();
                     let key = sorted(&prefix.iter().map(|c| symbol_name(c)).collect::<Vec<_>>());
                     if !key.is_empty()

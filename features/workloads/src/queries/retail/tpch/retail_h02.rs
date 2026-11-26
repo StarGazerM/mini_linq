@@ -124,8 +124,7 @@ crate::tpch_runtime::standalone_configs! { $;
             answer(part_key, min(cost_units)) :-
                 Partsupp(part_key, supplier_key, cost),
                 Supplier(supplier_key, nation_key, _, _, _, _, _),
-                Nation(nation_key, region_key, _), Region(region_key, region_name),
-                where region_name == "EUROPE",
+                Nation(nation_key, region_key, _), Region(region_key, "EUROPE"),
                 let cost_units: i64 = cost.scaled();
         }
         .map(|(part_key, cost)| (*part_key, cost))
@@ -146,13 +145,11 @@ crate::tpch_runtime::standalone_configs! { $;
                 part_key: i64, manufacturer: StringCode, address: StringCode, phone: StringCode, comment: StringCode);
             answer(*balance_units, supplier_name, nation_name, part_key, manufacturer,
                 address, phone, comment) :-
-                Part(part_key, manufacturer, size, kind),
-                where size == 15, BrassTypes(kind),
+                Part(part_key, manufacturer, 15, kind), BrassTypes(kind),
                 Partsupp(part_key, supplier_key, cost), MinimumCost(part_key, minimum_cost),
                 if *minimum_cost == Some(cost.scaled()),
                 Supplier(supplier_key, nation_key, balance, supplier_name, address, phone, comment),
-                Nation(nation_key, region_key, nation_name), Region(region_key, region_name),
-                where region_name == "EUROPE",
+                Nation(nation_key, region_key, nation_name), Region(region_key, "EUROPE"),
                 let balance_units: i64 = balance.scaled();
         }
         .map(|(balance, supplier, nation, part, manufacturer, address, phone, comment)| {

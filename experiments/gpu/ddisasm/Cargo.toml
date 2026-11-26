@@ -1,0 +1,21 @@
+[package]
+name = "ddisasm-gpu"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+datalog-ddisasm = { path = "../../../features/datalog/ddisasm" }
+cq-datalog = { path = "../../../features/datalog/facade/cq-datalog" }
+cq-datalog-canonical = { path = "../../../features/datalog/passes/canonical" }
+mini-linq = { path = "../../../facade/mini-linq" }
+cq-storage = { path = "../../../runtime/cq-storage" }
+cq-gpu-datalog = { path = "../datalog/facade" }
+cq-gpu-sequence = { path = "../sequence" }
+cq-sequence-rewrites = { path = "../../../features/sequence-rewrites" }
+cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+cq-gpu-runtime = { path = "../printer-runtime" }
+gpu-datalog-runtime = { path = "../datalog-runtime" }
+cuda-device.workspace = true
+cuda-core.workspace = true
+cuda-host.workspace = true

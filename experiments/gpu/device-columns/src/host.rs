@@ -1,5 +1,5 @@
 use crate::{
-    decode_value, encode_value, failure, Bounds, Buffer, Codec, ColumnView, DecodeValue,
+    decode_value, encode_value, failure, AnswerWord, Bounds, Buffer, Codec, ColumnView, DecodeValue,
     Dictionary, EncodeValue, EncodedColumn, Pool, Result,
 };
 use cuda_core::DeviceCopy;
@@ -30,12 +30,20 @@ impl Representation for DictionaryCodec {
 /// Scalar tuples through sixteen columns preserve complete query valuations.
 pub trait RowCodec<'data>: Sized {
     const WIDTH: usize;
+    #[doc(hidden)]
+    const ANSWER_FIELDS: &'static [AnswerField];
+    #[doc(hidden)]
+    fn assemble(batch: &[u64], rows: usize, dictionary: &Dictionary<'data>) -> Result<Vec<Self>>;
     fn encode(&'data self, dictionary: &mut Dictionary<'data>, output: &mut [i64]) -> Result<()>;
     // DECODE ?: row inverse contract has no enforced caller read boundary.
     fn decode(values: &[i64], dictionary: &Dictionary<'data>) -> Result<Self>;
 }
 impl RowCodec<'_> for () {
     const WIDTH: usize = 0;
+    const ANSWER_FIELDS: &'static [AnswerField] = &[];
+    fn assemble(_: &[u64], rows: usize, _: &Dictionary<'_>) -> Result<Vec<Self>> {
+        Ok(vec![(); rows])
+    }
     fn encode(&self, _: &mut Dictionary<'_>, _: &mut [i64]) -> Result<()> {
         Ok(())
     }
@@ -44,11 +52,57 @@ impl RowCodec<'_> for () {
         Ok(())
     }
 }
+/// Device write width and admissible source interval fixed by the Rust scalar
+/// codec, not inferred from the observed values.
+#[doc(hidden)]
+pub struct AnswerField {
+    bytes: usize,
+    min: i64,
+    max: i64,
+}
+impl AnswerField {
+    const fn for_value<'a, T: DecodeValue<'a>>() -> Self {
+        Self {
+            bytes: size_of::<T::Word>(),
+            min: T::Word::MIN,
+            max: if T::MAX < T::Word::MAX { T::MAX } else { T::Word::MAX },
+        }
+    }
+    fn words(&self, rows: usize) -> Result<usize> {
+        Ok(rows.checked_mul(self.bytes).ok_or("answer column exceeds address space")?.div_ceil(8))
+    }
+}
+
+fn take_column<'a, T: AnswerWord>(batch: &mut &'a [u64], rows: usize) -> Result<&'a [T]> {
+    let words = rows.checked_mul(size_of::<T>()).ok_or("answer column exceeds address space")?.div_ceil(8);
+    let (column, rest) = batch.split_at_checked(words).ok_or("incomplete answer column")?;
+    *batch = rest;
+    // u64 alignment suffices for the sealed integer types. The checked
+    // prefix covers exactly `rows` initialized words of T in native order.
+    Ok(unsafe { std::slice::from_raw_parts(column.as_ptr().cast(), rows) })
+}
+
 macro_rules! tuple_codec {
     ($($T:ident:$i:tt),+) => {
         impl<'data, $($T),+> RowCodec<'data> for ($($T,)+)
         where $($T: DecodeValue<'data>, &'data $T: EncodeValue<'data>, $T: 'data),+ {
             const WIDTH: usize = [$(stringify!($T)),+].len();
+            const ANSWER_FIELDS: &'static [AnswerField] = &[$(AnswerField::for_value::<$T>()),+];
+            fn assemble(mut batch: &[u64], count: usize, dictionary: &Dictionary<'data>) -> Result<Vec<Self>> {
+                let columns = ($(take_column::<$T::Word>(&mut batch, count)?,)+);
+                let mut rows = Vec::<Self>::with_capacity(count);
+                for i in 0..count {
+                    let row = ($($T::from_word(columns.$i[i], dictionary)?,)+);
+                    // Exact-size batch: growth checks in this transpose loop
+                    // prevent vectorization. Commit each row after all its
+                    // fields succeed so errors still drop the complete prefix.
+                    unsafe {
+                        rows.as_mut_ptr().add(i).write(row);
+                        rows.set_len(i + 1);
+                    }
+                }
+                Ok(rows)
+            }
             fn encode(&'data self, dictionary: &mut Dictionary<'data>, output: &mut [i64]) -> Result<()> {
                 $(output[$i] = encode_value(&self.$i, dictionary)?;)+ Ok(())
             }
@@ -351,23 +405,43 @@ impl<'data, Row, C> DeviceColumns<'data, Row, C> {
         Row: RowCodec<'data>,
     {
         let count = checked_count(&self.table)?;
-        let columns = self
-            .table
-            .columns
-            .iter()
-            // DECODE P: final host row publication expands only the live answer columns before transfer.
-            .map(|column| column.decoded()?.to_host_prefix(count))
-            .collect::<Result<Vec<_>>>()?;
-        let mut values = vec![0; columns.len()];
-        let mut rows = Vec::with_capacity(count);
-        for row in 0..count {
-            for (index, column) in columns.iter().enumerate() {
-                values[index] = column[row];
-            }
-            // DECODE P: final host answer rows resolve scalar and dictionary representations.
-            rows.push(Row::decode(&values, &self.dictionary)?);
+        // Formal rule GPU-AnswerTransfer: the typed row codec fixes the column
+        // carriers. Narrow only after validating the live value on the device.
+        let fields = Row::ANSWER_FIELDS;
+        if fields.len() != self.table.columns.len() {
+            return Err(failure("CQ_GPU_SCHEMA", "answer carrier width differs from column count"));
         }
-        Ok(rows)
+        if count == 0 || fields.is_empty() {
+            return Row::assemble(&[], count, &self.dictionary);
+        }
+        // One header word carries narrowing failure. Each independently
+        // aligned column follows it; the kernel writes its final padding too.
+        let words = fields.iter().try_fold(1usize, |n, field| -> Result<usize> {
+            n.checked_add(field.words(count)?).ok_or_else(|| "answer exceeds address space".into())
+        })?;
+        let batch = unsafe { Buffer::<u64>::uninitialized(self.pool.clone(), words)? };
+        let stream = self.pool.stream();
+        let module = crate::module(&self.pool)?;
+        let launch = module.prepare_answer_column(cuda_core::LaunchConfig1D::new(
+            count.div_ceil(1024).clamp(1, 568) as u32, 256, 0,
+        ))?;
+        let mut start = 1;
+        unsafe {
+            cuda_core::simt::memory::memset_d8_async(batch.cu_deviceptr(), 0, 8, stream.cu_stream())?;
+            for (field, column) in fields.iter().zip(&self.table.columns) {
+                // DECODE P: only this explicit host publication requests the live prefix.
+                module.answer_column(stream, &launch, column.view(), count,
+                    batch.ptr().add(start).cast(), field.bytes as u32,
+                    field.min, field.max, batch.ptr().cast())?;
+                start += field.words(count)?;
+            }
+        }
+        batch.read_answer(|words| {
+            if words[0] != 0 {
+                return Err(failure("CQ_GPU_DECODE_RANGE", "value outside host answer carrier"));
+            }
+            Row::assemble(&words[1..], count, &self.dictionary)
+        })
     }
 }
 
@@ -423,6 +497,34 @@ pub fn checked_count(table: &Table) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answer_batch_keeps_column_order_limits_and_partial_tiles() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let rows = (0..1027u32).map(|i| (
+            i as i8, u16::MAX - i as u16, u32::MAX - i,
+            if i % 2 == 0 { i64::MIN } else { i64::MAX }, i % 5 == 0,
+        )).collect::<Vec<_>>();
+        let table = DeviceColumns::from_rows(pool.clone(), &rows, &mut Dictionary::default(),
+            &[Codec::Plain, Codec::For, Codec::Delta, Codec::Plain, Codec::For])?;
+        assert_eq!(table.to_host()?, rows);
+        let text = vec![("red".to_owned(),), ("green".to_owned(),), ("red".to_owned(),)];
+        let strings = DeviceColumns::from_rows(pool.clone(), &text, &mut Dictionary::default(), &[Codec::Dictionary])?;
+        assert_eq!(strings.to_host()?, text);
+        let unit = DeviceColumns::from_rows(pool, &[(), (), ()], &mut Dictionary::default(), &[])?;
+        assert_eq!(unit.to_host()?, [(), (), ()]);
+        Ok(())
+    }
+
+    #[test]
+    fn answer_batch_rejects_out_of_range_before_truncating() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let columns = DeviceColumns::from_rows(pool, &[(256i64,)], &mut Dictionary::default(), &[Codec::For])?;
+        let narrow = DeviceColumns::<(u8,)> { table: columns.table, dictionary: columns.dictionary,
+            pool: columns.pool, marker: PhantomData };
+        assert!(narrow.to_host().unwrap_err().to_string().contains("CQ_GPU_DECODE_RANGE"));
+        Ok(())
+    }
 
     fn roundtrip<Row: OwnedRowCodec + for<'data> RowCodec<'data>>(row: Row, expected: &[i64]) {
         assert_eq!(<Row as OwnedRowCodec>::WIDTH, expected.len());

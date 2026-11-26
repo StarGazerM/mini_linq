@@ -31,7 +31,7 @@ pub(super) fn reference(
             .zip(&atom.args)
             .filter_map(|(c, a)| cq::rust::variable(a).map(|v| (c.name.clone(), v.clone())))
             .collect::<Vec<_>>();
-        let constants = super::occurrence_constants(declaration, atom);
+        let constants = super::occurrence_constants(declaration, atom, &source.query.captures);
         relations.insert(
             *clause,
             schedule.atom(&atom.relation, &mapping, constants),

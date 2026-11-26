@@ -147,8 +147,41 @@ pub trait EncodeValue<'data> {
     fn encode(self, dictionary: &mut Dictionary<'data>) -> Result<i64>;
 }
 
+mod sealed {
+    pub trait Word {}
+}
+
+/// Native integer used for a lossless answer transfer; all bit patterns are valid.
+pub trait AnswerWord: sealed::Word + Copy + Sync + 'static {
+    const MIN: i64;
+    const MAX: i64;
+    fn as_i64(self) -> i64;
+}
+macro_rules! words {
+    ($($t:ty),+) => {$(
+        impl sealed::Word for $t {}
+        impl AnswerWord for $t {
+            const MIN: i64 = <$t>::MIN as i64;
+            const MAX: i64 = if <$t>::MAX as i128 > i64::MAX as i128 {
+                i64::MAX
+            } else {
+                <$t>::MAX as i64
+            };
+            #[inline]
+            fn as_i64(self) -> i64 { self as i64 }
+        }
+    )+};
+}
+words!(i8, i16, i32, i64, u8, u16, u32, u64, isize, usize);
+
 /// Reconstruct a typed Rust scalar at a host read or answer publication boundary.
 pub trait DecodeValue<'data>: Sized {
+    type Word: AnswerWord;
+    const MAX: i64 = Self::Word::MAX;
+    #[inline]
+    fn from_word(value: Self::Word, dictionary: &Dictionary<'data>) -> Result<Self> {
+        Self::decode(value.as_i64(), dictionary)
+    }
     // DECODE ?: logical scalar inverse contract is shared by host reads and answer publication.
     fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self>;
 }
@@ -161,6 +194,7 @@ pub fn encode_value<'data, T: EncodeValue<'data>>(
 }
 
 // DECODE ?: generic typed reconstruction needs the caller read fact; a Rust type is not evidence.
+#[inline]
 pub fn decode_value<'data, T: DecodeValue<'data>>(
     value: i64,
     dictionary: &Dictionary<'data>,
@@ -170,7 +204,7 @@ pub fn decode_value<'data, T: DecodeValue<'data>>(
 }
 
 macro_rules! integers {
-    ($($ty:ty),* $(,)?) => {$ (
+    ($($ty:ty => $word:ty),* $(,)?) => {$ (
         impl<'data> EncodeValue<'data> for $ty {
             fn encode(self, _: &mut Dictionary<'data>) -> Result<i64> {
                 i64::try_from(self).map_err(|_| failure("CQ_GPU_INTEGER_RANGE",
@@ -183,7 +217,13 @@ macro_rules! integers {
             }
         }
         impl<'data> DecodeValue<'data> for $ty {
+            type Word = $word;
+            #[inline]
+            fn from_word(value: Self::Word, _: &Dictionary<'data>) -> Result<Self> {
+                Ok(value as Self)
+            }
             // DECODE ?: integer carrier inverse serves generic typed reads and answers.
+            #[inline]
             fn decode(value: i64, _: &Dictionary<'data>) -> Result<Self> {
                 <$ty>::try_from(value).map_err(|_| failure("CQ_GPU_DECODE_RANGE",
                     concat!("encoded value is outside ", stringify!($ty))))
@@ -191,7 +231,8 @@ macro_rules! integers {
         }
     )*};
 }
-integers!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+integers!(i8=>i8, i16=>i16, i32=>i32, i64=>i64, i128=>i64, isize=>isize,
+          u8=>u8, u16=>u16, u32=>u32, u64=>u64, u128=>u64, usize=>usize);
 
 // Host publication codecs preserve the scalar's identity representation. These
 // traits serve typed Rust reads/answers, not a separate staging conversion.
@@ -206,6 +247,7 @@ impl<'data, const SCALE: u32> EncodeValue<'data> for &cq_load::Decimal<SCALE> {
     }
 }
 impl<'data, const SCALE: u32> DecodeValue<'data> for cq_load::Decimal<SCALE> {
+    type Word = i64;
     // DECODE ?: Decimal inverse is host-only but its caller must establish the allowed read.
     fn decode(value: i64, _: &Dictionary<'data>) -> Result<Self> {
         // DECODE ?: coefficient-to-Decimal construction inherits the host caller boundary.
@@ -223,6 +265,11 @@ impl<'data> EncodeValue<'data> for &cq_load::Date {
     }
 }
 impl<'data> DecodeValue<'data> for cq_load::Date {
+    type Word = i32;
+    #[inline]
+    fn from_word(value: i32, _: &Dictionary<'data>) -> Result<Self> {
+        Ok(Self::from_days(value))
+    }
     // DECODE ?: Date inverse is host-only but its caller must establish publication or opaque read.
     fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self> {
         // DECODE ?: checked day-carrier inverse and Date construction inherit the host caller boundary.
@@ -241,6 +288,10 @@ impl<'data> EncodeValue<'data> for &bool {
     }
 }
 impl<'data> DecodeValue<'data> for bool {
+    type Word = u8;
+    const MAX: i64 = 1;
+    #[inline]
+    fn from_word(value: u8, _: &Dictionary<'data>) -> Result<Self> { Ok(value != 0) }
     // DECODE ?: boolean carrier inverse requires caller logical-consumption evidence.
     fn decode(value: i64, _: &Dictionary<'data>) -> Result<Self> {
         match value {
@@ -269,6 +320,7 @@ impl<'data> EncodeValue<'data> for &'data String {
     }
 }
 impl<'data> DecodeValue<'data> for &'data str {
+    type Word = i64;
     // DECODE ?: borrowed string decoder delegates dictionary inversion without caller evidence.
     fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self> {
         // DECODE ?: borrowed dictionary resolution inherits its generic caller boundary.
@@ -276,6 +328,7 @@ impl<'data> DecodeValue<'data> for &'data str {
     }
 }
 impl<'data> DecodeValue<'data> for String {
+    type Word = i64;
     // DECODE ?: owned string decoder lacks a caller-level publication fact.
     fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self> {
         // DECODE ?: dictionary resolution and String allocation require the eventual logical-read fact.

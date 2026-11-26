@@ -483,16 +483,19 @@ pub(crate) fn version_label(program: &Program, variant: usize, head: usize) -> S
 
 /// [`compile`] with source-selected frontier plans, manual replacements and input observers.
 pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Expr> {
+    // Expansion instrumentation observes Sequence child and bag-output counts;
+    // like an input hook, it is a consumer in addition to the set terminal.
+    let observes_witnesses = std::env::var_os("CQ_EXPANSION_COUNTERS").is_some();
     let packed_aliases = PackedAliases::definitions(program)?;
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
-    crate::bindings::check(program)?;
-    let full_states = FullStates::build(&program.storage)?;
     ensure(
         program.context.observer.is_none(),
         program,
         "GPU Datalog does not support observer callbacks",
     )?;
+    let shared = crate::bindings::checked(program)?;
+    let full_states = FullStates::build(&program.storage)?;
     ensure(
         program.policy.timing == "none",
         program,
@@ -634,6 +637,30 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     }) {
         return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("hole hook `{unknown}` names no rule version")));
     }
+    let excluded: BTreeSet<_> = replaced.keys().chain(observed.keys()).chain(&frontier).copied().collect();
+    let non_replayable: BTreeSet<_> = replaced.keys().chain(observed.keys()).copied().collect();
+    let heads = program.holes.iter().enumerate().filter(|(_,h)| crate::bindings::head_argument(h)).map(|(i,_)| i).collect();
+    let mut shared_epochs = BTreeMap::new();
+    let mut shared_sinks = BTreeMap::new();
+    for (epoch,groups) in shared {
+        let (mut state,mut prepare) = (TokenStream::new(),TokenStream::new());
+        for group in groups {
+            if group.holes().any(|i| excluded.contains(&i)) { continue; }
+            let (defs,producer,sinks) = crate::shared::lower(&group,&heads);
+            state.extend(defs);
+            prepare.extend(producer);
+            shared_sinks.extend(sinks);
+        }
+        shared_epochs.insert(epoch,(state,prepare));
+    }
+    // Only final rule writers are members: a key-set hole has an immediate
+    // consumer, and a shared sink publishes without a Sequence result header.
+    let private: BTreeSet<_> = context.strata.iter().flat_map(|s| s.seeds.iter().chain(&s.steps))
+        .map(|rule| rule.hole).filter(|i| {
+            let h = &program.holes[*i];
+            !observes_witnesses && !non_replayable.contains(i) && !shared_sinks.contains_key(i)
+                && !crate::bindings::head_argument(h) && crate::bindings::replay_safe(&h.cq)
+        }).collect();
     // Each hole is a separate function item: rustc type-checks a closure with
     // its enclosing body, so closures would keep the whole program one query.
     // A hole whose query reads a local of the code around `datalog!` keeps the
@@ -643,6 +670,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     let holes = cq_datalog_print::splice_with(program, |hole| {
         let index = hole_index;
         hole_index += 1;
+        if let Some(sink) = shared_sinks.remove(&index) { return Ok(sink); }
         let standalone = !reads_environment(&hole.cq);
         let mut cq = hole.cq.clone();
         let mut parameters = Vec::new();
@@ -657,12 +685,41 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
         }
         let generate = || {
             let mut pipeline = hole.invocation_pipeline()?;
+            let terminal = pipeline.passes.last_mut().expect("checked GPU batch terminal");
+            let (choice, ordinary) = crate::union_project::split(&crate::shared::unpack(&terminal.arguments)?.1)?;
+            terminal.arguments = ordinary;
+            if private.contains(&index) {
+                let arena = &terminal.arguments;
+                terminal.arguments = quote!(private; #arena);
+            }
             if frontier.contains(&index) {
-                let terminal = pipeline.passes.last_mut().expect("checked GPU batch terminal");
                 let arena = &terminal.arguments;
                 terminal.arguments = quote!(frontier; #arena);
             }
-            pipeline.start(cq.to_token_stream())
+            let ordinary = pipeline.start(cq.to_token_stream())?;
+            // Input observers also receive the unadmitted candidate count.
+            // That auxiliary consumer distinguishes witnesses, so execute the
+            // ordinary arm even though admission alone would accept the union.
+            if observes_witnesses || observed.contains_key(&index) { return Ok(ordinary); }
+            let Some(plan) = choice else { return Ok(ordinary) };
+            // The checked roles name CQ declarations *after* the scan/host
+            // substitutions. No dependency on the order parameters were printed.
+            let source = |role: &Ident| {
+                cq.declarations.iter().find(|d| d.name == *role)
+                    .and_then(|d| d.value.as_ref()).map(|v| &v.expression)
+                    .ok_or_else(|| syn::Error::new_spanned(role, "missing UnionProject role"))
+            };
+            let (driver, lookup) = (source(&plan.driver)?, source(&plan.lookup)?);
+            let (witness, group) = (plan.witness_second, plan.group_first);
+            let result = if crate::bindings::head_argument(hole) || private.contains(&index) { quote!(Some(batch)) } else { quote!(batch) };
+            syn::parse2(quote!({
+                match ::gpu_datalog_runtime::union_project::execute(
+                    &mut *__cq_gpu_arena, #driver, #lookup, #witness, #group
+                ).expect("checked UnionProject execution") {
+                    Some(batch) => #result,
+                    None => { #ordinary }
+                }
+            }))
         };
         if !standalone {
             if replaced.contains_key(&index) || observed.contains_key(&index) {
@@ -686,7 +743,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             let arena = &device.relations[owners[index]].arena;
             let declared = parameters.iter().map(|(parameter, _, ty)| quote!(#parameter: &#ty));
             let batch = quote!(::gpu_datalog_runtime::CandidateBatch);
-            let result = if crate::bindings::head_argument(hole) {
+            let result = if crate::bindings::head_argument(hole) || private.contains(&index) {
                 quote!(::core::option::Option<#batch>)
             } else {
                 batch
@@ -724,6 +781,21 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
         quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
     };
     let mut initialize = Vec::new();
+    let mut union_inventory = Vec::new();
+    for rule in context.strata.iter().flat_map(|s| s.seeds.iter().chain(&s.steps)) {
+        let terminal = program.holes[rule.hole].pipeline.passes.last().expect("checked terminal");
+        let (Some(plan), _) = crate::union_project::split(&crate::shared::unpack(&terminal.arguments)?.1)? else { continue };
+        if observes_witnesses || observed.contains_key(&rule.hole) || replaced.contains_key(&rule.hole) { continue; }
+        let label = version_label(program, rule.variant, rule.head);
+        union_inventory.push(format!("gpu_union_plan\t{label}#{}\tdriver={}\tlookup={}\twitness_col={}\tgroup_head_col={}",
+            rule.hole, plan.driver, plan.lookup, usize::from(plan.witness_second), usize::from(!plan.group_first)));
+    }
+    if !union_inventory.is_empty() {
+        let inventory = union_inventory.join("\n");
+        initialize.push(quote! {
+            if ::gpu_datalog_runtime::trace_kernels() { ::std::eprintln!("{}", #inventory); }
+        });
+    }
     for (index, (layout, record)) in context.layouts.iter().zip(&device.layouts).enumerate() {
         if full_states.owner(index) != index {
             continue;
@@ -888,9 +960,9 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
         };
         let (stratum_runner, seed_runner, step_runner) = (runner(0), runner(1), runner(2));
-        let (seed_groups, seed) = phase(program, &full_states, index, round::schedule::SEED, &holes)?;
+        let (seed_groups, seed) = phase(program, &full_states, index, round::schedule::SEED, &holes, &shared_epochs, &private)?;
         let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
-        let (step_groups, step) = phase(program, &full_states, index, round::schedule::STEP, &holes)?;
+        let (step_groups, step) = phase(program, &full_states, index, round::schedule::STEP, &holes, &shared_epochs, &private)?;
         let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
         let lengths = stratum
             .termination
@@ -1019,61 +1091,81 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     }))
 }
 
-/// Validate all active heads against one stream snapshot. A capacity miss is
-/// replayable; arithmetic/kernel failure is not. No publication takes place
-/// between the first launch and the last successful attempt.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Member {
+    // Validation follows the original order: private writers in wave order,
+    // then grouped heads by relation. Member number need not be a word offset.
+    Private { ordinal: usize, hole: usize, relation: usize },
+    Head(usize),
+}
+
+/// One cut and one replay loop. Head appends replay in the original wave
+/// order; a private shortfall re-enters its ordinary checked terminal.
 fn head_attempts(
-    group: &Ident,
-    slots: &BTreeMap<usize, usize>,
-    phase: &str,
-    functions: &[TokenStream],
-    launches: &[TokenStream],
-    replays: &[TokenStream],
+    group: &Ident, members: &BTreeMap<Member, usize>, phase: &str,
+    functions: &[TokenStream], launches: &[TokenStream], replays: &[TokenStream],
+    publish: &[TokenStream],
 ) -> TokenStream {
-    let heads = slots.len();
     let phase_index = usize::from(phase == round::schedule::STEP);
-    let begin = slots.iter().map(|(&head, &slot)| {
-        let arena = local("arena", head);
-        let packing = local("packing", head);
-        quote!(#arena.begin_head(&#group, #slot, #packing.clone(), #phase_index)?;)
-    });
-    let validate = slots.iter().map(|(&head, &slot)| {
-        let arena = local("arena", head);
-        let candidates = local("candidates", head);
-        quote! {
-            if __cq_gpu_active[#slot] {
-                if __cq_gpu_words[2 * #slot + 1] != 0 {
-                    return Err("Sequence device count or fold overflow".into());
-                }
-                let rows = __cq_gpu_words[2 * #slot] as usize;
-                if rows > #arena.head_capacity() {
-                    // Discard Some(batch) fallback results of this attempt too.
-                    #candidates.clear();
-                    #arena.retry_head(rows)?;
-                    if __cq_gpu_trace_rounds { __cq_gpu_head_replays += 1; }
-                    __cq_gpu_previous[#slot] = 0;
-                } else {
-                    // SAFETY: same-stream dispatches initialized the prefix,
-                    // and both total count and failure have been checked.
-                    let batch = unsafe { #arena.finish_head(rows)? };
-                    if !batch.is_empty() { #candidates.push(batch); }
-                    __cq_gpu_active[#slot] = false;
+    let mut begin = TokenStream::new();
+    let validate = members.iter().map(|(&member, &slot)| {
+        let action = match member {
+            Member::Private { hole, relation, .. } => {
+                let arena = local("arena", relation);
+                let batch = local("result", hole);
+                let launch = local("launch", hole);
+                quote! {
+                    // SAFETY: the arena parks only this writer's lease, and
+                    // private records are consumed in launch order.
+                    #batch = unsafe { #arena.finish_private(record)? };
+                    if #batch.is_none() { #batch = #launch(&mut #arena)?; }
+                    #group.complete(#slot);
                 }
             }
+            Member::Head(head) => {
+                let arena = local("arena", head);
+                let candidates = local("candidates", head);
+                let packing = local("packing", head);
+                let previous = local("previous", head);
+                begin.extend(quote! {
+                    #arena.begin_head(&#group, #slot, #packing.clone(), #phase_index)?;
+                    let mut #previous = 0usize;
+                });
+                quote! {
+                    let (rows, failure) = record;
+                    if failure { return Err("Sequence device count or fold overflow".into()); }
+                    if rows > #arena.head_capacity() {
+                        #candidates.clear();
+                        #arena.retry_head(rows)?;
+                        if __cq_gpu_trace_rounds { __cq_gpu_head_replays += 1; }
+                        #previous = 0;
+                        retry = true;
+                    } else {
+                        // SAFETY: every append fit and the sticky failure bit is clear.
+                        let batch = unsafe { #arena.finish_head(rows)? };
+                        if !batch.is_empty() { #candidates.push(batch); }
+                        #group.complete(#slot);
+                    }
+                }
+            }
+        };
+        quote! {
+            if #group.active(#slot) {
+                let record = #group.record(&__cq_gpu_words, #slot);
+                #action
+            }
         }
-    });
+    }).collect::<TokenStream>();
     quote!({
-        #(#begin)*
-        let mut __cq_gpu_active = [true; #heads];
-        let mut __cq_gpu_previous = [0usize; #heads];
-        #(#functions)*
-        #(#launches)*
+        #begin #(#functions)* #(#launches)*
         loop {
             let __cq_gpu_words = #group.read()?;
-            #(#validate)*
-            if !__cq_gpu_active.contains(&true) { break; }
+            let mut retry = false;
+            #validate
+            if !retry { break; }
             #(#replays)*
         }
+        #(#publish)*
     })
 }
 
@@ -1083,6 +1175,8 @@ fn phase(
     index: usize,
     phase: &str,
     holes: &[TokenStream],
+    shared: &BTreeMap<(usize,&str,usize),(TokenStream,TokenStream)>,
+    private: &BTreeSet<usize>,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let context = &program.context;
     let device = device(program);
@@ -1104,10 +1198,16 @@ fn phase(
     let mut groups = TokenStream::new();
     let mut steps = Vec::new();
     for (point, epoch) in crate::bindings::epochs(stratum, schedule, phase).into_iter().enumerate() {
-        let mut slots = BTreeMap::new();
+        let shared_prepare = shared.get(&(index,phase,point)).map(|(defs,prepare)| {
+            groups.extend(defs.clone());
+            prepare
+        });
+        let mut members = BTreeMap::new();
         let mut functions = Vec::new();
         let mut launches = Vec::new();
         let mut replays = Vec::new();
+        let group = format_ident!("__cq_gpu_{}_group_{}", phase, point);
+        let mut publish = Vec::new();
         for rule_index in epoch.rules {
             let rule = &rules[rule_index];
             let candidates = local("candidates", rule.head);
@@ -1197,8 +1297,13 @@ fn phase(
                         }
                     }
                 }
+            } else if private.contains(&hole) {
+                quote! {
+                    if let Some(__cq_gpu_batch) = &__cq_gpu_batch { #trace_batch }
+                    __cq_gpu_batch
+                }
             } else {
-                quote!(#trace_batch #candidates.push(__cq_gpu_batch);)
+                quote!(#trace_batch __cq_gpu_batch)
             };
             let launch = quote!({
                 if ::gpu_datalog_runtime::profiling() {
@@ -1218,8 +1323,8 @@ fn phase(
                 #deliver
             });
             if head {
-                let next = slots.len();
-                let slot = *slots.entry(rule.head).or_insert(next);
+                let next = members.len();
+                let slot = *members.entry(Member::Head(rule.head)).or_insert(next);
                 // Share one body (and one expansion of its kernels) across
                 // the original and retry call sites.
                 let function = local("launch", hole);
@@ -1231,22 +1336,44 @@ fn phase(
                         Ok(())
                     };
                 });
-                let call = quote!(#function(&mut #arena, &mut #candidates, &mut __cq_gpu_previous[#slot])?;);
-                replays.push(quote!(if __cq_gpu_active[#slot] { #call }));
+                let previous = local("previous", rule.head);
+                let call = quote!(#function(&mut #arena, &mut #candidates, &mut #previous)?;);
+                replays.push(quote!(if #group.active(#slot) { #call }));
                 launches.push(call);
+            } else if private.contains(&hole) {
+                let slot = members.len();
+                members.insert(Member::Private { ordinal: slot, hole, relation: rule.head }, slot);
+                let batch = local("result", hole);
+                let function = local("launch", hole);
+                let arena_ty = &device.relations[rule.head].arena;
+                functions.push(quote! {
+                    let #function = |#arena: &mut #arena_ty| -> ::gpu_datalog_runtime::Result<Option<::gpu_datalog_runtime::CandidateBatch>> {
+                        Ok(#launch)
+                    };
+                });
+                launches.push(quote! {
+                    #arena.begin_private(&#group, #slot)?;
+                    let mut #batch = #function(&mut #arena)?;
+                    #arena.end_private(&#group, #slot);
+                });
+                publish.push(quote!(#candidates.push(#batch.expect("epoch validated private writer"));));
             } else {
-                launches.push(launch);
+                let batch = local("result", hole);
+                launches.push(quote!(let #batch = #launch;));
+                publish.push(quote!(#candidates.push(#batch);));
             }
         }
-        if slots.is_empty() {
-            steps.push(quote!({ #(#launches)* }));
+        if members.is_empty() {
+            steps.push(quote!({ #shared_prepare #(#launches)* #(#publish)* }));
         } else {
-            let group = format_ident!("__cq_gpu_{}_group_{}", phase, point);
-            let heads = slots.len();
-            groups.extend(quote! {
-                let #group = ::gpu_datalog_runtime::HeadCursors::new(__cq_gpu_pool.clone(), #heads)?;
-            });
-            steps.push(head_attempts(&group, &slots, phase, &functions, &launches, &replays));
+            let mut slots = vec![quote!(); members.len()];
+            for (&member, &slot) in &members {
+                let kind = match member { Member::Private { .. } => quote!(Private), Member::Head(_) => quote!(Head) };
+                slots[slot] = quote!(::gpu_datalog_runtime::EpochMember::#kind);
+            }
+            groups.extend(quote!(let #group = ::gpu_datalog_runtime::EpochCut::new(__cq_gpu_pool.clone(), &[#(#slots),*])?;));
+            let attempts = head_attempts(&group, &members, phase, &functions, &launches, &replays, &publish);
+            steps.push(quote!({ #shared_prepare #attempts }));
         }
         for transaction in epoch.publications {
             steps.push(admit_publish(program, full_states, index, transaction, phase)?);

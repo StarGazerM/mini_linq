@@ -372,6 +372,21 @@ pub(crate) mod codecs {
         }
     }
 
+    /// Snapshot a build-time source projection, or download an indirect run.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn gather_plain(source: SourceView, order: *const u32, rows: u64, output: *mut i64) {
+        let mut i = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while i < rows {
+            let row = if order.is_null() { i } else { unsafe { *order.add(i as usize) as u64 } };
+            // DECODE ?: native gather snapshots a build-time projection or reconstructs a diagnostic download, per caller.
+            unsafe { output.add(i as usize).write(decode_source(source, row)) };
+            i += stride;
+        }
+    }
+
     /// Gather `source[order[i]]` into index order and FOR-pack it in one pass.
     /// One warp per 1024-row vector stages its native-width values in shared memory,
     /// reduces the vector's extrema, writes its header, and packs it into a
@@ -538,6 +553,54 @@ pub(crate) mod codecs {
                 output.write(low);
                 output.add(1).write(high);
             }
+        }
+    }
+
+    #[device]
+    #[inline(always)]
+    unsafe fn answer_store(output: *mut u8, row: usize, bytes: u32, value: i64) {
+        unsafe {
+            match bytes {
+                1 => output.add(row).write(value as u8),
+                2 => output.cast::<u16>().add(row).write(value as u16),
+                4 => output.cast::<u32>().add(row).write(value as u32),
+                _ => output.cast::<i64>().add(row).write(value),
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn answer_column(
+        view: ColumnView, rows: usize, output: *mut u8, bytes: u32,
+        min: i64, max: i64, invalid: *mut u32,
+    ) {
+        let lane = thread::threadIdx_x();
+        let mut vector = thread::blockIdx_x() as usize;
+        // Initialize the final partial transfer word, without clearing live payload.
+        let end = rows * bytes as usize;
+        if vector == 0 && (lane as usize) < (8 - end % 8) % 8 {
+            unsafe { output.add(end + lane as usize).write(0) };
+        }
+        while vector * 1024 < rows {
+            // DECODE P: explicitly requested live host answer; narrow before D2H.
+            let values = unsafe { crate::decode_tile(view, vector as u64, lane) };
+            let first = vector * 1024 + (lane as usize / 32) * 128 + (lane as usize % 32) * 2;
+            let mut i = 0;
+            while i < 4 {
+                let row = first + (i / 2) * 64 + i % 2;
+                if row < rows {
+                    let value = values[i];
+                    if value < min || value > max {
+                        unsafe { cuda_device::atomic::DeviceAtomicU32::from_ptr(invalid) }
+                            .store(1, cuda_device::atomic::AtomicOrdering::Relaxed);
+                    }
+                    unsafe { answer_store(output, row, bytes, value) };
+                }
+                i += 1;
+            }
+            vector += thread::gridDim_x() as usize;
         }
     }
 

@@ -705,18 +705,18 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     if matches!(definition.mode, Mode::Pipe(_)) {
                         return error(r, "constant occurrences require retained filtered storage");
                     }
-                    for equality in &constants.equalities {
-                        let source = symbol_name(&equality.left);
+                    for binding in &constants.bindings {
+                        let source = symbol_name(&binding.column);
                         let Some(_) = declaration
                             .columns
                             .iter()
                             .find(|c| symbol_name(&c.name) == source)
                         else {
-                            return error(equality, format!("`{host}` has no column `{source}`"));
+                            return error(binding, format!("`{host}` has no column `{source}`"));
                         };
                         if !sources.insert(source) {
                             return error(
-                                equality,
+                                binding,
                                 "rename source columns must occur exactly once",
                             );
                         }
@@ -1592,7 +1592,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         let Some(constants) = &original.constants else {
             continue;
         };
-        if constants.equalities.is_empty() {
+        if constants.bindings.is_empty() {
             continue;
         }
         let Some(replacement) = target_definitions.get(&symbol_name(&definition.name)) else {
@@ -1615,7 +1615,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         };
         // PH-ConstantGuard: inspect the recorded expansion, not the producer's
         // naming algorithm. Private pipe intermediates introduce exactly the
-        // literal columns that the original occurrence restricted.
+        // constant columns that the original occurrence restricted.
         if [raw, filtered].iter().any(|d| {
             source_definitions.contains_key(&symbol_name(&d.name))
                 || !matches!(d.mode, Mode::Pipe(_))
@@ -1630,7 +1630,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
                     != 1
         }) || raw.name == filtered.name
             || renamed.constants.is_some()
-            || renamed.mapping.len() != original.mapping.len() + constants.equalities.len()
+            || renamed.mapping.len() != original.mapping.len() + constants.bindings.len()
             || project
                 .attributes
                 .iter()
@@ -1652,21 +1652,18 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         }
         let mut conditions = Vec::new();
         let mut valid = true;
-        for (mapping, equality) in renamed
+        for (mapping, binding) in renamed
             .mapping
             .iter()
             .skip(original.mapping.len())
-            .zip(&constants.equalities)
+            .zip(&constants.bindings)
         {
-            let cq_syntax::EqualityValue::Literal(value) = &equality.right else {
-                valid = false;
-                break;
-            };
-            if mapping.source != equality.left {
+            if mapping.source != binding.column {
                 valid = false;
                 break;
             }
             let variable = &mapping.target;
+            let value = &binding.value;
             conditions.push(quote::quote!(#variable = #value));
         }
         if !valid {

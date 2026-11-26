@@ -1603,6 +1603,46 @@ The printer checks these packets and invokes them without filling arguments.
  \mathrm{last}(h.Q).\mathrm{args}=\code{\&mut *\_\_cq\_gpu\_arena}}
  {\mathrm{print}_{\mathrm{gpu}}\text{ consumes the complete recorded invocation }h.Q}
 \end{mathpar}
+The batch terminal may additionally record a checked pair of physical
+alternatives. Let $D(g,y)$ denote the driver (in either physical order),
+$R(y,m)$ a snapshot with a prefix on $y$, and $\pi$ either permutation of
+the two distinct endpoints. Under set admission only,
+\begin{mathpar}
+\Rule{DL-UnionProject}{g,y,m\text{ distinct}\quad
+ H(\pi(g,m)) \gets D(g,y),R(y,m)\quad
+ H\text{ consumed only by set admission}\quad
+ \text{binding identity, scalar codecs and prefix agree}}
+ {\mathrm{supp}(H)=\{\pi(g,m)\mid
+ m\in\bigcup_{y:(g,y)\in D}\bigcup_{r\in\mathrm{runs}(R)}r[y]\}}
+\end{mathpar}
+The record names both versioned inputs and both column orientations.
+Its implementation samples fanout to select enumeration or exact grouped
+union. Hashing a source list only locates a candidate: representative sharing
+requires equality of every membership word. Sparse-domain fallback and arena
+replay use the same unpublished snapshot. No bag equivalence is claimed.
+\begin{mathpar}
+\Rule{DL-RoundShared}{\forall i.\ q_i=P_i;S_i,\quad P_i\equiv_\alpha P
+ \quad \mathrm{epoch}(q_i)=e
+ \quad \mathrm{versionedInputs}(P_i)=\mathrm{versionedInputs}(P)
+ \quad \mathrm{pure}(P_i,S_i)}
+ {\mathrm{bag}(q_i)=
+   \biguplus_{w\in\mathrm{bag}(P@e)}\pi_{H_i}\bigl(S_i(w)@e\bigr)}
+\end{mathpar}
+The physical record checks the changing occurrence, resolved layout and codec,
+variable bijection and branch cut. One immutable tuple of live columns per
+prefix witness (not per distinct key) feeds each suffix independently. A
+short witness buffer is replayed before use; a short branch lease replays
+only that branch. No publication lies inside the epoch, and every candidate
+still reaches the original admission owner. The native realization covers
+positive variable-only ranges over unsigned 32-bit fields or symbol codes.
+As a separate physical selection premise, let $k(a)$ be the leading bound
+key length of a non-root probe $a$, with $\mathrm{rel}(a)$ its resolved
+source relation and $C$ this component's members. The serial per-root
+realization is not selected when any branch contains an $a$ satisfying
+$\mathrm{version}(a)=\mathrm{full}\ \land\ \mathrm{rel}(a)\in C\
+\land\ k(a)<\mathrm{arity}(a)$. Retain ordinary holes in that case:
+the serial probe cannot rebalance a large growing range. This is not a
+semantic rejection, nor a claim that materializing such a prefix must lose.
 The device round printer consumes the same Round and Schedule records as the
 host printers, and the device Storage records for every provider,
 initializer, state and scratch lifetime. EDB loading uploads the input once and

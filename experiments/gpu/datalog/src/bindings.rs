@@ -184,7 +184,7 @@ pub(crate) fn epochs<'a>(
 /// A nested function may call an enclosing item, but that does not imply the
 /// call is safe to evaluate twice. Replay only ordinary relational expressions
 /// over the checked snapshot, not arbitrary Rust captures, calls or blocks.
-fn replay_safe(cq: &round::cq::Program) -> bool {
+pub(crate) fn replay_safe(cq: &round::cq::Program) -> bool {
     fn scalar(expr: &syn::Expr, bound: &BTreeSet<String>) -> bool {
         use syn::Expr;
         match expr {
@@ -255,7 +255,8 @@ fn arena_argument(head: bool) -> TokenStream {
 
 pub(crate) fn head_argument(hole: &Hole) -> bool {
     hole.pipeline.passes.last().is_some_and(|terminal| {
-        terminal.arguments.to_string() == arena_argument(true).to_string()
+        crate::shared::unpack(&terminal.arguments).and_then(|(_, args)| crate::union_project::split(&args))
+            .is_ok_and(|(_, arena)| arena.to_string() == arena_argument(true).to_string())
     })
 }
 
@@ -305,6 +306,7 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     crate::storage::check_device(&source.storage)?;
     let mut target = source.clone();
     let inputs = input_providers(&target)?;
+    let union_projects = crate::union_project::plans(&target, &inputs);
     let mut excluded = BTreeSet::new();
     if !legacy.is_empty() {
         for stratum in &source.context.strata {
@@ -328,6 +330,17 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     } else {
         BTreeSet::new()
     };
+    let mut shared = BTreeMap::new();
+    let symbols = crate::storage::Symbols::from_program(&source.storage)?;
+    let mut shared_excluded = excluded.clone();
+    shared_excluded.extend(union_projects.keys().copied());
+    for groups in crate::shared::plan(source,&shared_excluded,&symbols).into_values() {
+        for group in groups {
+            let first = group.holes().next().expect("nonempty RoundShared branches");
+            let cut = group.cut();
+            shared.extend(group.holes().map(|i| (i,quote!(round_shared(#first,#cut);))));
+        }
+    }
     for (i, hole) in target.holes.iter_mut().enumerate() {
         ensure(
             hole.interface == HoleInterface::Batch,
@@ -362,7 +375,10 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
             &terminal.path,
             "GPU batch terminal already has arguments",
         )?;
-        terminal.arguments = arena_argument(selected.contains(&i));
+        let marker = shared.get(&i);
+        let choice = union_projects.get(&i);
+        let arena = arena_argument(selected.contains(&i));
+        terminal.arguments = quote!(#marker #choice #arena);
     }
     round::check_rewrite(source, &target)?;
     check(&target)?;
@@ -373,6 +389,10 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
 /// providers, the declared owner contains exactly the input-layout packet and
 /// the terminal contains its complete arena argument.
 pub fn check(program: &Program) -> syn::Result<()> {
+    checked(program).map(drop)
+}
+
+pub(crate) fn checked(program: &Program) -> syn::Result<crate::shared::Phases> {
     for (stratum, providers) in program.context.strata.iter().zip(key_providers(program)?) {
         for (key, provider) in stratum.keys.iter().zip(providers) {
             ensure(
@@ -383,6 +403,7 @@ pub fn check(program: &Program) -> syn::Result<()> {
         }
     }
     let inputs = input_providers(program)?;
+    let union_projects = crate::union_project::plans(program, &inputs);
     let marked: BTreeSet<_> = program.holes.iter().enumerate()
         .filter(|(_, hole)| head_argument(hole)).map(|(i, _)| i).collect();
     if !marked.is_empty() {
@@ -396,7 +417,7 @@ pub fn check(program: &Program) -> syn::Result<()> {
         }
         ensure(valid == marked, program, "head arena argument requires a complete replay-safe head in one publication epoch")?;
     }
-    for hole in &program.holes {
+    for (i, hole) in program.holes.iter().enumerate() {
         let owner = hole
             .binding
             .ok_or_else(|| syn::Error::new_spanned(hole, "missing GPU binding invocation owner"))?;
@@ -426,11 +447,16 @@ pub fn check(program: &Program) -> syn::Result<()> {
         )?;
         ensure(
             hole.pipeline.passes.last().is_some_and(|terminal| {
-                terminal.arguments.to_string() == arena_argument(false).to_string() || head_argument(hole)
+                crate::shared::unpack(&terminal.arguments).is_ok_and(|(marker,args)| {
+                    crate::union_project::split(&args).is_ok_and(|(plan,arena)| {
+                        (marker.is_none() || plan.is_none()) && plan.as_ref() == union_projects.get(&i) &&
+                            [false,true].into_iter().any(|head| arena.to_string() == arena_argument(head).to_string())
+                    })
+                })
             }),
             hole,
-            "GPU batch invocation differs from its recorded arena argument",
+            "GPU batch invocation differs from its recorded arena argument or incompatible RoundShared/UnionProject certificate",
         )?;
     }
-    Ok(())
+    crate::shared::check(program)
 }

@@ -28,11 +28,15 @@ license to substitute another query or plan.
 The translator must decide nothing (T-Gpu, `doc/formal/backend_ir.tex`
 §"Refinement and the emitter"): kernels, barriers and launch shapes come from
 grading and recorded analysis. The former emitter decisions are now checked
-records: `Partition::{One,Tiles,Spread}` and kernel occupancy for dispatch
+records: `Partition::{One,Tiles,Fanout,Spread}` and kernel occupancy for dispatch
 geometry, `Publication::DeferredRange`, `OffsetScan::DeviceExclusive`,
-`FoldCompletion::BlockPartials`, and recorded metadata synchronization.
-The old literal grid cap and one-block offset/fold completion are historical,
-not open violations. See [Sequence contract §6](../../doc/SEQUENCE-PLAN.md#6-experimentsgpusequence-cuda-translation-replaces-experimentsgpuprinter-at-cutover),
+`FoldCompletion::BlockPartials`, `InitialCapacity` (GPU-DispatchReservation)
+and recorded metadata synchronization. A dispatch without a tile decision is
+no longer launched as one block: `Partition::One { max_rows }` requires
+evidence that the root fits one block pass with no expansion after it
+(GPU-OnePart), and an expanding root that fits one tile records `Fanout`, whose
+resident blocks split disjoint child intervals (GPU-ChildSlice). The old literal
+grid cap and one-block offset/fold completion are historical. See [Sequence contract §6](../../doc/SEQUENCE-PLAN.md#6-experimentsgpusequence-cuda-translation-replaces-experimentsgpuprinter-at-cutover),
 [`realize.rs`](sequence/core/src/realize.rs), and
 [`emit.rs`](sequence/core/src/emit.rs). New decisions must likewise be recorded
 and checked before emission.
@@ -653,30 +657,30 @@ the rule takes 0.11 s instead of 4.74 s. The generated plan shape is the open
 work: drive a delta from its distinct join keys and expand columns that only
 reach the head last.
 
-It also replaces both versions of `VPT_Assign`
-(`varpointsto(heap, to) :- assign(from, to), varpointsto(heap, from)`,
-[`doop/src/manual_assign.rs`](doop/src/manual_assign.rs)). Within one version a
-repeated `(heap, to)` can only come from different `from` witnesses, so the
-hole groups the delta by its head column and writes the union of the
-witnesses' child ranges (bit fragments ORed per group, large groups split over
-blocks) once per key; the plain expansion is kept for invocations whose raw
-child count is too small for the union to pay (threshold from 1,260 paired
-per-round timings). It publishes the generated plan's support, not its bag;
-admission is set-valued. On jython it writes 1.81 G candidates instead of
-41.98 G: fixpoint 17.57 -> 7.05 s, peak pool 38.8 -> 18.0 GB; scala 5.22 ->
-5.03 s. A manual hole's inputs are positional in layout order, so authored
-orders that reorder layouts must update its `READS` (the strict check rejects
-a mismatch). Identical delta `from` lists are interned per invocation, so each
-distinct list's union is ORed once (jython assignment kernels 718 -> 272 ms).
+Binary composition no longer requires a manual hole. At a set-admitted rule
+`H(g,m) :- D(g,y), R(y,m)` the [Round binding pass](datalog/src/union_project.rs)
+records `UnionProject` with the actual versioned layout names, driver witness
+column and output order. The variables must be distinct; guards, additional
+reads, computed outputs and multiplicity-sensitive terminals do not qualify.
+The [runtime](datalog-runtime/src/union_project.rs) samples at most 1,024
+driver edges and uses grouped union when estimated bag cardinality reaches
+`2,000,000 + 4 * driver_rows`. It ORs every matching run's exact word
+fragments. Large invocations can compare and intern entire source lists;
+other groups are processed in bounded stripes. Output groups can occupy
+either head column, independently of which driver column supplied the witness.
+See `gpu_union_plan` under `GPU_DATALOG_TRACE_KERNELS=1` for the selected rules.
+Historical measurements of the assignment specialization and crossover are in
+[`join-lab/DESIGN.md`](join-lab/DESIGN.md).
 
-The three virtual-dispatch versions (`varpointsto@3`, `reachable@3`,
-`callgraphedge@3`) read the same delta and the same eight-atom prefix
-([`doop/src/manual_dispatch.rs`](doop/src/manual_dispatch.rs)): the first of
-the three holes in a round materializes the prefix witnesses once (three
-`u32` per `methodlookup` witness, snapshot-versioned device hash indexes over
-all input runs), and each hole then projects its head from that buffer; only
-the VPT head expands `thisvar`. The family takes 73 ms instead of 505 ms on
-scala (70 vs 1,032 ms on jython).
+`bind_round` records `round_shared(leader, depth)` when multiple pure rule
+versions in the same publication epoch share a versioned, alpha-equivalent
+positive prefix. The checker resolves the actual scan/layout hosts, column
+permutations, codecs, changing occurrence, projections, and remaining suffix
+of each branch. The GPU printer materializes live `u32` columns once per
+witness, without deduplication; branches keep their original head arenas and
+admission. For the eight-atom virtual-dispatch prefix this stores `(heap,
+invocation, target)` per `methodlookup` witness. Only the VPT branch expands
+`thisvar`, including zero or multiple matches. No source hook is required.
 
 `doop-gpu` authors 12 rule-version orders (`plan(...)` in
 [`doop/src/lib.rs`](doop/src/lib.rs); evidence in
@@ -828,6 +832,26 @@ cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle
 GPU_DATALOG_PROBE_NODES=2048 GPU_DATALOG_PROBE_CASES=tc_left,tc_right,same_generation \
   cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle timing -- --ignored --nocapture
 ```
+
+### ddisasm dataflow benchmark
+
+`ddisasm-gpu` instantiates the same 23-rule program as the CPU MiniLinq
+runner. The GPU uses a per-evaluation dictionary: it encodes all input identities
+and constants by signed i64 order, rejects more than $2^{32}$ distinct values,
+and decodes the u32 answers before comparison. No address arithmetic is done.
+Run from `experiments/gpu`, with the GPU build environment active:
+
+```sh
+cargo oxide build --arch sm_89 --materialize-cubin -- --release -p ddisasm-gpu
+GPU_DATALOG_PHASES=1 "${CARGO_TARGET_DIR:-target}/release/ddisasm-gpu" \
+  "$DATA" --meta "$CONSTANTS_JSON"
+```
+
+Default mode compares all 11 output tuple sets (not just cardinalities).
+`--meta` is optional when `DATA/str2num.json` is present; use the matching
+`<dataset>_consts.json` otherwise. `--gpu-only` skips CPU evaluation and
+comparison but still reports output counts. Set `GPU_DATALOG_PROFILE=1` on a
+separate GPU-only run for per-hole attribution; use unprofiled runs for timing.
 
 ### DOOP points-to benchmark
 

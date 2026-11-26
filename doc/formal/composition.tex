@@ -182,9 +182,14 @@ key columns are admitted; dictionary codes alone do not certify decoded text.
  {\mathsf{driver}(s,p)=r}
 
 \Rule{DR-Publication}{v=\mathsf{validity}(s,\mathsf{inputPublications})\quad
- \ell=\mathsf{inputPublication}(p)\\
- \ell=device\Rightarrow(\mathsf{inputTarget}(p)=device\land\neg\mathsf{nullable}(v))}
+ \ell=\mathsf{resolvePublication}(p,\mathsf{targets}(\mathsf{consumers}(s)))\\
+ \ell=device\Rightarrow\mathsf{inputTarget}(p)=device}
  {\mathsf{publication}(s,p)=(\ell,v)}
+
+\Rule{DR-NullableLanes}{v_i=\mathsf{optional}\quad
+ P(i)=(i,\,w+\#\{j<i\mid v_j=\mathsf{optional}\})}
+ {\mathsf{None}\mapsto(0,0)\quad \mathsf{Some}(x)\mapsto(x,1)\quad
+ \mathsf{read}(x,b)=\mathsf{if}\ b\ \mathsf{then}\ \mathsf{Some}(x)\ \mathsf{else}\ \mathsf{None}}
 
 \Rule{DR-GroupedPublication}{\mathsf{publication}(s,p)=(device,v)\quad
  s\text{ grouped}\quad \sigma=\text{head slots over keys then aggregates}\quad
@@ -237,9 +242,13 @@ compiler context fact substitutes for canonicalizing the supplied rows.
 DR-Target propagates rejection unchanged: it never retries another machine or
 deletes authored advice. DR-Publication derives extrema validity from aggregate
 kinds and propagates recorded nullable columns through publication inputs, not
-from Rust type spelling. Nullable outputs use the host transfer protocol;
-device publication without validity support is rejected. Generated carriers
-and downstream input bindings consume the same recorded placement.
+from Rust type spelling. Device publications retain nullable payloads and
+their independent presence lanes. DR-NullableLanes keeps the original value
+slots stable and appends one presence slot per nullable column, in heading
+order. Stored None has a canonical zero payload; no payload bit pattern is
+reserved. Relational indices can carry both scalar fields. Logical reads
+reconstruct the option, not a sentinel comparison. Generated carriers and
+downstream input bindings consume the same recorded placement and heading.
 DR-GroupedPublication records a resident grouped answer's conversion: the
 column slots and each key's bounds source (resident column metadata or one host
 scan of a host relation; aggregates and keys without input bindings take the full

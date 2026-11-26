@@ -8,6 +8,30 @@ use cuda_device::{device, thread};
 use gpu_device_columns::ColumnView;
 pub use gpu_device_columns::{decode, decode_u32, original_position};
 
+/// A null permutation denotes identity, including projections snapshotted
+/// directly into occurrence order.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RangePayloadView {
+    pub column: ColumnView,
+    pub order: *const u32,
+}
+unsafe impl cuda_core::DeviceCopy for RangePayloadView {}
+
+/// # Safety
+/// `position` is a live range occurrence and both owners are live on this stream.
+#[device]
+#[inline(always)]
+pub unsafe fn range_payload(view: RangePayloadView, position: u64) -> i64 {
+    let row = if view.order.is_null() {
+        position
+    } else {
+        unsafe { *view.order.add(position as usize) as u64 }
+    };
+    // DECODE V: a range probe reconstructs only the demanded occurrence; P6 keeps codes for relational consumers.
+    unsafe { decode(view.column, row) }
+}
+
 pub use gpu_tiles::{BLOCK_THREADS, SCAN_SCRATCH_WORDS, TILE_ITEMS};
 
 /// Set a sticky overflow word without racing other threads.
@@ -46,20 +70,12 @@ pub unsafe fn checked_scan(value: u32, scratch: *mut u32, overflow: *mut u32) ->
 
 pub use gpu_tiles::owner;
 
-/// Read the half-open row range for a dense key from a compressed directory.
+/// Read adjacent native endpoints of the half-open range for a dense key.
 ///
 /// # Safety
-/// The column and its owners must be live, and both `key` and `key + 1` must
-/// address initialized logical entries whose decoded values fit u32.
+/// `offsets[key..=key+1]` must be live and initialized.
 #[device]
 #[inline(always)]
-pub unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
-    unsafe {
-        (
-            // DECODE V: lower directory offset FOR inversion precedes range expansion; P6 use plain index directories.
-            decode_u32(offsets, key as u64),
-            // DECODE V: upper directory offset FOR inversion precedes range expansion; P6 avoid compressed random-access directories.
-            decode_u32(offsets, key as u64 + 1),
-        )
-    }
+pub unsafe fn range(offsets: *const u32, key: u32) -> (u32, u32) {
+    unsafe { (*offsets.add(key as usize), *offsets.add(key as usize + 1)) }
 }

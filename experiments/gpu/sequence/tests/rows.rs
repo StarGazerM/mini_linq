@@ -174,7 +174,8 @@ fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() 
         .unwrap();
         let generated = translate(&program);
         assert!(
-            generated.contains("device :: decode (__column"),
+            generated.contains("device :: range_payload (__column , __middle as u64) < __key")
+                && generated.contains("device :: range_payload (__column , __low as u64) == __key"),
             "{generated}"
         );
         assert!(!generated.contains("contains_u32"), "{generated}");

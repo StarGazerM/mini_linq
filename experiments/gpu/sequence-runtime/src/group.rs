@@ -4,15 +4,13 @@
 use crate::{pointer, release, temporary, Auxiliary, Geometry, Result};
 use cq_gpu_runtime::{Buffer, Pool};
 use gpu_device_columns::OutputCount;
-use rccl_thrust::{arithmetic_range, select_flagged};
+mod keyed;
+pub use keyed::{dense_add, DenseFold, DenseFrame};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-// RCCL programs borrow a context, but own their module handles. Keep that
-// context alive at a stable Arc allocation and drop it after both programs.
-// The extended program lifetimes never escape this private owner.
+// CUB borrows the context owned by the last field, after both loaded modules.
 struct GroupPrograms {
     module: group_kernels::LoadedModule,
-    thrust: rccl_thrust::cuda::Program<'static>,
     cub: rccl_cub::cuda::Program<'static>,
     context: Arc<cuda_core::CudaContext>,
 }
@@ -21,27 +19,14 @@ impl GroupPrograms {
     fn load(pool: &Pool) -> Result<Self> {
         let context = pool.context().clone();
         let module = unsafe { group_kernels::load(&context)? };
-        let thrust = rccl_thrust::cuda::Program::load(&context)?;
         let cub = rccl_cub::cuda::Program::load(&context)?;
-        // SAFETY: the programs retain a reference only to the CudaContext
-        // pointee, not to this local Arc handle. Moving an Arc does not move
-        // that pointee. The owning context field is declared last so both
-        // programs are destroyed before it. No program is exposed without
-        // retaining this owner; executions borrow it for their full lifetime.
-        let (thrust, cub) = unsafe {
-            (
-                std::mem::transmute::<
-                    rccl_thrust::cuda::Program<'_>,
-                    rccl_thrust::cuda::Program<'static>,
-                >(thrust),
-                std::mem::transmute::<rccl_cub::cuda::Program<'_>, rccl_cub::cuda::Program<'static>>(
-                    cub,
-                ),
-            )
+        // SAFETY: moving the Arc does not move its context. The CUB program
+        // drops before the owning context and never escapes this owner.
+        let cub = unsafe {
+            std::mem::transmute::<rccl_cub::cuda::Program<'_>, rccl_cub::cuda::Program<'static>>(cub)
         };
         Ok(Self {
             module,
-            thrust,
             cub,
             context,
         })
@@ -73,11 +58,13 @@ fn programs(pool: &Pool) -> Result<Rc<GroupPrograms>> {
 /// A checked aggregate's machine representation. Extrema use a separate validity
 /// column, so every i64 bit pattern remains a representable value.
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct Aggregate {
     pub kind: u32,
     pub min: i64,
     pub max: i64,
 }
+unsafe impl cuda_core::DeviceCopy for Aggregate {}
 
 /// Recorded scalar representation of an aggregate output. Extrema carry their
 /// validity separately; rustc resolves aliases and the optional payload type.
@@ -94,6 +81,34 @@ impl<T: gpu_datalog_runtime::Scalar> AggregateRepresentation<false> for T {
 impl<T: gpu_datalog_runtime::Scalar> AggregateRepresentation<true> for Option<T> {
     const MIN: i128 = T::MIN;
     const MAX: i128 = T::MAX;
+}
+
+/// Typed inverse at a nullable stage seam. The machine payload is independent
+/// of presence, so Some(i64::MIN) and Some(i64::MAX) need no special cases.
+pub trait Nullable: Sized {
+    fn from_lanes(value: i64, present: bool) -> Self;
+    fn value_lane(&self) -> i64;
+    fn present(&self) -> bool;
+}
+impl<T: gpu_datalog_runtime::Scalar<Logical = T>> Nullable for Option<T> {
+    #[inline(always)]
+    fn from_lanes(value: i64, present: bool) -> Self {
+        if present { Some(T::decode(value as i128)) } else { None }
+    }
+    #[inline(always)]
+    fn value_lane(&self) -> i64 {
+        self.as_ref().map_or(0, T::encode)
+    }
+    #[inline(always)]
+    fn present(&self) -> bool {
+        self.is_some()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum GroupLane {
+    Value(usize),
+    Presence(usize),
 }
 
 pub fn aggregate<T: AggregateRepresentation<OPTIONAL>, const OPTIONAL: bool>(
@@ -218,18 +233,18 @@ impl<F> GroupedRows<F> {
     pub fn checked_len(&self) -> Result<usize> {
         self.output.checked_len()
     }
-    /// Publish a nonnullable grouped result as resident input columns.
+    /// Publish grouped payload and presence lanes as resident input columns.
     ///
     /// Supplied bounds size the encoder; table bounds are measured logical extrema.
     /// # Safety
-    /// `slots` must describe `Row` in the physical key/aggregate column layout
-    /// and select no nullable aggregate. The decoder is not applied: the grouped
-    /// machine values must already be the row codec's integer representation.
+    /// `slots` must describe `Row` in physical key/aggregate order, selecting
+    /// the presence source for each recorded nullable flag. Group machine
+    /// values must already be the row codec's integer representation.
     /// Each supplied bound must enclose that output column's complete domain;
     /// group keys inherit their input bounds, not the aggregate's value domain.
     pub unsafe fn into_columns<Row: gpu_device_columns::RowCodec<'static>>(
         self,
-        slots: &[usize],
+        slots: &[GroupLane],
         bounds: &[gpu_device_columns::Bounds],
     ) -> Result<cq_gpu_runtime::DeviceColumns<'static, Row>> {
         use gpu_device_columns::{
@@ -238,7 +253,9 @@ impl<F> GroupedRows<F> {
         let output = self.output;
         if Row::WIDTH != slots.len()
             || bounds.len() != slots.len()
-            || slots.iter().any(|&slot| slot >= output.width)
+            || slots.iter().any(|lane| match *lane {
+                GroupLane::Value(i) | GroupLane::Presence(i) => i >= output.width,
+            })
         {
             return Err("grouped publication schema width mismatch".into());
         }
@@ -247,19 +264,20 @@ impl<F> GroupedRows<F> {
         // count plus arithmetic failures. Neither values nor count are read back.
         let rows = output.values.len() / output.width;
         let mut columns = Vec::with_capacity(slots.len());
-        for (&slot, &bounds) in slots.iter().zip(bounds) {
+        for (&lane, &bounds) in slots.iter().zip(bounds) {
+            let (data, presence) = match lane {
+                GroupLane::Value(i) => (output.values.ptr().wrapping_add(if rows == 0 { 0 } else { i }).cast(), false),
+                GroupLane::Presence(i) => (output.valid.ptr().wrapping_add(if rows == 0 { 0 } else { i }).cast(), true),
+            };
             let mut source = SourceView::from(ColumnView {
                 headers: std::ptr::null(),
-                data: output
-                    .values
-                    .ptr()
-                    .wrapping_add(if rows == 0 { 0 } else { slot })
-                    .cast(),
+                data,
                 len: output.values.len() as u64,
                 count: std::ptr::null(),
                 codec: Codec::Plain as u32,
             });
             source.stride = output.width as u64;
+            if presence { source.packed = gpu_device_columns::SOURCE_BYTES; }
             columns.push(unsafe {
                 EncodedColumn::from_gather_source_pending::<_, i64>(
                     pool.clone(),
@@ -306,11 +324,18 @@ impl<F> GroupedRows<F> {
     }
 }
 
-/// Recorded GPU keyed accumulator provider. Its implementation sorts canonical
-/// valuation arguments by key and folds each resulting segment.
+/// Formal rule GPU-KeyedGridFold: this recorded provider owns the checked
+/// frame/scratch decision. Its printer emits both protocols, not a cost choice.
 pub struct SegmentedGroup;
 
 impl SegmentedGroup {
+    pub fn dense_frame(rows: usize, bounds: &[gpu_device_columns::Bounds], aggregates: usize, aux: &Auxiliary) -> Result<Option<DenseFrame>> {
+        aux.validate()?;
+        if rows > u32::MAX as usize { return Err("invalid grouped input extent".into()); }
+        if rows == 0 { return Ok(None); }
+        Ok(DenseFrame::from_bounds(bounds, aggregates, aux.group_reduce))
+    }
+
     /// Execute the recorded segmented accumulator over row-major arguments.
     ///
     /// # Safety
@@ -333,8 +358,8 @@ impl SegmentedGroup {
 
 /// Reduce canonical valuation arguments. Each input row contains the key fields
 /// followed by one evaluated argument per aggregate (count uses one).
-/// Element kernels launch with the recorded `group` geometry; `reduce`
-/// launches one `group_reduce` block per group for every output column.
+/// Small live domains use per-block histograms; sorted large domains fold
+/// row-parallel warp fragments, retaining the stable order of their run heads.
 ///
 /// # Safety
 /// The initialized row-major input must be canonical over complete valuations,
@@ -368,7 +393,6 @@ pub unsafe fn fold(
     let stream = pool.stream();
     let programs = programs(&pool)?;
     let module = &programs.module;
-    let exec = programs.thrust.par_in(stream, pool.resource())?;
     let launch = programs.cub.on(stream)?;
     let mut order = temporary::<u32>(&pool, rows)?;
     let rows = if let Some(live) = live {
@@ -390,28 +414,24 @@ pub unsafe fn fold(
         } else {
             count.to_host_vec()?[0] as usize
         };
-        let selected_order = temporary::<u32>(&pool, selected)?;
-        if selected != 0 {
-            unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(
-                    selected_order.cu_deviceptr(),
-                    order.cu_deviceptr(),
-                    selected * std::mem::size_of::<u32>(),
-                    stream.cu_stream(),
-                )?;
+        if selected < rows {
+            let selected_order = temporary::<u32>(&pool, selected)?;
+            if selected != 0 {
+                unsafe {
+                    cuda_core::simt::memory::memcpy_dtod_async(
+                        selected_order.cu_deviceptr(), order.cu_deviceptr(),
+                        selected * std::mem::size_of::<u32>(), stream.cu_stream(),
+                    )?;
+                }
             }
+            release(stream, order)?;
+            order = selected_order;
         }
-        release(stream, order)?;
         release(stream, count)?;
-        order = selected_order;
         selected
     } else {
         rows
     };
-    let mut alternate_order = temporary::<u32>(&pool, rows)?;
-    let mut offsets = temporary::<u32>(&pool, rows.max(1))?;
-    let flags = temporary::<u32>(&pool, rows)?;
-    let mut count = temporary::<u64>(&pool, 1)?;
     let mut key_domains = if rows == 0 {
         vec![GroupKeyDomain { minimum: 0, bound: 0, bits: 0 }; keys]
     } else {
@@ -428,13 +448,6 @@ pub unsafe fn fold(
                 rows as u32,
             )?;
         }
-        let gather_prepared = if keys != 0 {
-            let shape = module.prepare_gather_key(element.config(1))?;
-            let blocks = element.grid(shape.function(), rows)?;
-            Some(module.prepare_gather_key(element.config(blocks))?)
-        } else {
-            None
-        };
         if keys != 0 {
             let shape = module.prepare_key_bounds(aux.bounds.config(1))?;
             let blocks = aux.bounds.grid(shape.function(), rows)?;
@@ -462,6 +475,24 @@ pub unsafe fn fold(
                 });
             }
         }
+    }
+    if let Some(frame) = DenseFrame::new(&key_domains, aggregates.len(), aux.group_reduce) {
+        let shape = module.prepare_dense_rows(aux.group_reduce.config(1))?;
+        let blocks = aux.group_reduce.grid(shape.function(), rows)?;
+        let dense = DenseFold::new(pool.clone(), frame, blocks, aggregates)?;
+        module.dense_rows(
+            stream, &module.prepare_dense_rows(aux.group_reduce.config(blocks))?,
+            input.ptr(), pointer(&order), rows, width, keys, dense.axes(), dense.specs(),
+            dense.bins(), dense.partials(), dense.error(),
+        )?;
+        release(stream, order)?;
+        return unsafe { dense.finish(statuses, aux) };
+    }
+    if rows != 0 {
+        let mut alternate_order = temporary::<u32>(&pool, rows)?;
+        let shape = module.prepare_gather_key(element.config(1))?;
+        let blocks = element.grid(shape.function(), rows)?;
+        let gather_prepared = module.prepare_gather_key(element.config(blocks))?;
         let narrow_rows = if key_domains.iter().any(|domain| domain.bits <= 32) { rows } else { 0 };
         let wide_rows = if key_domains.iter().any(|domain| domain.bits > 32) { rows } else { 0 };
         let mut sort_keys = temporary::<u32>(&pool, narrow_rows)?;
@@ -495,7 +526,7 @@ pub unsafe fn fold(
             }
             module.gather_key(
                 stream,
-                gather_prepared.as_ref().expect("nonempty group key domain"),
+                &gather_prepared,
                 input.ptr(),
                 pointer(&order),
                 pointer(&sort_keys),
@@ -527,89 +558,12 @@ pub unsafe fn fold(
         }
         for buffer in [sort_keys, alternate_keys] { release(stream, buffer)?; }
         for buffer in [wide_keys, alternate_wide] { release(stream, buffer)?; }
-        let shape = module.prepare_boundaries(element.config(1))?;
-        let blocks = element.grid(shape.function(), rows)?;
-        module.boundaries(
-            stream,
-            &module.prepare_boundaries(element.config(blocks))?,
-            input.ptr(),
-            pointer(&order),
-            pointer(&flags),
-            rows as u32,
-            width,
-            keys,
-        )?;
-        select_flagged(
-            &exec,
-            arithmetic_range(0u32, 1, rows),
-            &flags,
-            &mut offsets,
-            &mut count,
-        )?;
+        release(stream, alternate_order)?;
     }
-    let groups = if rows == 0 {
-        usize::from(keys == 0)
-    } else {
-        count.to_host_vec()?[0] as usize
-    };
-    let values = Buffer::<i64>::zeroed(pool.clone(), groups * width)?;
-    let valid = Buffer::<u8>::zeroed(pool.clone(), groups * width)?;
-    let metadata = Arc::new(Buffer::from_host(
-        pool.clone(),
-        &[OutputCount {
-            rows: groups as u64,
-            error: 0,
-            padding: 0,
-        }],
-    )?);
-    if groups != 0 {
-        let config = aux.group_reduce.config(groups as u32);
-        for column in 0..width {
-            let aggregate = if column < keys {
-                Aggregate {
-                    kind: 2,
-                    min: i64::MIN,
-                    max: i64::MAX,
-                }
-            } else {
-                aggregates[column - keys]
-            };
-            module.reduce(
-                stream,
-                &module.prepare_reduce(config)?,
-                input.ptr(),
-                pointer(&order),
-                pointer(&offsets),
-                rows as u32,
-                width,
-                column,
-                aggregate.kind,
-                aggregate.min,
-                aggregate.max,
-                values.ptr(),
-                valid.ptr(),
-                metadata.ptr().cast::<u64>().cast::<u32>().wrapping_add(2),
-            )?;
-        }
-    }
-    for buffer in [order, alternate_order, offsets, flags] {
-        release(stream, buffer)?;
-    }
-    for buffer in [count] {
-        release(stream, buffer)?;
-    }
-    if keys != 0 && crate::index_bytes::enabled() {
-        let bytes = values.bytes() + valid.bytes() + metadata.bytes();
-        crate::index_bytes::record("group", bytes, bytes);
-    }
-    Ok(GroupedOutput {
-        values,
-        valid,
-        metadata,
-        statuses,
-        width,
-        key_domains,
-    })
+    let result = keyed::segmented(&pool, &programs, input, pointer(&order), rows, key_domains,
+        aggregates, statuses, aux)?;
+    release(stream, order)?;
+    Ok(result)
 }
 
 /// Formal rule GPU-GroupGridFold: grid partials of a keyless group. The
@@ -798,116 +752,248 @@ mod group_kernels {
             }
         }
     }
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain=1,block=(256,1,1))]
-    pub fn boundaries(
-        input: *const i64,
-        order: *const u32,
-        flags: *mut u32,
-        rows: u32,
-        width: usize,
-        keys: usize,
-    ) {
-        unsafe {
-            let mut i = cuda_device::thread::index_1d().get() as u32;
-            while i < rows {
-                let mut different = i == 0;
-                if i != 0 {
-                    let a = *order.add(i as usize) as usize;
-                    let b = *order.add(i as usize - 1) as usize;
-                    let mut k = 0;
-                    while k < keys {
-                        different |= *input.add(a * width + k) != *input.add(b * width + k);
-                        k += 1;
-                    }
-                }
-                *flags.add(i as usize) = different as u32;
-                i += cuda_device::thread::gridDim_x() * 256;
-            }
-        }
-    }
+    use cuda_device::{thread, warp};
+    use crate::group::{Aggregate, dense_add, keyed::{keyed_combine as combine, keyed_identity as neutral}};
+
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(4096,4096))]
-    pub fn reduce(
-        input: *const i64,
-        order: *const u32,
-        offsets: *const u32,
-        rows: u32,
-        width: usize,
-        column: usize,
-        kind: u32,
-        min: i64,
-        max: i64,
-        output: *mut i64,
-        valid: *mut u8,
-        error: *mut u32,
-    ) {
+    pub fn dense_rows(input: *const i64, order: *const u32, rows: usize, width: usize, keys: usize,
+        axes: *const i64, specs: *const Aggregate, bins: usize, partials: *mut i64, error: *mut u32) {
         unsafe {
-            let lane = cuda_device::thread::threadIdx_x() as usize;
-            let group = cuda_device::thread::blockIdx_x() as usize;
-            let begin = if rows == 0 { 0 } else { *offsets.add(group) };
-            let end = if group + 1 == cuda_device::thread::gridDim_x() as usize {
-                rows
-            } else {
-                *offsets.add(group + 1)
-            };
-            let mut value = if kind == 2 {
-                i64::MAX
-            } else if kind == 3 {
-                i64::MIN
-            } else {
-                0
-            };
-            let mut position = begin as usize + lane;
-            while position < end as usize {
-                let next = *input.add(*order.add(position) as usize * width + column);
-                if kind == 2 {
-                    value = value.min(next);
-                } else if kind == 3 {
-                    value = value.max(next);
-                } else {
-                    match value.checked_add(next) {
-                        Some(sum) => value = sum,
-                        None => crate::device::flag_overflow(error),
+            let shared = cuda_device::DynamicSharedArray::<i64, 16>::get_raw().cast::<i64>();
+            let lane = thread::threadIdx_x() as usize;
+            let stride = width - keys + 1;
+            let cells = bins * stride;
+            let mut i = lane;
+            while i < cells {
+                let a = i % stride;
+                *shared.add(i) = if a == 0 { 0 } else { neutral((*specs.add(a-1)).kind) };
+                i += 256;
+            }
+            thread::sync_threads();
+            let mut p = thread::index_1d().get() as usize;
+            while p < rows {
+                let row = input.add(*order.add(p) as usize * width);
+                let mut bin = 0usize;
+                let mut k = 0;
+                while k < keys {
+                    bin = bin * *axes.add(2*k+1) as usize + (*row.add(k)).wrapping_sub(*axes.add(2*k)) as usize;
+                    k += 1;
+                }
+                let base = shared.add(bin * stride);
+                dense_add(base, 0, 1, error);
+                let mut a = 0;
+                while a+1 < stride {
+                    dense_add(base.add(a+1), (*specs.add(a)).kind, *row.add(keys+a), error);
+                    a += 1;
+                }
+                p += thread::gridDim_x() as usize * 256;
+            }
+            thread::sync_threads();
+            let mut i = lane;
+            while i < cells {
+                *partials.add(thread::blockIdx_x() as usize * cells + i) = *shared.add(i);
+                i += 256;
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(4096,4096))]
+    pub fn dense_combine(partials: *const i64, specs: *const Aggregate, blocks: usize,
+        bins: usize, stride: usize, sums: *mut i64, occupied: *mut u32, error: *mut u32) {
+        unsafe {
+            let cell = thread::blockIdx_x() as usize;
+            let lane = thread::threadIdx_x() as usize;
+            let a = cell % stride;
+            let kind = if a == 0 { 0 } else { (*specs.add(a-1)).kind };
+            let mut v = neutral(kind);
+            let mut b = lane;
+            while b < blocks {
+                v = combine(kind, v, *partials.add(b * bins * stride + cell), error);
+                b += 256;
+            }
+            let mut delta = 16;
+            while delta != 0 {
+                let other = warp::shuffle_down_u64(v as u64, delta) as i64;
+                if lane % 32 < delta as usize { v = combine(kind, v, other, error); }
+                delta /= 2;
+            }
+            let shared = cuda_device::DynamicSharedArray::<i64,16>::get_raw().cast::<i64>();
+            if lane % 32 == 0 { *shared.add(lane/32) = v; }
+            thread::sync_threads();
+            if lane == 0 {
+                let mut total = *shared;
+                let mut w = 1;
+                while w < 8 { total = combine(kind, total, *shared.add(w), error); w += 1; }
+                *sums.add(cell) = total;
+                if a == 0 && total != 0 {
+                    use cuda_device::atomic::{DeviceAtomicU32, AtomicOrdering};
+                    let bin = cell / stride;
+                    DeviceAtomicU32::from_ptr(occupied.add(bin/32)).fetch_or(1 << (bin%32), AtomicOrdering::Relaxed);
+                }
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn dense_publish(sums: *const i64, occupied: *const u32, axes: *const i64, bins: usize,
+        keys: usize, width: usize, output: *mut i64, valid: *mut u8, metadata: *mut u64,
+        groups: u64, specs: *const Aggregate, error: *mut u32) {
+        unsafe {
+            let bin = thread::index_1d().get() as usize;
+            if bin == 0 { *metadata = groups; }
+            if bin >= bins { return; }
+            let word = bin / 32;
+            let bit = 1u32 << (bin % 32);
+            let bits = *occupied.add(word);
+            if bits & bit == 0 { return; }
+            let mut group = (bits & (bit-1)).count_ones();
+            let mut w = 0;
+            while w < word { group += (*occupied.add(w)).count_ones(); w += 1; }
+            let row = group as usize * width;
+            let mut id = bin;
+            let mut k = keys;
+            while k != 0 {
+                k -= 1;
+                let radix = *axes.add(k*2+1) as usize;
+                *output.add(row+k) = *axes.add(k*2) + (id % radix) as i64;
+                *valid.add(row+k) = 1;
+                id /= radix;
+            }
+            let stride = width - keys + 1;
+            let mut a = 0;
+            while a+1 < stride {
+                let v = *sums.add(bin*stride+1+a);
+                let spec = *specs.add(a);
+                if v < spec.min || v > spec.max { crate::device::flag_overflow(error); }
+                *output.add(row+keys+a) = v;
+                *valid.add(row+keys+a) = 1;
+                a += 1;
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn run_heads(input: *const i64, order: *const u32, rows: usize, width: usize,
+        keys: usize, masks: *mut u32, counts: *mut u32) {
+        unsafe {
+            let lane = warp::lane_id() as usize;
+            let mut p = thread::index_1d().get() as usize;
+            while p - lane < rows {
+                let mut head = p == 0;
+                if p != 0 && p < rows {
+                    let a = *order.add(p) as usize * width;
+                    let b = *order.add(p-1) as usize * width;
+                    let mut k = 0;
+                    while k < keys && !head { head = *input.add(a+k) != *input.add(b+k); k += 1; }
+                }
+                let mask = warp::ballot(head);
+                if lane == 0 { *masks.add(p/32) = mask; *counts.add(p/32) = mask.count_ones(); }
+                p += thread::gridDim_x() as usize * 256;
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn run_fragments(input: *const i64, order: *const u32, masks: *const u32,
+        ends: *const u32, rows: usize, keys: usize, width: usize, specs: *const Aggregate,
+        output: *mut i64, valid: *mut u8, carries: *mut i64, error: *mut u32) {
+        unsafe {
+            let lane = warp::lane_id();
+            let mut p = thread::index_1d().get() as usize;
+            while p - (lane as usize) < rows {
+                let warp = p/32;
+                let mask = *masks.add(warp);
+                let head = mask & (1 << lane) != 0;
+                let following = mask & ((u32::MAX - 1) << lane);
+                let group = (*ends.add(warp) - following.count_ones() - 1) as usize;
+                let row = if p < rows { *order.add(p) as usize * width } else { 0 };
+                if head {
+                    let mut k = 0;
+                    while k < keys {
+                        *output.add(group*width+k) = *input.add(row+k);
+                        *valid.add(group*width+k) = 1;
+                        k += 1;
                     }
                 }
-                position += 256;
-            }
-            let shared = cuda_device::DynamicSharedArray::<i64, 16>::get_raw().cast::<i64>();
-            *shared.add(lane) = value;
-            cuda_device::thread::sync_threads();
-            let mut stride = 128;
-            while stride != 0 {
-                if lane < stride {
-                    let a = *shared.add(lane);
-                    let b = *shared.add(lane + stride);
-                    *shared.add(lane) = if kind == 2 {
-                        a.min(b)
-                    } else if kind == 3 {
-                        a.max(b)
-                    } else {
-                        match a.checked_add(b) {
-                            Some(sum) => sum,
-                            None => {
-                                crate::device::flag_overflow(error);
-                                0
-                            }
+                let local = lane - (31 - (((mask | 1) & !following).leading_zeros()));
+                let len = following.trailing_zeros().min((rows - warp*32).min(32) as u32);
+                let mut a = 0;
+                while a < width-keys {
+                    let kind = (*specs.add(a)).kind;
+                    let mut v = if p < rows { *input.add(row+keys+a) } else { neutral(kind) };
+                    let mut step = 1;
+                    while step < 32 {
+                        let next = warp::shuffle_down_u64(v as u64, step) as i64;
+                        if local & (2*step-1) == 0 && lane+step < len {
+                            v = combine(kind, v, next, error);
                         }
-                    };
+                        step *= 2;
+                    }
+                    if head { *output.add(group*width+keys+a) = v; *valid.add(group*width+keys+a) = 1; }
+                    else if lane == 0 { *carries.add(warp*(width-keys)+a) = v; }
+                    a += 1;
                 }
-                cuda_device::thread::sync_threads();
-                stride /= 2;
+                p += thread::gridDim_x() as usize * 256;
             }
-            if lane == 0 {
-                let value = *shared;
-                let present = kind < 2 || begin != end;
-                if present && (value < min || value > max) {
-                    crate::device::flag_overflow(error);
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn run_carries(masks: *const u32, ends: *const u32, carries: *const i64, warps: usize,
+        keys: usize, width: usize, specs: *const Aggregate, output: *mut i64, error: *mut u32) {
+        use cuda_device::atomic::{DeviceAtomicI64, AtomicOrdering};
+        unsafe {
+            let mut w = thread::index_1d().get() as usize;
+            while w < warps {
+                if *masks.add(w) & 1 == 0 {
+                    let group = (*ends.add(w-1) - 1) as usize;
+                    let mut a = 0;
+                    while a < width-keys {
+                        let v = *carries.add(w*(width-keys)+a);
+                        let cell = DeviceAtomicI64::from_ptr(output.add(group*width+keys+a));
+                        match (*specs.add(a)).kind {
+                            2 => { cell.fetch_min(v, AtomicOrdering::Relaxed); }
+                            3 => { cell.fetch_max(v, AtomicOrdering::Relaxed); }
+                            _ => { if cell.fetch_add(v, AtomicOrdering::Relaxed).checked_add(v).is_none() {
+                                crate::device::flag_overflow(error);
+                            } }
+                        }
+                        a += 1;
+                    }
                 }
-                *output.add(group * width + column) = if present { value } else { 0 };
-                *valid.add(group * width + column) = present as u8;
+                w += thread::gridDim_x() as usize * 256;
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn run_check(groups: usize, keys: usize, width: usize, specs: *const Aggregate,
+        output: *const i64, error: *mut u32) {
+        unsafe {
+            let mut g = thread::index_1d().get() as usize;
+            while g < groups {
+                let mut a = 0;
+                while a < width-keys {
+                    let spec = *specs.add(a);
+                    let v = *output.add(g*width+keys+a);
+                    if v < spec.min || v > spec.max { crate::device::flag_overflow(error); }
+                    a += 1;
+                }
+                g += thread::gridDim_x() as usize * 256;
             }
         }
     }
@@ -1022,8 +1108,6 @@ mod publication_tests {
             assert!(!Rc::ptr_eq(&first, &second));
             assert!(Rc::ptr_eq(&second, &programs(&second_pool)?));
             for (programs, pool) in [(&first, &first_pool), (&second, &second_pool)] {
-                let exec = programs.thrust.par_in(pool.stream(), pool.resource())?;
-                assert!(std::ptr::eq(*exec.allocator(), pool.resource()));
                 programs.cub.on(pool.stream())?;
             }
             // Replacing the cached context must not invalidate an active owner.
@@ -1075,6 +1159,21 @@ mod publication_tests {
             |values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) },
         );
         assert_eq!(rows.to_host()?, vec![(vec![0, 0], vec![1, 0])]);
+        let bounds = [
+            gpu_device_columns::Bounds::Inclusive { min: i64::MIN, max: i64::MAX },
+            gpu_device_columns::Bounds::Inclusive { min: 0, max: 1 },
+        ];
+        let slots = [GroupLane::Value(1), GroupLane::Presence(1)];
+        let published = unsafe { rows.into_columns::<(i64, bool)>(&slots, &bounds)? };
+        assert_eq!(published.to_host()?, [(0, false)]);
+        for value in [i64::MIN, i64::MAX] {
+            let mut fold = GlobalFold::new(pool.clone(), 1, &[count, min])?;
+            fold.partials = Buffer::from_host(pool.clone(), &[1, value])?;
+            fold.present = Buffer::from_host(pool.clone(), &[1, 1])?;
+            let output = unsafe { fold.finish(Vec::new(), combine)? }.with_decoder(());
+            let published = unsafe { output.into_columns::<(i64, bool)>(&slots, &bounds)? };
+            assert_eq!(published.to_host()?, [(value, true)]);
+        }
         let mut overflow = GlobalFold::new(pool.clone(), 2, &[sum])?;
         overflow.partials = Buffer::from_host(pool.clone(), &[i64::MAX, 1])?;
         let rows = unsafe { overflow.finish(Vec::new(), combine)? }
@@ -1156,7 +1255,7 @@ mod publication_tests {
             };
             let published = unsafe {
                 grouped.with_decoder(()).into_columns::<(i64, i64)>(
-                    &[1, 0],
+                    &[GroupLane::Value(1), GroupLane::Value(0)],
                     &[
                         gpu_device_columns::Bounds::Inclusive {
                             min: i64::MIN,

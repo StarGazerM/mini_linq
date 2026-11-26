@@ -80,7 +80,7 @@ fn flat_slot(rows: &FlatRows, column: &str) -> usize {
 
 /// Prints the recorded bounds source; no printer state is consulted, so every
 /// packing of one record renders the same domain.
-fn packing_bounds(bounds: &FieldBounds) -> TokenStream {
+pub(crate) fn packing_bounds(bounds: &FieldBounds) -> TokenStream {
     match bounds {
         FieldBounds::Column(ColumnBounds::Resident { sources }) => {
             let values = sources.iter().map(|(host, index)| {
@@ -1397,14 +1397,14 @@ impl<'a> Compiler<'a> {
                     while __low < __high {
                         let __middle = __low + (__high - __low) / 2;
                         // DECODE V: P4 membership reconstructs FOR values for full-width comparison, never truncated codes.
-                        if ::cq_gpu_sequence_runtime::device::decode(__column, __middle as u64) < __key {
+                        if ::cq_gpu_sequence_runtime::device::range_payload(__column, __middle as u64) < __key {
                             __low = __middle + 1;
                         } else {
                             __high = __middle;
                         }
                     }
                     __member_found = __low < __end
-                        && ::cq_gpu_sequence_runtime::device::decode(__column, __low as u64) == __key;
+                        && ::cq_gpu_sequence_runtime::device::range_payload(__column, __low as u64) == __key;
                 });
             } else {
                 membership_checks.extend(quote! {
@@ -1414,7 +1414,7 @@ impl<'a> Compiler<'a> {
                     while __low<__high {
                         let __middle=__low+(__high-__low)/2;
                         // DECODE V: P4 lower-bound key search reconstructs FOR values solely for ordered relational comparison.
-                        if ::cq_gpu_sequence_runtime::device::decode(__column,__middle as u64)<__key {
+                        if ::cq_gpu_sequence_runtime::device::range_payload(__column,__middle as u64)<__key {
                             __low=__middle+1;
                         } else {__high=__middle;}
                     }
@@ -1423,7 +1423,7 @@ impl<'a> Compiler<'a> {
                     while __low<__high {
                         let __middle=__low+(__high-__low)/2;
                         // DECODE V: P4 upper-bound key search reconstructs FOR values solely for ordered relational comparison.
-                        if ::cq_gpu_sequence_runtime::device::decode(__column,__middle as u64)<=__key {
+                        if ::cq_gpu_sequence_runtime::device::range_payload(__column,__middle as u64)<=__key {
                             __low=__middle+1;
                         } else {__high=__middle;}
                     }
@@ -1495,7 +1495,7 @@ impl<'a> Compiler<'a> {
         // DECODE V: P6 provider payload reconstructs FOR values without restricting decode to rust_reads columns.
         let assignments = payload.iter().enumerate().map(|(index,column)| {
             let slot=self.slot(column)?;
-            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::decode(*#view.payload.add(#index), (#position) as u64);))
+            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::range_payload(*#view.payload.add(#index), (#position) as u64);))
         }).collect::<syn::Result<Vec<_>>>()?;
         Ok(quote!(#(#assignments)*))
     }
@@ -1519,6 +1519,8 @@ struct Kernel<'c, 'p> {
     parents: std::collections::VecDeque<Vec<String>>,
     /// GPU-ExpansionShare: the chain's published-expansion pool, when shared.
     share: Option<ShareSites>,
+    /// Unconsumed strips after the expansion selected by GPU-ChildSlice.
+    split_remaining: Option<usize>,
 }
 
 /// GPU-ExpansionShare: the dispatch's pool words and the expansion sites.
@@ -1913,6 +1915,15 @@ impl Kernel<'_, '_> {
                         }
                     }
                 });
+                let may_split = self.split_remaining.is_some_and(|n| self.strips.len() >= n);
+                let last_split = self.split_remaining == Some(self.strips.len());
+                let count_children = count_children.map(|count| {
+                    if may_split {
+                        quote! { if !__cq_split || ::cuda_device::thread::blockIdx_x() == 0 { #count } }
+                    } else {
+                        count
+                    }
+                });
                 let tile = strip
                     .rows
                     .ok_or_else(|| error("GPU-Launch: expansion strip lacks its batch rows"))?;
@@ -1975,6 +1986,28 @@ impl Kernel<'_, '_> {
                         || self.compiler.rows.radix_provider(provider).is_some()))
                 .then(|| format_ident!("__cq_run_{provider}"));
                 let tile_u64 = tile as u64;
+                // Formal rule GPU-ChildSlice: blocks revisit the prefix through
+                // this scan, then visit disjoint intervals. The continuation
+                // below each interval remains fused and executes exactly once.
+                let (start, end) = if may_split {
+                    let take = if last_split { quote!(__cq_split) } else {
+                        quote!(__cq_split && __children >= __blocks)
+                    };
+                    (quote! {
+                        let __take = #take;
+                        let (__lo, __hi) = if __take {
+                            let b = ::cuda_device::thread::blockIdx_x();
+                            let q = __children / __blocks;
+                            let r = __children % __blocks;
+                            let lo = b * q + b.min(r);
+                            (lo, lo + q + u32::from(b < r))
+                        } else { (0, __children) };
+                        let __cq_split = __cq_split && !__take;
+                        let mut __child_base = __lo as u64;
+                    }, quote!(__hi as u64))
+                } else {
+                    (quote!(let mut __child_base = 0u64;), quote!(__children as u64))
+                };
                 let (expansion, shared_site) = match (site, self.share.as_mut()) {
                     (Some(site), Some(share)) => {
                         // Descriptor words: site, run, children, reserved; each
@@ -2121,10 +2154,10 @@ impl Kernel<'_, '_> {
                             let #begins = __shared.add(#begin_offset).cast::<u32>();
                             let #offsets = __shared.add(#offsets_offset).cast::<u32>();
                             #scan
-                            let mut __child_base = 0u64;
-                            while __child_base < __children as u64 {
+                            #start
+                            while __child_base < #end {
                                 let __partition_begin = __child_base;
-                                let __partition_end = (__child_base + #tile_u64).min(__children as u64);
+                                let __partition_end = (__child_base + #tile_u64).min(#end);
                                 #partition
                                 __child_base += #tile_u64;
                             }
@@ -2526,7 +2559,7 @@ pub fn translate(
     program: &Program,
     analysis: &Analysis,
 ) -> syn::Result<syn::Expr> {
-    translate_impl(physical, structures, program, analysis, None)
+    translate_impl(physical, structures, program, analysis, Terminal::Columns)
 }
 
 /// Carry checked producer-origin facts independently of resident measured bounds.
@@ -2546,9 +2579,15 @@ pub fn translate_with_origins(
         }
     }
     translate_with_metadata(
-        physical, structures, program, analysis, None,
+        physical, structures, program, analysis, Terminal::Columns,
         std::env::var_os("CQ_EXPANSION_COUNTERS").is_some(), computed_inputs, Some(device_captures),
     )
+}
+
+pub(crate) enum Terminal<'a> {
+    Columns,
+    Arena(&'a syn::Expr),
+    Private(&'a syn::Expr),
 }
 
 pub(crate) fn translate_impl(
@@ -2556,14 +2595,14 @@ pub(crate) fn translate_impl(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    terminal: Terminal<'_>,
 ) -> syn::Result<syn::Expr> {
     translate_observed(
         physical,
         structures,
         program,
         analysis,
-        arena,
+        terminal,
         std::env::var_os("CQ_EXPANSION_COUNTERS").is_some(),
     )
 }
@@ -2573,10 +2612,10 @@ pub(crate) fn translate_observed(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    terminal: Terminal<'_>,
     expansion_counters: bool,
 ) -> syn::Result<syn::Expr> {
-    translate_with_metadata(physical, structures, program, analysis, arena, expansion_counters, &BTreeSet::new(), None)
+    translate_with_metadata(physical, structures, program, analysis, terminal, expansion_counters, &BTreeSet::new(), None)
 }
 
 fn translate_with_metadata(
@@ -2584,11 +2623,16 @@ fn translate_with_metadata(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    terminal: Terminal<'_>,
     expansion_counters: bool,
     computed_inputs: &BTreeSet<(String, usize)>,
     device_captures: Option<&crate::DeviceCaptureBindings>,
 ) -> syn::Result<syn::Expr> {
+    let (arena, private) = match terminal {
+        Terminal::Columns => (None, false),
+        Terminal::Arena(arena) => (Some(arena), false),
+        Terminal::Private(arena) => (Some(arena), true),
+    };
     if program
         .graded
         .as_ref()
@@ -2653,6 +2697,7 @@ fn translate_with_metadata(
     let mut kernels = Vec::new();
     let mut launches = Vec::new();
     let mut program_preparations = Vec::new();
+    let mut reservation_seeds = Vec::new();
     let mut output = None;
     let mut head_terminal = false;
     let final_name = analysis
@@ -3001,6 +3046,8 @@ fn translate_with_metadata(
                         &codecs,
                         &compiler.rows.query_captures,
                         geometry,
+                        &analysis.gpu_bindings.realization.auxiliary.as_ref()
+                            .expect("checked auxiliary geometry").group_reduce,
                         &compiler.rows,
                         &analysis.gpu_bindings.bounds,
                         computed_inputs,
@@ -3590,6 +3637,7 @@ fn translate_with_metadata(
             strips: Default::default(),
             parents: Default::default(),
             share: None,
+            split_remaining: None,
         };
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
@@ -3597,28 +3645,31 @@ fn translate_with_metadata(
         let mut dispatch_share: Option<ShareSites> = None;
         // GPU-RootSelect: the select kernel's per-row test, its chain domain,
         // and the row planner's parameter uses for that test.
-        let mut root_select: Option<(TokenStream, syn::Ident, syn::Ident)> = None;
+        let mut root_select: Option<(TokenStream, syn::Ident, syn::Ident, Option<syn::Ident>)> = None;
         let mut select_uses = BTreeSet::new();
         for (chain_index, chain) in chains.iter().enumerate() {
             let domain = format_ident!("__cq_domain_{chain_index}");
             let enabled = format_ident!("__cq_enabled_{chain_index}");
             let condition = &chain.condition;
-            let source_length = if let Some((prior, _)) = compiler
+            let (source_length, count) = if let Some((prior, _)) = compiler
                 .stored
                 .iter()
                 .enumerate()
                 .find(|(_, store)| store.name == dispatch.outer_store)
             {
                 let length = format_ident!("__cq_store_length_{prior}");
-                quote!(#length)
+                (quote!(#length), None)
             } else {
                 let source = analysis
                     .results
                     .get(&dispatch.outer_store)
                     .map(String::as_str)
                     .unwrap_or(&dispatch.outer_store);
-                compiler.rows.source_len(source)?
+                compiler.rows.source_domain(source)?
             };
+            // GPU-SelectedCount: the host launches over a selected source's
+            // capacity; the kernel's domain is the selection's device count.
+            let count_shadow = count.as_ref().map(|count| quote!(let #domain: u32 = *#count;));
             parameters.extend([abi_parameter(domain.clone(), syn::parse_quote!(u32)), abi_parameter(enabled.clone(), syn::parse_quote!(bool))]);
             arguments.extend([abi_argument(domain.clone(), quote!(#domain)), abi_argument(enabled.clone(), quote!(#enabled))]);
             host_domains.push(quote! {
@@ -3728,7 +3779,7 @@ fn translate_with_metadata(
                     parameters.push(abi_parameter(id.clone(), syn::parse_quote!(*const u32)));
                     arguments.push(abi_argument(id.clone(), quote!(#id.ptr() as *const u32)));
                 }
-                root_select = Some((test, domain.clone(), enabled.clone()));
+                root_select = Some((test, domain.clone(), enabled.clone(), count.clone()));
                 quote! {
                     let __position = *__cq_select.add(__position as usize) as u64;
                     #source
@@ -3754,6 +3805,8 @@ fn translate_with_metadata(
                     cq_lang_sequence::ResourceAllocation::Fold => None,
                 })
                 .collect();
+            generator.split_remaining = execution.chains[chain_index].split_child
+                .map(|level| generator.strips.len() - level - 1);
             let strip = generator.next_strip()?;
             if strip.rows.is_some() {
                 return Err(error(
@@ -3761,8 +3814,9 @@ fn translate_with_metadata(
                 ));
             }
             let tile = match execution.partition {
-                cq_lang_sequence::gpu::Partition::Tiles { rows } => quote!(#rows),
-                cq_lang_sequence::gpu::Partition::One => quote!((#domain as u64).max(1)),
+                cq_lang_sequence::gpu::Partition::Tiles { rows }
+                | cq_lang_sequence::gpu::Partition::Fanout { rows } => quote!(#rows),
+                cq_lang_sequence::gpu::Partition::One { .. } => quote!((#domain as u64).max(1)),
                 // GPU-RootSpread: the launch passes the tile sized from occupancy.
                 cq_lang_sequence::gpu::Partition::Spread { .. } => {
                     let tile = format_ident!("__cq_tile_{chain_index}");
@@ -3971,14 +4025,31 @@ fn translate_with_metadata(
                     }
                 }
             } else {
+                let claim = quote! {
+                    if __tid==0 {
+                        *__tile_slot=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(#cursor))
+                            .fetch_add(1,::cuda_device::atomic::AtomicOrdering::Relaxed);
+                    }
+                    ::cuda_device::thread::sync_threads();
+                };
+                let (setup, ticket) = if execution.chains[chain_index].split_child.is_some() {
+                    (quote! {
+                        let __cq_split = #domain != 0 && #domain as u64 <= #tile as u64;
+                        let mut __visited = false;
+                    }, quote! {
+                        let __tile = if __cq_split {
+                            if __visited { break; }
+                            __visited = true;
+                            0u64
+                        } else { #claim *__tile_slot as u64 };
+                    })
+                } else {
+                    (TokenStream::new(), quote! { #claim let __tile = *__tile_slot as u64; })
+                };
                 quote! {
+                    #setup
                     loop {
-                        if __tid==0 {
-                            *__tile_slot=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(#cursor))
-                                .fetch_add(1,::cuda_device::atomic::AtomicOrdering::Relaxed);
-                        }
-                        ::cuda_device::thread::sync_threads();
-                        let __tile=*__tile_slot as u64;
+                        #ticket
                         if __tile*#tile as u64>=#domain as u64 {break;}
                         let __partition_begin=__tile*#tile as u64;
                         let __partition_end=(__partition_begin+#tile as u64).min(#domain as u64);
@@ -3986,8 +4057,8 @@ fn translate_with_metadata(
                     }
                 }
             };
-            // GPU-RootSelect: the root domain is the selected count, and the
-            // spread tile is resized from it (GPU-RootSpread's formula).
+            // GPU-RootSelect / GPU-SelectedCount: the root domain is a device
+            // count, so the spread tile is resized from it (GPU-RootSpread's formula).
             let select_shadow = match (&root_select, &execution.partition) {
                 (Some(_), cq_lang_sequence::gpu::Partition::Spread { max_rows }) => {
                     let max_rows = *max_rows as u64;
@@ -3996,10 +4067,17 @@ fn translate_with_metadata(
                         let #tile: u32 = ((#domain as u64).div_ceil((__blocks as u64).max(1)).clamp(1, #max_rows)) as u32;
                     }
                 }
+                (None, cq_lang_sequence::gpu::Partition::Spread { max_rows }) if count.is_some() => {
+                    let max_rows = *max_rows as u64;
+                    quote! {
+                        let #tile: u32 = ((#domain as u64).div_ceil((__blocks as u64).max(1)).clamp(1, #max_rows)) as u32;
+                    }
+                }
                 _ => quote!(),
             };
             bodies.push(quote! {
                 if #enabled {
+                    #count_shadow
                     #select_shadow
                     let __partial_base = #chain_index * __blocks as usize;
                     #outside_declare
@@ -4237,8 +4315,9 @@ fn translate_with_metadata(
         kernels.push(dispatch_abi.definition());
         // GPU-RootSelect: the select kernel (one warp-aggregated append per
         // warp of kept root positions) and its launch before the dispatch.
-        let select_launch = if let Some((test, domain, enabled)) = &root_select {
+        let select_launch = if let Some((test, domain, enabled, count)) = &root_select {
             let name = format_ident!("__cq_sequence_select_{index}_{module_name}");
+            let count_shadow = count.as_ref().map(|count| quote!(let #domain: u32 = *#count;));
             let mut declarations = parameters.clone();
             let mut call_arguments = arguments.clone();
             for (declaration, argument) in declarations.iter_mut().zip(call_arguments.iter_mut()) {
@@ -4250,6 +4329,7 @@ fn translate_with_metadata(
             }
             let body = quote! {
                 unsafe {
+                    #count_shadow
                     let __lane = ::cuda_device::warp::lane_id();
                     let __below = ::cuda_device::warp::lanemask_lt();
                     let __stride = ::cuda_device::thread::gridDim_x() as u64 * 256;
@@ -4280,6 +4360,7 @@ fn translate_with_metadata(
             // The row planner's uses for the test, plus the select scalars.
             let mut kernel_uses = select_uses.clone();
             kernel_uses.extend([domain.to_string(), "__cq_select".to_owned(), "__cq_select_count".to_owned()]);
+            kernel_uses.extend(count.iter().map(ToString::to_string));
             let abi = CheckedKernel::lower(&name, quote! {
                 #[kernel]
                 #[launch_bounds(256)]
@@ -4370,11 +4451,18 @@ fn translate_with_metadata(
         let output_keys = format_ident!("__cq_store_keys_{index}");
         let meta_words = 4 + chains.len();
         let parts = match execution.partition {
-            cq_lang_sequence::gpu::Partition::One => quote!(1usize),
-            cq_lang_sequence::gpu::Partition::Tiles { rows } => {
-                let domains = (0..chains.len()).map(|i| {
+            cq_lang_sequence::gpu::Partition::One { .. } => quote!(1usize),
+            cq_lang_sequence::gpu::Partition::Tiles { rows }
+            | cq_lang_sequence::gpu::Partition::Fanout { rows } => {
+                let domains = execution.chains.iter().enumerate().map(|(i, chain)| {
                     let domain = format_ident!("__cq_domain_{i}");
-                    quote!((#domain as usize).div_ceil(#rows))
+                    if chain.split_child.is_some() {
+                        quote!(if #domain != 0 && #domain as usize <= #rows {
+                            usize::MAX
+                        } else { (#domain as usize).div_ceil(#rows) })
+                    } else {
+                        quote!((#domain as usize).div_ceil(#rows))
+                    }
                 });
                 quote!(0usize #(.max(#domains))*)
             }
@@ -4418,28 +4506,37 @@ fn translate_with_metadata(
             let words = share.words(meta_words);
             quote!(+ #words)
         });
-        use cq_lang_sequence::gpu::InitialCapacity;
-        let initial = match (&execution.capacity, capacity) {
-            (InitialCapacity::Zero, _) => quote!(0usize),
+        use cq_lang_sequence::gpu::{InitialCapacity, ReservationSeed};
+        let (initial, validated_count) = match &execution.capacity {
+            InitialCapacity::NoStore => return Err(error("GPU publication lacks a capacity")),
+            InitialCapacity::DispatchCount(seed) => {
+                let first = match seed {
+                    ReservationSeed::Zero => 0,
+                    ReservationSeed::Declared => capacity.ok_or_else(|| {
+                        error("GPU-Launch: declared capacity is absent from the store")
+                    })?,
+                    ReservationSeed::Evidence(rows) => *rows as usize,
+                    ReservationSeed::Rows(rows) => *rows,
+                };
+                let slot = reservation_seeds.len();
+                reservation_seeds.push(first);
+                (
+                    quote!(__cq_reservations[#slot]),
+                    Some(quote!(__cq_reservations[#slot] = __cq_required;)),
+                )
+            }
             // Formal rule GPU-ReservePrevious: the per-hole capacity hint (the
             // last validated count, raised toward twice the hole's high-water
             // mark within a small byte cap) is not a bound. Validate and
             // replay against unchanged inputs on a miss.
-            (InitialCapacity::PreviousCount, _) if arena.is_some() && final_output => {
-                quote!(__cq_arena.capacity_hint(&__cq_arena_packing))
+            InitialCapacity::PreviousCount if arena.is_some() && final_output => {
+                (quote!(__cq_arena.capacity_hint(&__cq_arena_packing)), None)
             }
-            (InitialCapacity::PreviousCount, _) => {
+            InitialCapacity::PreviousCount => {
                 return Err(error(
                     "reserve_previous requires a final GPU arena dispatch",
                 ));
             }
-            (InitialCapacity::Declared, Some(capacity)) => quote!(#capacity),
-            (InitialCapacity::Declared, None) => {
-                return Err(error(
-                    "GPU-Launch: declared capacity is absent from the store",
-                ));
-            }
-            (InitialCapacity::Rows(rows), _) => quote!(#rows),
         };
         let (row_width, key_width) = match &record.storage {
             PublicationStorage::FlatRows(flat) => (flat.width, 0usize),
@@ -4600,6 +4697,15 @@ fn translate_with_metadata(
             })?;
         // GPU-ResidentMeta: a resident dispatch neither allocates nor clears
         // per-attempt metadata, and its local fold has no block partials.
+        let defer_terminal = resident && arena_final && !head && row_width == 0 && range_width == 0
+            && !expansion_counters && dispatch.concatenation == OutputProtocol::ReservePrevious;
+        let defer_private = private && defer_terminal;
+        let private_result = defer_private.then(|| quote! {
+            let __cq_private_result = __cq_arena.private_result();
+        });
+        let result_header = if defer_private {
+            quote!(__cq_private_result.unwrap_or_else(|| __cq_resident.ptr()))
+        } else { quote!(__cq_resident.ptr()) };
         let (
             partials_setup,
             partials_pointer,
@@ -4611,11 +4717,14 @@ fn translate_with_metadata(
             (
                 quote!(),
                 quote!(::core::ptr::null_mut::<i64>()),
-                quote!(let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;),
+                quote! {
+                    let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;
+                    #private_result
+                },
                 quote!(),
                 vec![
                     abi_argument(format_ident!("__meta"), quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER))),
-                    abi_argument(format_ident!("__meta_result"), quote!(__cq_resident.ptr())),
+                    abi_argument(format_ident!("__meta_result"), result_header),
                 ],
                 quote!(()),
             )
@@ -4690,6 +4799,14 @@ fn translate_with_metadata(
                 if __cq_capacity > u32::MAX as usize { return Err("Sequence output exceeds u32 positions".into()); }
             }
         });
+        let defer_result = defer_private.then(|| quote! {
+            if __cq_private_result.is_some() {
+                // The private cut validates this terminal's result header and
+                // owns the lease and inputs until that validation completes.
+                unsafe { __cq_arena.park_private(#output_keys, __cq_run_owners)?; }
+                return Ok(::core::option::Option::None);
+            }
+        });
         let publication_launch = if head { attempt } else { quote! {
             let mut __cq_capacity=#initial;
             let (#stores #output_keys,#store_meta,#store_length)=loop {
@@ -4698,6 +4815,7 @@ fn translate_with_metadata(
                 #key_allocation
                 #meta_allocation
                 #attempt
+                #defer_result
                 #count_readback
                 #record_readback
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}
@@ -4709,6 +4827,7 @@ fn translate_with_metadata(
                 }
                 #report_expansions
                 let __cq_logical = #complete_offsets;
+                #validated_count
                 break (#stores #output_keys,#meta_value,__cq_logical);
             };
             #remember_count
@@ -4732,9 +4851,9 @@ fn translate_with_metadata(
                     let __cq_result = ::core::option::Option::<::gpu_datalog_runtime::CandidateBatch>::None;
                 }
             } else if arena.is_some() {
-                quote! {
-                    let __cq_result = unsafe { #output_keys.finish(#store_length, __cq_run_owners)? };
-                }
+                let ready = quote!(unsafe { #output_keys.finish(#store_length, __cq_run_owners)? });
+                let result = if private { quote!(::core::option::Option::Some(#ready)) } else { ready };
+                quote!(let __cq_result = #result;)
             } else if canonical {
                 quote! {
                     let __cq_keys=unsafe {<#provider>::build_set(
@@ -4843,6 +4962,7 @@ fn translate_with_metadata(
                 strips: Default::default(),
                 parents: Default::default(),
                 share: None,
+                split_remaining: None,
             };
             let write = row.rewrite(generator.output_write()?)?;
             let kernel = format_ident!("__cq_host_output_{module_name}");
@@ -4928,7 +5048,8 @@ fn translate_with_metadata(
         .map(|(expression, packing)| if head_terminal {
             quote!(Ok(::core::option::Option::None))
         } else {
-            packing.empty(expression)
+            let empty = packing.empty(expression);
+            if private { quote!(#empty.map(::core::option::Option::Some)) } else { empty }
         })
         .unwrap_or_else(|| {
             quote!(::cq_gpu_runtime::DeviceColumns::empty(
@@ -4967,6 +5088,7 @@ fn translate_with_metadata(
         quote!(true)
     };
     let preparation_count = program_preparations.len();
+    let reservations = reservation_seeds.len();
     let cache_names = (0..preparation_count).map(|slot| format_ident!("__cq_launch_cache_{slot}"));
     syn::parse2(quote!({
         #[::cuda_device::cuda_module]
@@ -4987,6 +5109,7 @@ fn translate_with_metadata(
                     ::std::sync::Arc<::cuda_core::CudaContext>,
                     #module_name::LoadedModule,
                     [::cq_gpu_runtime::ProgramLaunchCache; #preparation_count],
+                    [usize; #reservations],
                 )>> = const { ::std::cell::RefCell::new(None) };
             }
             ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
@@ -4994,14 +5117,14 @@ fn translate_with_metadata(
             });
             __CQ_SEQUENCE_MODULE.with(|cache| -> ::cq_gpu_runtime::Result<_> {
                 let mut cache=cache.borrow_mut();
-                if cache.as_ref().is_none_or(|(context,_,_)|
+                if cache.as_ref().is_none_or(|(context,_,_,_)|
                     !::std::sync::Arc::ptr_eq(context,__cq_pool.context()))
                 {
                     let __cq_module=unsafe {#module_name::load(__cq_pool.context())?};
                     let prepared=::std::array::from_fn(|_| ::cq_gpu_runtime::ProgramLaunchCache::default());
-                    *cache=Some((__cq_pool.context().clone(),__cq_module,prepared));
+                    *cache=Some((__cq_pool.context().clone(),__cq_module,prepared,[#(#reservation_seeds),*]));
                 }
-                let (_, __cq_module, [#(#cache_names,)*])=cache.as_mut().expect("initialized program launch");
+                let (_, __cq_module, [#(#cache_names,)*], __cq_reservations)=cache.as_mut().expect("initialized program launch");
             let __cq_timing_enabled = #timing_enabled;
             let __cq_timing_wall = __cq_timing_enabled.then(::std::time::Instant::now);
             let __cq_timing_start = if __cq_timing_enabled {
@@ -5080,8 +5203,8 @@ mod tests {
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
-        let plain = super::translate_observed(&physical, &structures, &program, &analysis, None, false).unwrap();
-        let observed = super::translate_observed(&physical, &structures, &program, &analysis, None, true).unwrap();
+        let plain = super::translate_observed(&physical, &structures, &program, &analysis, Terminal::Columns, false).unwrap();
+        let observed = super::translate_observed(&physical, &structures, &program, &analysis, Terminal::Columns, true).unwrap();
         let plain = quote::quote!(#plain).to_string();
         let observed = quote::quote!(#observed).to_string();
         assert!(!plain.contains("__cq_expansions"));
@@ -5166,6 +5289,7 @@ mod tests {
             strips: Default::default(),
             parents: Default::default(),
             share: None,
+            split_remaining: None,
         };
         let write = kernel.output_write().unwrap();
         assert_eq!(
@@ -5216,13 +5340,45 @@ mod tests {
     }
 
     #[test]
+    fn expanding_root_uses_declared_tile_only_when_domain_fills_it() {
+        use cq_lang_sequence::gpu::Partition;
+        let Stack { physical, structures, mut program } = arena_program(false);
+        for (rows, partition, child) in [
+            (None, Partition::Fanout { rows: 256 }, Some(1)),
+            (Some(1usize), Partition::Fanout { rows: 256 }, Some(1)),
+            (Some(4096), Partition::Tiles { rows: 256 }, None),
+        ] {
+            if let Some(rows) = rows {
+                program.evidence = syn::parse_quote!(evidence from authored("launch fixture") { count R = #rows; });
+            }
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let launch = analysis.dispatches[0].gpu.as_ref().unwrap();
+            assert_eq!((&launch.partition, launch.chains[0].split_child), (&partition, child));
+            for (alternative, split, legal) in [
+                (Partition::Tiles { rows: 256 }, None, true),
+                (Partition::Tiles { rows: 256 }, Some(1), false),
+                (Partition::Fanout { rows: 256 }, None, true),
+                (Partition::Fanout { rows: 256 }, Some(1), true),
+                (Partition::Fanout { rows: 256 }, Some(0), false),
+                (Partition::Fanout { rows: 256 }, Some(2), false),
+            ] {
+                let mut supplied = analysis.clone();
+                let execution = supplied.dispatches[0].gpu.as_mut().unwrap();
+                execution.partition = alternative;
+                execution.chains[0].split_child = split;
+                assert_eq!(cq_lang_sequence::gpu::check(&program, &supplied).is_ok(), legal);
+            }
+        }
+    }
+
+    #[test]
     fn program_launch_preparation_is_recorded_checked_and_printed() {
         let Stack { physical, structures, program } = arena_program(false);
         let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_bindings.realization.launches, [Launch::ProgramOccupancy]);
         let arena: syn::Expr = syn::parse_quote!(arena);
-        let printed = translate_observed(&physical, &structures, &program, &analysis, Some(&arena), false)
+        let printed = translate_observed(&physical, &structures, &program, &analysis, Terminal::Arena(&arena), false)
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("ProgramLaunchCache"));
         assert!(printed.contains("__cq_prepare_program_"));
@@ -5234,7 +5390,7 @@ mod tests {
         let mut alternate = analysis.clone();
         alternate.gpu_bindings.realization.launches[0] = Launch::InvocationOccupancy;
         crate::realize::check(&physical, &structures, &program, &structure_analysis, &alternate, &alternate.gpu_bindings.realization).unwrap();
-        let printed = translate_observed(&physical, &structures, &program, &alternate, Some(&arena), false)
+        let printed = translate_observed(&physical, &structures, &program, &alternate, Terminal::Arena(&arena), false)
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("let __cq_probe"));
         assert!(!printed.contains("__cq_prepare_program_"));
@@ -5243,10 +5399,38 @@ mod tests {
         let mut missing = analysis.clone();
         missing.gpu_bindings.realization.launches.clear();
         assert!(crate::realize::check(&physical, &structures, &program, &structure_analysis, &missing, &missing.gpu_bindings.realization).is_err());
-        assert!(translate_observed(&physical, &structures, &program, &missing, Some(&arena), false).is_err());
+        assert!(translate_observed(&physical, &structures, &program, &missing, Terminal::Arena(&arena), false).is_err());
         let mut wrong_partition = analysis.clone();
         wrong_partition.gpu_bindings.realization.launches[0] = Launch::ProgramOne;
         assert!(crate::realize::check(&physical, &structures, &program, &structure_analysis, &wrong_partition, &wrong_partition.gpu_bindings.realization).is_err());
+    }
+
+    #[test]
+    fn only_private_resident_terminals_can_park_before_readback() {
+        let Stack { mut physical, structures, mut program } = arena_program(false);
+        physical.program.captures.items.push(syn::parse_quote!(if (publish)));
+        let arena = syn::parse_quote!(&mut *arena);
+        for (protocol, private, counters, parks) in [
+            (OutputProtocol::ReservePrevious, true, false, true),
+            (OutputProtocol::ReservePrevious, false, false, false),
+            (OutputProtocol::ReservePrevious, true, true, false),
+            (OutputProtocol::Count, true, false, false),
+        ] {
+            program.sequence.output = Some(protocol);
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let terminal = if private { Terminal::Private(&arena) } else { Terminal::Arena(&arena) };
+            let printed = translate_observed(&physical, &structures, &program, &analysis, terminal, counters)
+                .unwrap().to_token_stream().to_string();
+            assert_eq!(printed.contains("private_result ()"), parks);
+            assert_eq!(printed.contains("park_private"), parks);
+            if parks {
+                assert!(printed.find("park_private").unwrap() < printed.find("let __cq_counts").unwrap());
+            }
+            // Both successful completion and the empty answer gate keep the
+            // requested ABI, even when the dispatch can't use a private cut.
+            assert_eq!(printed.contains("Option :: Some (unsafe"), private);
+            assert_eq!(printed.contains("map (:: core :: option :: Option :: Some)"), private);
+        }
     }
 
     #[test]
@@ -5302,12 +5486,12 @@ mod tests {
             records.get_mut("index").unwrap().arena = Some(arena.clone());
         }));
         let arena_expr: syn::Expr = syn::parse_quote!(arena);
-        translate_observed(&physical, &structures, &program, &analysis, Some(&arena_expr), false).unwrap();
+        translate_observed(&physical, &structures, &program, &analysis, Terminal::Arena(&arena_expr), false).unwrap();
         // A canonical terminal publishes no raw candidates into an arena.
         let Stack { physical, structures, program } = arena_program(true);
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_publications["output_rows"].arena, None);
-        assert!(translate_observed(&physical, &structures, &program, &analysis, Some(&arena_expr), false).is_err());
+        assert!(translate_observed(&physical, &structures, &program, &analysis, Terminal::Arena(&arena_expr), false).is_err());
     }
 
     /// Identifiers of generated code; independent of token spacing.
@@ -5328,17 +5512,17 @@ mod tests {
         }
     }
 
-    /// Accumulator providers of every emitted runtime fold; `None` is the
-    /// global (keyless) `GlobalFold` path.
-    fn fold_providers(generated: &syn::Expr) -> Vec<Option<syn::Type>> {
-        struct Folds(Vec<Option<syn::Type>>);
+    /// Calls into the recorded provider, in evaluation order. A guarded
+    /// dense fold and its segmented fallback must name the very same type.
+    fn fold_providers(generated: &syn::Expr) -> Vec<(String, Option<syn::Type>)> {
+        struct Folds(Vec<(String, Option<syn::Type>)>);
         impl<'a> syn::visit::Visit<'a> for Folds {
             fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
                 if let syn::Expr::Path(path) = &*call.func
-                    && is_fold_call(&path.path)
+                    && let Some(method) = path.path.segments.last()
+                    && (is_fold_call(&path.path) || method.ident == "dense_frame")
                 {
-                    self.0
-                        .push(path.qself.as_ref().map(|qself| (*qself.ty).clone()));
+                    self.0.push((method.ident.to_string(), path.qself.as_ref().map(|qself| (*qself.ty).clone())));
                 }
                 syn::visit::visit_expr_call(self, call);
             }
@@ -6179,7 +6363,10 @@ mod tests {
             let expression = translate(&physical, &structures, &program, &analysis).unwrap();
             let generated = expression.to_token_stream().to_string();
             let expected = keyed.then(|| structure_analysis.groups["grouped"].ty.clone());
-            assert_eq!(fold_providers(&expression), vec![expected], "{generated}");
+            let calls = if keyed {
+                vec![("dense_frame".into(), expected.clone()), ("fold".into(), expected)]
+            } else { vec![("new".into(), None)] };
+            assert_eq!(fold_providers(&expression), calls, "{generated}");
             let names = idents(expression.to_token_stream());
             assert!(!names.contains("upload_numeric_columns"));
             assert!(!names.contains("from_rows"));
@@ -6216,7 +6403,8 @@ mod tests {
         let names = idents(expression.to_token_stream());
         assert_eq!(
             fold_providers(&expression),
-            vec![Some(crate::grouping::provider().ty)],
+            vec![("dense_frame".into(), Some(crate::grouping::provider().ty)),
+                 ("fold".into(), Some(crate::grouping::provider().ty))],
         );
         assert!(matches!(
             analysis.gpu_publications["groups"].storage,
@@ -6325,7 +6513,7 @@ mod tests {
                 .expect(&generated);
             assert!(upload < reduction, "{generated}");
             assert!(calls.1, "the authored opaque Rust cast must be preserved");
-            assert_eq!(fold_providers(&expression), vec![None], "{generated}");
+            assert_eq!(fold_providers(&expression), vec![("new".into(), None)], "{generated}");
         }
     }
 
@@ -6659,6 +6847,7 @@ mod tests {
                         strips: Default::default(),
                         parents: Default::default(),
                         share: None,
+                        split_remaining: None,
                     };
                     let strip = Strip {
                         rows: None,

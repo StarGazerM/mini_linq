@@ -91,9 +91,9 @@ pub fn evaluate_plan<'a>(
                                     .map(|(column, value)| (symbol_name(&column.name), *value))
                                     .collect();
                                 constants
-                                    .equalities
+                                    .bindings
                                     .iter()
-                                    .all(|equality| evaluate_equality(equality, &source))
+                                    .all(|constant| evaluate_occurrence_constant(constant, &source))
                             })
                         })
                         .map(|row| {

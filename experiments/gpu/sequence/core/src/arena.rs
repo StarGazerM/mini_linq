@@ -1,5 +1,6 @@
 //! Caller-owned candidate publication for checked GPU Sequence programs.
 
+use crate::emit::Terminal;
 use cq_lang_sequence::gpu::publication::ArenaRows;
 use cq_lang_sequence::{Analysis, Program};
 use proc_macro2::TokenStream;
@@ -18,7 +19,19 @@ pub fn translate_arena(
     analysis: &Analysis,
     arena: &syn::Expr,
 ) -> syn::Result<syn::Expr> {
-    crate::emit::translate_impl(physical, structures, program, analysis, Some(arena))
+    crate::emit::translate_impl(physical, structures, program, analysis, Terminal::Arena(arena))
+}
+
+/// Translate a `private; arena` terminal: return a ready batch in `Some`,
+/// or park a resident terminal in the active private cut and return `None`.
+pub fn translate_arena_private(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+    arena: &syn::Expr,
+) -> syn::Result<syn::Expr> {
+    crate::emit::translate_impl(physical, structures, program, analysis, Terminal::Private(arena))
 }
 
 /// Translate a `head; arena` terminal. A successful refinement appends to
@@ -34,7 +47,7 @@ pub fn translate_arena_head(
     let counters = std::env::var_os("CQ_EXPANSION_COUNTERS").is_some();
     let append = !counters && cq_lang_sequence::gpu::request_head_cursor(program, &mut analysis);
     let expression = crate::emit::translate_observed(
-        physical, structures, program, &analysis, Some(arena), counters,
+        physical, structures, program, &analysis, Terminal::Arena(arena), counters,
     )?;
     if append {
         Ok(expression)

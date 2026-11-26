@@ -177,7 +177,7 @@ fn literals_are_relational_reads_and_repeats_are_relational_equalities() {
     assert_eq!(rename.mapping.len(), 1);
     assert_eq!(rename.mapping[0].source, "a");
     assert_eq!(
-        rename.constants.as_ref().unwrap().equalities,
+        rename.constants.as_ref().unwrap().bindings,
         syn::parse_quote!(b = 5)
     );
     assert!(selections.iter().any(|s| {
@@ -1047,7 +1047,7 @@ fn literal_occurrences_drop_exact_source_positions_and_reject_changed_values() {
             })
             .unwrap();
         assert_eq!(rename.mapping.len(), 1);
-        assert_eq!(rename.constants.as_ref().unwrap().equalities.len(), 2);
+        assert_eq!(rename.constants.as_ref().unwrap().bindings.len(), 2);
         assert!(
             !target
                 .plan
@@ -1069,8 +1069,8 @@ fn literal_occurrences_drop_exact_source_positions_and_reject_changed_values() {
                 _ => None,
             })
             .unwrap();
-        rename.constants.as_mut().unwrap().equalities[0].right =
-            ra::EqualityValue::Literal(syn::parse_quote!(99));
+        rename.constants.as_mut().unwrap().bindings[0].value =
+            cq_lang_vo::syntax::constraint::Term::Literal(Box::new(syn::parse_quote!(99)));
         ra::contract::check(&changed).unwrap();
         assert!(check(&normal, &planned, &changed).is_err());
     }
@@ -1389,4 +1389,40 @@ fn native_anti_proof_allows_positive_join_and_total_rust_reordering() {
         syn::parse_quote!(anti [#keys] #earlier, #right);
     ra::contract::check(&delayed).unwrap();
     refines(&source, &written, &delayed).unwrap();
+}
+
+/// RL-Occurrence / A-DomainLiteral: an atom literal at a code-domain column
+/// restricts its occurrence through its capture; the same equality written as
+/// `where` stays a selection over the unrestricted occurrence.
+#[test]
+fn domain_atom_literals_restrict_their_occurrence_not_a_selection() {
+    let lower = |tokens: TokenStream| {
+        let normal = cq::normal::normalize(&cq(tokens)).unwrap();
+        let target = compile(&normal, &restricted(&normal)).unwrap();
+        target
+            .plan
+            .definitions
+            .iter()
+            .map(|d| d.operator.to_token_stream().to_string())
+            .collect::<Vec<_>>()
+    };
+    let literal = lower(quote! {
+        struct Q;
+        relation R(a: i32, m: Code in (modes));
+        relation answer(a: i32);
+        answer(a) :- R(a, "AIR");
+    });
+    assert!(
+        literal.contains(&"rename R { a - > a } constants { m = @ (__cq_c_0) }".to_owned()),
+        "{literal:?}"
+    );
+    assert!(!literal.iter().any(|operator| operator.starts_with("select")), "{literal:?}");
+    let written = lower(quote! {
+        struct Q;
+        relation R(a: i32, m: Code in (modes));
+        relation answer(a: i32);
+        answer(a) :- R(a, m), where m == "AIR";
+    });
+    assert!(written.iter().any(|operator| operator.starts_with("rename R { a - > a , m - > m }")), "{written:?}");
+    assert!(written.iter().any(|operator| operator.starts_with("select")), "{written:?}");
 }

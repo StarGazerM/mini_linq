@@ -204,6 +204,7 @@ fn value_key(
 /// exactly the captures those forms read.
 pub(crate) fn check(
     records: &cq_lang_sequence::gpu::realization::Captures,
+    physical: &cq_lang_structures::physical::Program,
     definitions: &BTreeMap<String, cq_lang_structures::physical::Definition>,
     structure_analysis: &cq_lang_structures::Analysis,
     analysis: &cq_lang_sequence::Analysis,
@@ -327,6 +328,18 @@ pub(crate) fn check(
         if let Operator::Select(_) | Operator::Point(..) | Operator::Range(..) =
             &definition.operator
         {
+            expected_host.insert(name.clone());
+        }
+        // An occurrence constant's host form resolves each closed constant to
+        // its recorded Value capture at the declared source column.
+        if let Some((constants, columns)) = crate::realize::closed_constants(physical, definition) {
+            let mut frozen = Captures::frozen(&records.captures, &records.query);
+            let host = frozen.host_constants(constants, columns, codecs);
+            if frozen.missing || records.host.get(name) != Some(&host) {
+                return Err(error(
+                    "occurrence constants do not resolve to recorded closed values",
+                ));
+            }
             expected_host.insert(name.clone());
         }
     }
@@ -782,6 +795,54 @@ impl Captures {
         for value in &mut theta.constraints {
             constraint(self, value, types, codecs);
         }
+    }
+
+    /// GPU-Capture for occurrence constants: each closed constant of a rename
+    /// is a Value capture at its source column's declared type and logical
+    /// identity. The host form compares each such source column with its cache.
+    pub fn host_constants(
+        &mut self,
+        constants: &cq_lang_structures::syntax::algebra::OccurrenceConstants,
+        columns: &cq_lang_structures::syntax::CommaList<cq_lang_structures::syntax::ColumnDecl>,
+        codecs: &crate::runs::Codecs,
+    ) -> Theta {
+        let mut theta = Theta::default();
+        for binding in &constants.bindings {
+            let Term::Closed(value) = &binding.value else {
+                continue;
+            };
+            let column = columns
+                .iter()
+                .find(|column| column.name == binding.column)
+                .expect("checked occurrence constant column");
+            let index = self.value_index(
+                value,
+                &column.ty,
+                column.logical_type_id,
+                Some(&binding.column.to_string()),
+                codecs,
+            );
+            // A frozen lookup that misses has flagged `missing` and has no record.
+            let Some(record) = self.records.get(index) else {
+                continue;
+            };
+            let Capture::Value {
+                expression,
+                logical,
+                codec,
+                ..
+            } = record
+            else {
+                unreachable!("value_index records Value captures")
+            };
+            let host = host_value(index, expression, logical, codec.as_ref());
+            theta.push_constraint(cq_lang_structures::syntax::Constraint::Compare {
+                left: Term::Variable(binding.column.clone()),
+                comparison: Comparison::Eq(Default::default()),
+                right: Term::Closed(syn::parse_quote!(#host)),
+            });
+        }
+        theta
     }
 
     /// Rust remains a single callable whose body is compiled by cuda-oxide.
@@ -1277,7 +1338,7 @@ mod tests {
         };
         let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
-        assert!(check(&records, &definitions, &structure_analysis, &analysis, &codecs).is_ok());
+        assert!(check(&records, &physical, &definitions, &structure_analysis, &analysis, &codecs).is_ok());
         for change_identity in [true, false] {
             let mut changed = records.clone();
             let Capture::Value {
@@ -1291,7 +1352,7 @@ mod tests {
             } else {
                 *codec = Some(syn::parse_quote!(DifferentPayload));
             }
-            assert!(check(&changed, &definitions, &structure_analysis, &analysis, &codecs).is_err());
+            assert!(check(&changed, &physical, &definitions, &structure_analysis, &analysis, &codecs).is_err());
         }
     }
 

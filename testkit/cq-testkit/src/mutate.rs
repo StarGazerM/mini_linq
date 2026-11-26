@@ -480,24 +480,24 @@ pub fn physical(
                     with(Operator::PermuteKey, "swap rename targets", Op::Rename(m));
                 }
                 if let Some(constants) = &r.constants {
-                    for i in 0..constants.equalities.len() {
+                    for i in 0..constants.bindings.len() {
                         let mut m = r.clone();
-                        let kept = without(&constants.equalities, i);
+                        let kept = without(&constants.bindings, i);
                         if kept.is_empty() {
                             m.constants = None;
                         } else {
-                            m.constants.as_mut().unwrap().equalities = kept;
+                            m.constants.as_mut().unwrap().bindings = kept;
                         }
                         with(
                             Operator::DropConstraint,
                             &format!("drop constant {i}"),
                             Op::Rename(m),
                         );
-                        if let cq_syntax::EqualityValue::Literal(l) = &constants.equalities[i].right
+                        if let cq_syntax::constraint::Term::Literal(l) = &constants.bindings[i].value
                         {
                             let mut m = r.clone();
-                            m.constants.as_mut().unwrap().equalities[i].right =
-                                cq_syntax::EqualityValue::Literal(parse_quote!((#l) + 1));
+                            m.constants.as_mut().unwrap().bindings[i].value =
+                                cq_syntax::constraint::Term::Literal(Box::new(parse_quote!((#l) + 1)));
                             with(
                                 Operator::ShiftBound,
                                 &format!("constant {i} + 1"),

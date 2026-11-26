@@ -5,7 +5,7 @@ fn program() -> cq_lang_datalog_round::Program {
     program_with_symbols(syn::parse_quote!(i32), quote!())
 }
 
-fn program_with_symbols(
+pub(crate) fn program_with_symbols(
     ty: syn::Type,
     symbols: proc_macro2::TokenStream,
 ) -> cq_lang_datalog_round::Program {
@@ -61,6 +61,50 @@ fn program_with_orders(
     )
     .unwrap();
     crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap()
+}
+#[test]
+fn union_project_certificate_is_bound_to_the_rule_and_its_head_positions() {
+    let mut p = program();
+    let inputs = crate::bindings::input_providers(&p).unwrap();
+    let s = &p.context.strata[0];
+    let r = &s.steps[0];
+    let certified = crate::union_project::plans(&p, &inputs);
+    assert_eq!(certified.len(), 1, "only the recursive composition is a union");
+    let mut plan = certified[&r.hole].clone();
+    assert!(plan.witness_second && plan.group_first);
+    let terminal = p.holes[r.hole].pipeline.passes.last_mut().unwrap();
+    let (record, ordinary) = crate::union_project::split(&terminal.arguments).unwrap();
+    assert_eq!(record.as_ref(), Some(&plan));
+    plan.group_first = false;
+    terminal.arguments = quote!(#plan #ordinary);
+    assert!(crate::bindings::check(&p).is_err(), "transposed head must be rejected");
+}
+
+#[test]
+fn union_project_rejects_residual_predicates_and_nonendpoint_heads() {
+    let mut p = program();
+    let inputs = crate::bindings::input_providers(&p).unwrap();
+    let r = p.context.strata[0].steps[0].clone();
+    let original = p.holes[r.hole].cq.query.clone();
+    for bad in [syn::parse_quote!(*y), syn::parse_quote!(*x + 1), syn::parse_quote!(*z)] {
+        p.holes[r.hole].cq.query.head.args[0] = bad;
+        assert!(crate::union_project::UnionProject::recognize(&p, &r, &inputs).is_none());
+    }
+    p.holes[r.hole].cq.query = original;
+    p.holes[r.hole].cq.query.body.push(syn::parse_quote!(where x != z));
+    assert!(crate::union_project::UnionProject::recognize(&p, &r, &inputs).is_none());
+}
+
+
+#[test]
+fn round_shared_marker_cannot_merge_seed_and_step_across_publication() {
+    let mut p = program_with_symbols(syn::parse_quote!(u32), quote!());
+    for h in &mut p.holes {
+        let pass = h.pipeline.passes.last_mut().unwrap();
+        let arena = &pass.arguments;
+        pass.arguments = quote!(round_shared(0,2); #arena);
+    }
+    assert!(crate::bindings::check(&p).unwrap_err().to_string().contains("RoundShared"));
 }
 
 #[test]
@@ -309,7 +353,11 @@ fn negative_device_bindings_preserve_fork_declarations() {
         declaration.hosts.is_empty(),
         "device inputs do not declare CPU host reads"
     );
-    print::compile(&bound).unwrap();
+    let syn::Expr::Block(printed) = print::compile(&bound).unwrap() else { panic!("expected generated block") };
+    let key_function = quote::format_ident!("__cq_gpu_hole_{}", key.hole);
+    assert!(printed.block.stmts.iter().any(|stmt| matches!(stmt, syn::Stmt::Item(syn::Item::Fn(f))
+        if f.sig.ident == key_function && f.sig.output == syn::parse_quote!(-> ::gpu_datalog_runtime::CandidateBatch))),
+        "immediate key-set consumers cannot park at a later rule cut");
     let records = bound.storage.device.as_ref().unwrap();
     for record in records.layouts.iter()
         .chain(&records.delta_layouts).chain(&records.negations)
@@ -353,11 +401,10 @@ fn tc_emits_resident_waves_admission_and_publication() {
     assert!(source.contains("while"));
     assert!(source.contains("translate_arena"));
     assert_eq!(source.matches("Rows :: rows").count(), 1);
-    assert_eq!(source.matches(". hole (").count(), program.holes.len());
+    // The parked lease retains its hole; validation never guesses a hint.
     for hole in 0..program.holes.len() {
         assert_eq!(
-            source.matches(&quote!(.hole(#hole)).to_string()).count(),
-            1,
+            source.matches(&quote!(.hole(#hole)).to_string()).count(), 1,
             "each hole must retain its own previous-capacity reservation"
         );
     }
@@ -727,7 +774,7 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
     // Explicit legacy is legal even when the whole head could use a cursor.
     check(&mixed).unwrap();
     let source = print::compile(&grouped).unwrap().to_token_stream().to_string();
-    assert_eq!(source.matches("HeadCursors :: new").count(), 2);
+    assert_eq!(source.matches("EpochCut :: new").count(), 2);
     assert_eq!(source.matches(". read ()").count(), 2);
     assert_eq!(source.matches(". begin_head (").count(), 4);
     assert_eq!(source.matches(". finish_head (").count(), 4);
@@ -737,7 +784,7 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
     assert_eq!(source.matches(". trace_head_count ()").count(), grouped.holes.len());
     // Each macro queue appears in a standalone item, not at both call sites.
     assert_eq!(source.matches("consumer :: output").count(), grouped.holes.len());
-    assert!(source.contains("if __cq_gpu_active"));
+    assert!(source.contains(". active ("));
     assert!(source.contains("if let Some (__cq_gpu_batch)"));
     assert!(source.contains("else if __cq_gpu_trace_memory || :: gpu_datalog_runtime :: trace_kernels ()"));
     assert!(source.contains("checked_sub (* __cq_gpu_last)"));
@@ -752,6 +799,19 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
             retry = retry.split_once(function.as_str()).unwrap().1;
         }
     }
+    let mixed_source = print::compile(&mixed).unwrap().to_token_stream().to_string();
+    assert_eq!(mixed_source.matches("begin_private").count(), a_seeds.len());
+    assert_eq!(mixed_source.matches("finish_private").count(), a_seeds.len());
+    assert_eq!(mixed_source.matches(". read ()").count(), 2);
+    // Private candidates are appended only after validation, at their original
+    // bag positions, regardless of which writers needed an immediate replay.
+    let (_, published) = mixed_source.split_once("__cq_gpu_seed_group_0 . read ()").unwrap();
+    let (published, _) = published.split_once(". fresh_batches (").unwrap();
+    let mut remaining = published;
+    for &hole in &a_seeds {
+        remaining = remaining.split_once(&format!(". push (__cq_gpu_result_{hole} . expect")).unwrap().1;
+    }
+    assert_eq!(mixed_source.matches("consumer :: output").count(), mixed.holes.len());
 }
 
 #[test]
@@ -807,7 +867,7 @@ fn hooked_version_keeps_its_whole_head_legacy_without_disabling_other_heads_or_p
         if i == first.hole {
             assert!(signature.is_none(), "manual replacement should compile no kernel");
         } else {
-            let expected: syn::ReturnType = if head_argument(hole) {
+            let expected: syn::ReturnType = if head_argument(hole) || (enabled && crate::bindings::replay_safe(&hole.cq)) {
                 syn::parse_quote!(-> ::core::option::Option<::gpu_datalog_runtime::CandidateBatch>)
             } else {
                 syn::parse_quote!(-> ::gpu_datalog_runtime::CandidateBatch)

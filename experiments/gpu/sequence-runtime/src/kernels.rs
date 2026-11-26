@@ -1,6 +1,23 @@
 use cuda_device::thread;
 use gpu_device_columns::{decode_source, SourceView};
 
+/// One warp owns this many consecutive directory entries.
+pub(crate) const DIRECTORY_TILE: usize = 256;
+
+#[cuda_device::device]
+#[inline(always)]
+unsafe fn key_lower_bound(keys: *const u32, mut lo: u32, mut hi: u32, key: u32) -> u32 {
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if unsafe { *keys.add(mid as usize) } < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 #[cuda_device::cuda_module]
 pub mod build {
     use super::*;
@@ -70,6 +87,61 @@ pub mod build {
         }
     }
 
+    /// Locate a tile's endpoint ranks together. Neighboring sorted rows then
+    /// delimit disjoint directory intervals, including holes and the sentinel.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn dense_directory(keys: *const u32, rows: u32, entries: u32, offsets: *mut u32) {
+        use cuda_device::warp;
+        let lane = warp::lane_id() as usize;
+        let mut start = thread::index_1d().get() / 32 * DIRECTORY_TILE;
+        let stride = thread::gridDim_x() as usize * (256 / 32) * DIRECTORY_TILE;
+        while start < entries as usize {
+            let last = (start + DIRECTORY_TILE).min(entries as usize) - 1;
+            let target = if lane == 0 { start } else { last };
+            let rank = if target == 0 {
+                0
+            } else if target + 1 == entries as usize {
+                rows
+            } else if lane < 2 {
+                unsafe { key_lower_bound(keys, 0, rows, target as u32) }
+            } else {
+                0
+            };
+            let lo = warp::shuffle_sync(u32::MAX, rank, 0);
+            let hi = warp::shuffle_sync(u32::MAX, rank, 1);
+            let span = hi - lo;
+            // Do not walk a huge duplicate run for a tiny directory slice.
+            // Search locally only if that takes fewer probes than a linear pass.
+            let search_cost = (last - start + 1) * (u32::BITS - span.leading_zeros()) as usize;
+            if span == 0 || span as usize > search_cost {
+                let mut d = start + lane;
+                while d <= last {
+                    let rank = unsafe { key_lower_bound(keys, lo, hi, d as u32) };
+                    unsafe { *offsets.add(d) = rank };
+                    d += 32;
+                }
+            } else {
+                let mut row = lo as usize + lane;
+                while row <= hi as usize {
+                    let mut d = if row == lo as usize {
+                        start
+                    } else {
+                        unsafe { *keys.add(row - 1) as usize + 1 }
+                    };
+                    let end = if row == hi as usize { last } else { unsafe { *keys.add(row) as usize } };
+                    while d <= end {
+                        unsafe { *offsets.add(d) = row as u32 };
+                        d += 1;
+                    }
+                    row += 32;
+                }
+            }
+            start += stride;
+        }
+    }
+
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
@@ -100,23 +172,56 @@ pub mod build {
         }
     }
 
-    /// Selection uses decoded integers, including negative signed payloads.
+    /// Formal rule GPU-SelectRows: one pass. Each warp owns contiguous 256-row
+    /// chunks: eight ballots decide the chunk's selected rows, one atomic
+    /// reserves their output range, and the warp writes them in source order.
+    /// Chunks land in unspecified order; the device count is the selected total.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn range_flags(column: SourceView, rows: u32, start: i64, end: i64, flags: *mut u32) {
-        let mut row = thread::index_1d().get() as u32;
-        let stride = thread::gridDim_x() * 256;
-        while row < rows {
-            unsafe {
-                // DECODE V: range selection decodes before relational comparison; P6 translate bounds into the encoded domain.
-                let value = decode_source(column, row as u64);
-                *flags.add(row as usize) = (start <= value && value < end) as u32;
+    pub fn range_select(column: SourceView, rows: u32, start: i64, end: i64, out: *mut u32, count: *mut u32) {
+        use cuda_device::warp;
+        const CHUNK_BALLOTS: u64 = 8;
+        let lane = warp::lane_id();
+        let below = warp::lanemask_lt();
+        let warps = thread::gridDim_x() as u64 * 8;
+        let mut chunk = (thread::blockIdx_x() as u64 * 256 + thread::threadIdx_x() as u64) / 32;
+        while chunk * 32 * CHUNK_BALLOTS < rows as u64 {
+            let base = chunk * 32 * CHUNK_BALLOTS;
+            let mut ballots = [0u32; 8];
+            let mut total = 0u32;
+            let mut k = 0u64;
+            while k < CHUNK_BALLOTS {
+                let row = base + k * 32 + lane as u64;
+                let keep = row < rows as u64 && {
+                    // DECODE V: range selection decodes before relational comparison; P6 translate bounds into the encoded domain.
+                    let value = unsafe { decode_source(column, row) };
+                    start <= value && value < end
+                };
+                let ballot = warp::ballot_sync(u32::MAX, keep);
+                ballots[k as usize] = ballot;
+                total += ballot.count_ones();
+                k += 1;
             }
-            row = match row.checked_add(stride) {
-                Some(next) => next,
-                None => break,
-            };
+            if total != 0 {
+                let mut at = 0u32;
+                if lane == 0 {
+                    at = unsafe { cuda_device::atomic::DeviceAtomicU32::from_ptr(count) }
+                        .fetch_add(total, cuda_device::atomic::AtomicOrdering::Relaxed);
+                }
+                let mut at = warp::shuffle_sync(u32::MAX, at, 0);
+                let mut k = 0u64;
+                while k < CHUNK_BALLOTS {
+                    let ballot = ballots[k as usize];
+                    if (ballot >> lane) & 1 != 0 {
+                        let row = base + k * 32 + lane as u64;
+                        unsafe { *out.add((at + (ballot & below).count_ones()) as usize) = row as u32; }
+                    }
+                    at += ballot.count_ones();
+                    k += 1;
+                }
+            }
+            chunk += warps;
         }
     }
 }

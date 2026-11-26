@@ -566,6 +566,14 @@ Provider choices are recorded upstream, never by type name.
   only demanded fields from complete keys. `RangeProvider` remains the
   separate dense-domain provider. The former public `DeviceRuns` and
   packed-word `DeviceLayout` protocols are retired, not compatibility aliases.
+- **Dense range index payloads (GPU-RangePayload).** A range over immutable
+  resident columns retains a single stable base-row permutation. Lookup
+  decodes the demanded source fields at the matching positions; construction
+  does not gather and recompress entire columns. A keyless unfiltered scan
+  needs no permutation, and a membership-only index retains no payload rows.
+  Projections of mutable build-time rows or packed keys are snapshotted as
+  plain lanes on the build stream. Selection preserves source bounds as
+  enclosures; an empty result has no extrema.
 
 `experiments/gpu/datalog-runtime/tests/radix_run.rs` checks these laws on
 the device with fixed seeds: `u64` keys against `cq_storage::RadixRun`

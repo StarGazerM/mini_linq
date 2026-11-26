@@ -16,45 +16,45 @@ pub mod ascent_engine;
 pub mod loader;
 pub mod mini_engine;
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Meta {
-    pub load: i64,
-    pub none: i64,
-    pub pc_relative: i64,
-    pub store: i64,
+pub struct Meta<T = i64> {
+    pub load: T,
+    pub none: T,
+    pub pc_relative: T,
+    pub store: T,
 }
-pub type StackLiveVarUse = (i64, i64, i64, i64, i64, i64, i64, i64);
+pub type StackLiveVarUse<T = i64> = (T, T, T, T, T, T, T, T);
 pub type RegisterArithmeticDefs = (i64, i64, i64, i64, i64, i64, i64, i64);
 #[derive(Clone, Default)]
-pub struct Facts {
-    pub meta: Meta,
-    pub ArchMemoryAccess: Vec<(i64, i64, i64, i64, i64, i64)>,
-    pub ArchRegRegArithOp: Vec<(i64, i64, i64, i64, i64, i64)>,
-    pub ArchReturnReg: Vec<(i64,)>,
-    pub BlockNext: Vec<(i64, i64, i64)>,
-    pub BlockLastInstr: Vec<(i64, i64)>,
-    pub CodeInBlock: Vec<(i64, i64)>,
-    pub DirectCall: Vec<(i64, i64)>,
-    pub MayFallthrough: Vec<(i64, i64)>,
-    pub RegDefUseBlockLastDef: Vec<(i64, i64, i64)>,
-    pub RegDefUseDefinedInBlock: Vec<(i64, i64)>,
-    pub RegDefUseFlowDef: Vec<(i64, i64, i64, i64)>,
-    pub RegDefUseLiveVarDef: Vec<(i64, i64, i64, i64)>,
-    pub RegDefUseRefInBlock: Vec<(i64, i64)>,
-    pub RegDefUseReturnBlockEnd: Vec<(i64, i64, i64, i64)>,
-    pub RegDefUseUsed: Vec<(i64, i64, i64)>,
-    pub RegDefUseUsedInBlock: Vec<(i64, i64, i64, i64)>,
-    pub RegUsedFor: Vec<(i64, i64, i64)>,
-    pub RelJumpTableEntryCandidate: Vec<(i64, i64, i64, i64, i64, i64, i64)>,
-    pub StackDefUseDef: Vec<(i64, i64, i64)>,
-    pub StackDefUseDefinedInBlock: Vec<(i64, i64, i64)>,
-    pub StackDefUseLiveVarDef: Vec<(i64, i64, i64, i64, i64, i64)>,
-    pub StackDefUseRefInBlock: Vec<(i64, i64, i64)>,
-    pub StackDefUseUsedInBlock: Vec<(i64, i64, i64, i64, i64)>,
-    pub StackDefUseUsed: Vec<(i64, i64, i64, i64)>,
-    pub StackDefUseLiveVarUsedEDB: Vec<StackLiveVarUse>,
-    pub JumpTableStart: Vec<(i64, i64, i64, i64, i64)>,
-    pub DefUsedForAddressEDB: Vec<(i64, i64, i64)>,
-    pub StackDefUseBlockLastDef: Vec<(i64, i64, i64, i64)>,
+pub struct Facts<T = i64> {
+    pub meta: Meta<T>,
+    pub ArchMemoryAccess: Vec<(T, T, T, T, T, T)>,
+    pub ArchRegRegArithOp: Vec<(T, T, T, T, T, T)>,
+    pub ArchReturnReg: Vec<(T,)>,
+    pub BlockNext: Vec<(T, T, T)>,
+    pub BlockLastInstr: Vec<(T, T)>,
+    pub CodeInBlock: Vec<(T, T)>,
+    pub DirectCall: Vec<(T, T)>,
+    pub MayFallthrough: Vec<(T, T)>,
+    pub RegDefUseBlockLastDef: Vec<(T, T, T)>,
+    pub RegDefUseDefinedInBlock: Vec<(T, T)>,
+    pub RegDefUseFlowDef: Vec<(T, T, T, T)>,
+    pub RegDefUseLiveVarDef: Vec<(T, T, T, T)>,
+    pub RegDefUseRefInBlock: Vec<(T, T)>,
+    pub RegDefUseReturnBlockEnd: Vec<(T, T, T, T)>,
+    pub RegDefUseUsed: Vec<(T, T, T)>,
+    pub RegDefUseUsedInBlock: Vec<(T, T, T, T)>,
+    pub RegUsedFor: Vec<(T, T, T)>,
+    pub RelJumpTableEntryCandidate: Vec<(T, T, T, T, T, T, T)>,
+    pub StackDefUseDef: Vec<(T, T, T)>,
+    pub StackDefUseDefinedInBlock: Vec<(T, T, T)>,
+    pub StackDefUseLiveVarDef: Vec<(T, T, T, T, T, T)>,
+    pub StackDefUseRefInBlock: Vec<(T, T, T)>,
+    pub StackDefUseUsedInBlock: Vec<(T, T, T, T, T)>,
+    pub StackDefUseUsed: Vec<(T, T, T, T)>,
+    pub StackDefUseLiveVarUsedEDB: Vec<StackLiveVarUse<T>>,
+    pub JumpTableStart: Vec<(T, T, T, T, T)>,
+    pub DefUsedForAddressEDB: Vec<(T, T, T)>,
+    pub StackDefUseBlockLastDef: Vec<(T, T, T, T)>,
 }
 #[derive(Default)]
 pub struct Results {

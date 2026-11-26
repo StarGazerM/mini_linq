@@ -69,7 +69,8 @@ impl Body<'_, '_> {
                     .zip(&atom.args)
                     .filter_map(|(c, a)| cq::rust::variable(a).map(|v| (c.name.clone(), v.clone())))
                     .collect::<Vec<_>>();
-                let constants = super::occurrence_constants(declaration, atom);
+                let constants =
+                    super::occurrence_constants(declaration, atom, &self.source.query.captures);
                 self.schedule.atom(&atom.relation, &mapping, constants)
             }
             cq::BodyItem::Block(block) => {

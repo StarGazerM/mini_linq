@@ -72,14 +72,22 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
  \text{no atom repeats a name under }[y:=x]}
  {q\leadsto_{NF}q[y:=x]\text{ without the solved identity}}
 
-\Rule{A-Domain}{x\ op\ t\text{ (in }\code{where}\text{, an atom or negated-atom position, membership or range)}\quad
+\Rule{A-Domain}{x\ op\ t\text{ (in }\code{where}\text{, a negated-atom position, a non-literal closed atom position, membership or range)}\quad
  x\text{ at a column of recorded domain id }d\text{ and payload }D:T\quad Q\vdash t:\mathsf{Closed}\quad k\text{ fresh}\\
  (op',f)=\begin{cases}(op,\mathsf{exact})&op\in\{=,\ne\}\text{ or a position}\\
  (op,\mathsf{lower})&op\in\{<,\geq\}\\
  (<,\mathsf{upper})&op={\leq}\\
  ({\geq},\mathsf{upper})&op={>}\end{cases}}
  {x\ op\ t\leadsto_{NF}x\ op'\ k\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{Domain}(k,T,f,d,D,t)]]}
+
+\Rule{A-DomainLiteral}{R(\ldots,t,\ldots)\text{ positive}\quad t\text{ literal at column }c\text{ of recorded domain id }d\text{ and payload }D:T}
+ {R(\ldots,t,\ldots)\text{ unchanged}\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{Domain}(k,T,\mathsf{exact},d,D,t)]\text{ unless it records }(d,\mathsf{exact},t)]}
 \end{mathpar}
+A positive-atom literal is an occurrence restriction, not a predicate read:
+A-DomainLiteral keeps it in its atom and only records its code, once per
+domain id and literal. RL-Occurrence restricts the occurrence by that capture.
+Rewriting it into \code{where k == t} would make it a predicate read and lose
+the literal-bearing rename that builds the occurrence's filtered relation.
 A-Domain runs once per operand at normalization; a literal membership
 \code{x in [t, ...]} first becomes the disjunction of $x=t_i$, \code{x in a..b}
 becomes $x\geq a\land x<b$ (both \textsf{lower}) and \code{x in a..=b} becomes
@@ -821,7 +829,7 @@ of $s$ that reads clause $i$ (an atom read, or the first block step of a block).
 \Rule{RL-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
  {\emit(D,o)=(D\concat[r=o],r)}
 
-\Rule{RL-Occurrence}{i\notin\dom M\quad C_i=\{c_j=a_j\mid a_j\text{ is literal}\}\\
+\Rule{RL-Occurrence}{i\notin\dom M\quad C_i=\{c_j=\kappa_j(a_j)\mid a_j\text{ is literal}\}\\
  m_i:\operatorname{cols}(R_i)\setminus\dom C_i\cong\bar X_i\quad
  (D',r)=\emit(D,\delta_{m_i}(\pi_{\dom m_i}\sigma_{C_i}(R_i)))}
  {\mathsf{relation}(i;D,M,T)=(D',M[i\mapsto r],T[r\mapsto\mathsf{first}_s(i)],r)}
@@ -886,6 +894,9 @@ of $s$ that reads clause $i$ (an atom read, or the first block step of a block).
   \text{record }D_x\text{ as O-Restrict restrictions; retain the exact }C}
 
 \end{mathpar}
+In RL-Occurrence, $\kappa_j(a)=\mathtt{@}(k)$ for the A-DomainLiteral capture
+$\mathsf{Domain}(k,T,\mathsf{exact},d_j,D,a)$ when $c_j$ has recorded domain
+id $d_j$, and $\kappa_j(a)=a$ otherwise; both denote one host-once value.
 Here $\mathsf{atomic}$ means one comparison, \code{between}, or
 \code{in} conjunct with a variable operand. The outer \code{Or} and its
 branch conjunct lists are the written syntax, not a distributive-normal-form
@@ -1161,7 +1172,11 @@ The const/range restriction concerns predicate reads, not atom literals:
 literal-bearing renames always build their filtered relation.
 Their entries use the ordinary \code{let} retention and index rules, without
 filtered-storage annotations. Literal restriction and projection belong only to
-the occurrence's row source; GPU materializes that source in the build phase.
+the occurrence's row source. On GPU a resident source restricted on one column
+is a build-phase position selection of that column's code interval (an index
+over it is built from those positions); restrictions on several columns stay a
+row predicate of its scan; a non-resident source is uploaded from its host scan
+in the build phase.
 The optional \code{positional(H,...)} arguments assert host capabilities at this
 boundary; Physical contains only relational schemas, so unspecified hosts keep
 the previous representation. The initial selector handles recorded point/range

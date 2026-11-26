@@ -15,6 +15,9 @@ pub struct Machine {
     /// GR-RetainPrefix: evidence-bounded rows a stored prefix must reach to
     /// replace a stream root smaller than one root tile as the distributed root.
     pub retain_prefix_rows: usize,
+    /// GR-RootTile: root tiles that fill the device (two resident blocks per
+    /// SM); a smaller estimated root is cut into about this many tiles.
+    pub root_tiles: usize,
     /// Target refinement records concrete provider/storage bindings upstream.
     pub bindings: fn(&crate::structures::physical::Program, &crate::structures::Program, &Program, &crate::structures::Analysis, &Analysis) -> syn::Result<bindings::Bindings>,
     /// Target realization after publication storage is recorded.
@@ -23,10 +26,14 @@ pub struct Machine {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Partition {
-    One,
+    /// Every source has an evidence bound at most `max_rows` and no materialized child.
+    One { max_rows: u32 },
     Tiles {
         rows: usize,
     },
+    /// Large domains use ordinary root tiles. A nonempty one-tile chain can
+    /// distribute the positions of its recorded child level across blocks.
+    Fanout { rows: usize },
     /// GPU-RootSpread: root tiles of `clamp(ceil(domain / resident), 1, max_rows)`
     /// rows, `resident` the recorded launch preparation's block capacity. The
     /// resulting tile count caps the grid except when root sharing is recorded.
@@ -65,15 +72,25 @@ pub enum Grid {
     /// One thread per element: `ceil(elements / block_threads)` blocks.
     Elements { block_threads: u32 },
 }
-/// Initial output capacity of the first launch attempt; a shortfall replays
-/// at the full required count (BE-Length).
+/// Cold reservation for an ordinary output dispatch. A seed is never a
+/// certificate that the output fits.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InitialCapacity {
+pub enum ReservationSeed {
     Zero,
     /// The Store's declared capacity.
     Declared,
+    /// The physical result's conditional BE-PrefixBound.
+    Evidence(u32),
     /// The machine's default reservation for an undeclared `reserve`.
     Rows(usize),
+}
+
+/// Owner of the capacity hint. Only a validated prefix is published.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InitialCapacity {
+    NoStore,
+    /// Context-local compiled dispatch state, initialized from the seed.
+    DispatchCount(ReservationSeed),
     /// The arena's last validated count (GPU-ReservePrevious).
     PreviousCount,
 }
@@ -107,6 +124,9 @@ pub struct Strip {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainExecution {
     pub strips: Vec<Strip>,
+    /// Last child strip at which a one-tile root must split; an earlier scan
+    /// with enough children for the grid claims the split first.
+    pub split_child: Option<usize>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Execution {
@@ -218,15 +238,15 @@ pub(crate) fn derive(
     let mut executions = Vec::with_capacity(analysis.dispatches.len());
     for dispatch in &analysis.dispatches {
         let mut execution = Execution {
-            partition: dispatch
-                .parts
-                .map_or(Partition::One, |rows| Partition::Tiles { rows }),
+            partition: Partition::Tiles {
+                rows: dispatch.parts.unwrap_or(machine.block_threads as usize),
+            },
             block_threads: machine.block_threads,
             publication: Publication::Rows,
             offsets: OffsetScan::None,
             fold: FoldCompletion::Local,
             synchronization: vec![Synchronization::CountAndFailure],
-            capacity: InitialCapacity::Zero,
+            capacity: InitialCapacity::NoStore,
             reservation: Reservation::StripeBatch,
             chains: Vec::new(),
             share: Share::None,
@@ -244,12 +264,21 @@ pub(crate) fn derive(
             } else {
                 (term, false)
             };
+            // Formal rule GPU-DispatchReservation: seed the ordinary dispatch's
+            // context-local count slot; neither a seed nor history is a bound.
             execution.capacity = match dispatch.concatenation {
-                OutputProtocol::Count => InitialCapacity::Zero,
                 OutputProtocol::ReservePrevious => InitialCapacity::PreviousCount,
-                OutputProtocol::Bounded => InitialCapacity::Declared,
-                OutputProtocol::Reserve if declared => InitialCapacity::Declared,
-                OutputProtocol::Reserve => InitialCapacity::Rows(machine.reserve_rows),
+                _ if declared => InitialCapacity::DispatchCount(ReservationSeed::Declared),
+                _ => {
+                    let seed = match prefix_rows(analysis, name) {
+                        Some(rows) => ReservationSeed::Evidence(rows),
+                        None if dispatch.concatenation == OutputProtocol::Reserve => {
+                            ReservationSeed::Rows(machine.reserve_rows)
+                        }
+                        None => ReservationSeed::Zero,
+                    };
+                    InitialCapacity::DispatchCount(seed)
+                }
             };
             let chains = linear(inner, &definitions, &sources, &analysis.capabilities);
             for steps in &chains {
@@ -271,13 +300,6 @@ pub(crate) fn derive(
                                 FoldCompletion::BlockPartials { monoids } => {
                                     monoids.push(monoid.clone())
                                 }
-                            }
-                            // A whole-input fold has a distributed implementation cover,
-                            // independent of the single logical output part.
-                            if dispatch.parts.is_none() {
-                                execution.partition = Partition::Tiles {
-                                    rows: machine.block_threads as usize,
-                                };
                             }
                         }
                         _ => {}
@@ -331,9 +353,26 @@ pub(crate) fn derive(
                     for (operations, source) in levels(steps, deferred) {
                         strips.push(strip(operations, source, machine.block_threads as usize));
                     }
-                    ChainExecution { strips }
+                    ChainExecution { strips, split_child: None }
                 })
                 .collect();
+            let width = dispatch.parts.unwrap_or(machine.block_threads as usize);
+            if (program.sequence.roots != crate::Roots::Spread || !fold_free(&execution))
+                && underfilled_expansion(&execution, &chains, analysis, width)
+            {
+                execution.partition = Partition::Fanout { rows: width };
+                for (steps, chain) in chains.iter().zip(&mut execution.chains) {
+                    if chain.strips.len() > 1 && root_estimate(steps, analysis).is_none_or(|n| n <= width as u128) {
+                        let children = root_loop_children(steps, chain);
+                        chain.split_child = (children != 0).then_some(children);
+                    }
+                }
+            } else if dispatch.parts.is_none()
+                && let Some(max_rows) = root_bound(&execution, &chains, analysis)
+                && max_rows <= execution.block_threads
+            {
+                execution.partition = Partition::One { max_rows };
+            }
         }
         if let Some(max_rows) = spread_rows(program, &execution, dispatch.parts) {
             execution.partition = Partition::Spread { max_rows };
@@ -367,6 +406,53 @@ fn spread_rows(program: &Program, execution: &Execution, parts: Option<usize>) -
         })
 }
 
+fn root_result<'a>(steps: &'a [Step], analysis: &'a Analysis) -> Option<&'a String> {
+    match steps.first()? {
+        Step::Rows(name) => Some(name),
+        Step::Stored(name) => analysis.results.get(name),
+        _ => None,
+    }
+}
+
+fn root_rows(steps: &[Step], analysis: &Analysis) -> Option<u128> {
+    analysis.prefix_bounds.get(root_result(steps, analysis)?)?.rows
+}
+
+/// BE-PrefixEstimate of the root: geometry advice, never a capacity.
+fn root_estimate(steps: &[Step], analysis: &Analysis) -> Option<u128> {
+    analysis.prefix_bounds.get(root_result(steps, analysis)?)?.estimate
+}
+
+// A whole fold's suffix executes in its combine kernel, not in the root loop.
+fn root_loop_children(steps: &[Step], chain: &ChainExecution) -> usize {
+    steps.iter().take_while(|s| !matches!(s, Step::Fold(_)))
+        .filter(|s| matches!(s, Step::Lookup(..)))
+        .take(chain.strips.len().saturating_sub(1)).count()
+}
+
+// Formal rule GPU-OnePart: the evidence for every source must fit a block,
+// and no strip may materialize a child. Deferred ranges publish parents.
+fn root_bound(execution: &Execution, chains: &[Vec<Step>], analysis: &Analysis) -> Option<u32> {
+    if chains.is_empty() { return None; }
+    chains.iter().zip(&execution.chains).try_fold(0u32, |max, (steps, chain)| {
+        if chain.strips.len() != 1 { return None; }
+        Some(max.max(u32::try_from(root_rows(steps, analysis)?).ok()?))
+    })
+}
+
+// Formal rule GPU-DistributeExpansion: tile-local folds must preserve their
+// exact cover. Whole-domain folds instead combine the blocks' disjoint work.
+fn underfilled_expansion(
+    execution: &Execution, chains: &[Vec<Step>], analysis: &Analysis, width: usize,
+) -> bool {
+    execution.chains.iter().flat_map(|c| &c.strips)
+        .all(|s| !matches!(s.fold, Some(FoldScope::Tiles(_))))
+        && chains.iter().zip(&execution.chains).any(|(steps, chain)| {
+            root_loop_children(steps, chain) != 0
+                && root_estimate(steps, analysis).is_none_or(|rows| rows <= width as u128)
+        })
+}
+
 fn fold_free(execution: &Execution) -> bool {
     execution.fold == FoldCompletion::Local
         && execution.chains.iter().flat_map(|chain| &chain.strips)
@@ -392,6 +478,11 @@ fn shared_expansions(execution: &Execution) -> Share {
     } else {
         Share::None
     }
+}
+
+fn prefix_rows(analysis: &Analysis, store: &str) -> Option<u32> {
+    let result = analysis.results.get(store)?;
+    u32::try_from(analysis.prefix_bounds.get(result)?.rows?).ok()
 }
 
 /// Formal rule GPU-ResidentMeta: an arena terminal (`reserve_previous`, the
@@ -709,18 +800,18 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 "synchronization contradicts the recorded publication",
             ));
         }
-        // GPU-RootSpread: the partition kind follows the program's declared
-        // roots policy; a fold-bearing dispatch never spreads. Any positive
-        // spread bound is sound; a declared distributed tile is a fact.
-        // A frontier uses the same spread invariant as a single-launch share.
+        // Explicit roots policy fixes spread geometry, independent of estimates.
         let spreads = program.sequence.roots == crate::Roots::Spread
             && !execution.chains.is_empty()
             && fold_free(execution);
         let partition = match &execution.partition {
-            Partition::Spread { max_rows } => {
-                spreads && *max_rows > 0 && dispatch.parts.is_none_or(|parts| parts == *max_rows)
-            }
-            Partition::One | Partition::Tiles { .. } => !spreads,
+            Partition::Spread { max_rows } =>
+                spreads && *max_rows > 0 && dispatch.parts.is_none_or(|parts| parts == *max_rows),
+            Partition::Fanout { rows } =>
+                !spreads && *rows > 0 && dispatch.parts.is_none_or(|parts| parts == *rows),
+            Partition::Tiles { rows } => !spreads && dispatch.parts.is_none_or(|parts| parts == *rows),
+            Partition::One { max_rows } =>
+                !spreads && dispatch.parts.is_none() && *max_rows <= execution.block_threads,
         };
         if !partition {
             return Err(error(
@@ -767,7 +858,10 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .rev()
             .find(|name| matches!(definitions[*name], Term::Store { .. }))
         else {
-            if !execution.chains.is_empty() {
+            if execution.capacity != InitialCapacity::NoStore {
+                return Err(error("capacity without a publication store"));
+            }
+            if !execution.chains.is_empty() || !matches!(execution.partition, Partition::Tiles { .. }) {
                 return Err(error("chain records without a publication store"));
             }
             continue;
@@ -775,15 +869,18 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         let Term::Store { inner, capacity } = definitions[name] else {
             unreachable!()
         };
+        use InitialCapacity::DispatchCount;
+        let evidence = prefix_rows(analysis, name);
         let capacity = match (&dispatch.concatenation, &execution.capacity, capacity) {
-            (OutputProtocol::Count, InitialCapacity::Zero, _)
-            | (OutputProtocol::ReservePrevious, InitialCapacity::PreviousCount, _)
-            | (
-                OutputProtocol::Bounded | OutputProtocol::Reserve,
-                InitialCapacity::Declared,
-                Some(_),
-            ) => true,
-            (OutputProtocol::Reserve, InitialCapacity::Rows(rows), None) => *rows > 0,
+            (OutputProtocol::ReservePrevious, InitialCapacity::PreviousCount, _) => true,
+            (OutputProtocol::Bounded | OutputProtocol::Count | OutputProtocol::Reserve,
+                DispatchCount(ReservationSeed::Declared), Some(_)) => true,
+            (OutputProtocol::Count | OutputProtocol::Reserve,
+                DispatchCount(ReservationSeed::Evidence(rows)), None) => Some(*rows) == evidence,
+            (OutputProtocol::Count, DispatchCount(ReservationSeed::Zero), None) => evidence.is_none(),
+            (OutputProtocol::Reserve, DispatchCount(ReservationSeed::Rows(rows)), None) => {
+                evidence.is_none() && *rows > 0
+            }
             _ => false,
         };
         if !capacity {
@@ -797,7 +894,28 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         if chains.len() != execution.chains.len() {
             return Err(error("chain records differ from the publication's chains"));
         }
+        if let Partition::One { max_rows } = execution.partition
+            && root_bound(execution, &chains, analysis).is_none_or(|bound| bound > max_rows)
+        {
+            return Err(error("GPU-OnePart: one part lacks bounded non-expanding root evidence"));
+        }
+        // Formal rule GPU-FanoutLegal: check the supplied geometry, not the
+        // estimates or the last-child preference used to select it.
+        let fanout = matches!(execution.partition, Partition::Fanout { .. });
+        if fanout {
+            if execution.chains.iter().flat_map(|c| &c.strips)
+                .any(|s| matches!(s.fold, Some(FoldScope::Tiles(_))))
+            {
+                return Err(error("GPU-FanoutLegal: fanout cannot split a tile-local fold"));
+            }
+            if !chains.iter().zip(&execution.chains).any(|(s, c)| root_loop_children(s, c) > 0) {
+                return Err(error("GPU-FanoutLegal: fanout requires a materialized root-loop child"));
+            }
+        }
         for (steps, record) in chains.iter().zip(&execution.chains) {
+            if record.split_child.is_some_and(|i| !fanout || i == 0 || i > root_loop_children(steps, record)) {
+                return Err(error("GPU-ChildSlice: split must name a materialized root-loop child of a fanout partition"));
+            }
             let levels = levels(steps, deferred);
             if levels.len() != record.strips.len() {
                 return Err(error("strip records differ from the chain's levels"));
@@ -832,6 +950,8 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
 
 #[derive(Clone)]
 enum Step {
+    Rows(String),
+    Stored(String),
     Tile { n: usize, items: Option<usize> },
     Lookup(String, Vec<String>),
     Flatten,
@@ -846,7 +966,7 @@ fn linear(
     capabilities: &BTreeMap<(String, Vec<String>), Capability>,
 ) -> Vec<Vec<Step>> {
     let (inner, step) = match term {
-        Term::Rows(_) => return vec![Vec::new()],
+        Term::Rows(name) => return vec![vec![Step::Rows(symbol_name(name))]],
         Term::Union(arms) => {
             return arms
                 .iter()
@@ -862,7 +982,7 @@ fn linear(
         Term::Ref(name) => {
             let name = symbol_name(name);
             return if published.contains(&name) {
-                vec![Vec::new()]
+                vec![vec![Step::Stored(name)]]
             } else {
                 linear(defs[&name], defs, published, capabilities)
             };

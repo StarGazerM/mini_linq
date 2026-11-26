@@ -191,10 +191,10 @@ fn previous_count_is_only_a_hint_and_retained_batches_stay_immutable() -> Result
 
 #[test]
 fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
-    use gpu_datalog_runtime::{CandidateArena, HeadCursors};
+    use gpu_datalog_runtime::{CandidateArena, EpochCut, EpochMember};
     let pool = Pool::new(0, 0, 0)?;
     let packing = Packing::with_columns(&[Column::I32, Column::U32])?;
-    let group = HeadCursors::new(pool.clone(), 2)?;
+    let group = EpochCut::new(pool.clone(), &[EpochMember::Head; 2])?;
     let mut arena = CandidateArena::new(pool.clone());
     arena.begin_head(&group, 1, packing.clone(), 0)?;
     // Exceed both the retained slot's capacity and the sharing threshold.
@@ -231,7 +231,7 @@ fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
         assert!(append(&mut arena, true).is_none());
         assert!(resume(&mut arena, true).is_none());
         assert_eq!(gpu_datalog_runtime::readback_count(), before);
-        assert_eq!(group.read()?, [0, 0, (2 * per_hole) as u32, 0]);
+        assert_eq!(group.record(&group.read()?, 1), (2 * per_hole, false));
         assert_eq!(gpu_datalog_runtime::readback_count(), before + 1);
         if !replay {
             arena.retry_head(2 * per_hole)?;
@@ -239,6 +239,7 @@ fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
     }
     // SAFETY: the replay fit both complete appends, as checked above.
     let batch = unsafe { arena.finish_head(2 * per_hole)? };
+    group.complete(1);
     let mut expected: Vec<_> = rows[0].iter().chain(&rows[0]).cloned().collect();
     expected.sort();
     assert_eq!(bag(batch.buffer(), batch.len(), batch.packing())?, expected);
@@ -260,12 +261,12 @@ fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
         )?;
     }
     assert!(resume(&mut arena, true).is_none());
-    let failed = group.read()?;
-    assert_eq!(failed[3], 1);
+    let (rows, failed) = group.record(&group.read()?, 1);
+    assert!(failed);
     // A later hole can use the reset dispatch scratch but cannot clear the
     // head's sticky failure. Do not publish the failed prefix.
     assert!(append(&mut arena, true).is_none());
-    assert_eq!(group.read()?, [0, 0, failed[2] + per_hole as u32, 1]);
+    assert_eq!(group.record(&group.read()?, 1), (rows + per_hole, true));
     Ok(())
 }
 

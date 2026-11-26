@@ -31,11 +31,47 @@ pub(crate) struct Origin {
     pub(crate) predicate: bool,
 }
 struct Source {
+    read: Ident,
     reads: Vec<(usize, TokenStream)>,
+    /// The exact host row count (a selected source reads its count back).
     length: TokenStream,
     positions: Option<Ident>,
+    /// GPU-SelectedCount: the device count parameter of selected positions.
+    count: Option<Ident>,
+    /// Host dispatch domain: the exact length, or a selected source's capacity.
+    domain: TokenStream,
     /// Parameter identities supplying these reads, recorded with the adapter.
     uses: BTreeMap<usize, String>,
+}
+
+/// Formal rule GPU-SelectedCount: Selected positions keep their count on the device; a dispatch over them launches over the source capacity and its kernel reads the device count as its domain, and only exact host lengths read the count back.
+/// Build-phase selected positions of a resident source (GPU-SelectRows).
+fn selected_source(
+    name: &str,
+    selection: &TokenStream,
+    retained: bool,
+    build: &mut TokenStream,
+    parameters: &mut Vec<(Ident, Type, TokenStream)>,
+) -> (Ident, Ident, TokenStream, TokenStream) {
+    let selected = format_ident!("__cq_sequence_selected_{}", name);
+    let positions = format_ident!("__cq_sequence_selected_rows_{}", name);
+    let count = format_ident!("__cq_sequence_selected_count_{}", name);
+    let memory_report = retained.then(|| quote! {
+        if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
+            ::cq_gpu_sequence_runtime::index_bytes::record(
+                "retained positions", #selected.bytes(), #selected.len()? * ::core::mem::size_of::<u32>(),
+            );
+        }
+    });
+    build.extend(quote! {
+        let #selected = ::cq_gpu_sequence_runtime::select(
+            __cq_pool.clone(), &(#selection).expect("recorded selection"),
+            __cq_auxiliary.selection)?;
+        #memory_report
+    });
+    parameters.push((positions.clone(), syn::parse_quote!(*const u32), quote!(#selected.ptr())));
+    parameters.push((count.clone(), syn::parse_quote!(*const u32), quote!(#selected.count_ptr())));
+    (positions, count, quote!(#selected.len()?), quote!(#selected.capacity()))
 }
 struct RunSource {
     view: Ident,
@@ -977,37 +1013,27 @@ impl Rows {
                             })
                         })
                         .collect();
-                    let (positions, length) = if interval.is_some() {
-                        let selected = format_ident!("__cq_sequence_selected_{}", name);
-                        let param = format_ident!("__cq_sequence_selected_rows_{}", name);
-                        let memory_report = structure_analysis.retained.contains_key(name).then(|| quote! {
-                            if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
-                                ::cq_gpu_sequence_runtime::index_bytes::record(
-                                    "retained positions", #selected.bytes(), #selected.len() * ::core::mem::size_of::<u32>(),
-                                );
-                            }
-                        });
-                        build.extend(quote! {
-                            let #selected = ::cq_gpu_sequence_runtime::select(
-                                __cq_pool.clone(), &(#selection).expect("recorded selection"),
-                                __cq_auxiliary.selection)?;
-                            #memory_report
-                        });
-                        parameters.push((
-                            param.clone(),
-                            syn::parse_quote!(*const u32),
-                            quote!(#selected.ptr()),
-                        ));
-                        (Some(param), quote!(#selected.len()))
+                    let (positions, count, length, domain) = if interval.is_some() {
+                        let (positions, count, length, domain) = selected_source(
+                            name,
+                            &selection,
+                            structure_analysis.retained.contains_key(name),
+                            &mut build,
+                            &mut parameters,
+                        );
+                        (Some(positions), Some(count), length, domain)
                     } else {
-                        (None, quote!(#host_length))
+                        (None, None, quote!(#host_length), quote!(#host_length))
                     };
                     sources.insert(
                         name.clone(),
                         Source {
+                            read: format_ident!("decode"),
                             reads,
                             length,
                             positions,
+                            count,
+                            domain,
                             uses: realization.columns.iter()
                                 .filter_map(|(column, source)| columns.get(column)
                                     .map(|slot| (*slot, fields[source].1.to_string()))).collect(),
@@ -1121,9 +1147,12 @@ impl Rows {
                 sources.insert(
                     name.clone(),
                     Source {
+                        read: format_ident!("range_payload"),
                         reads,
                         length: quote!(#owner.len()),
                         positions: None,
+                        count: None,
+                        domain: quote!(#owner.len()),
                         uses: payload.iter().map(|column| (columns[column], view.to_string())).collect(),
                     },
                 );
@@ -1147,38 +1176,28 @@ impl Rows {
                         })
                     })
                     .collect();
-                let (positions, length) =
+                let (positions, count, length, domain) =
                     if matches!(realization.access, SourceAccess::Positions(_)) {
-                        let selected = format_ident!("__cq_sequence_selected_{}", name);
-                        let param = format_ident!("__cq_sequence_selected_rows_{}", name);
-                        let memory_report = structure_analysis.retained.contains_key(name).then(|| quote! {
-                            if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
-                                ::cq_gpu_sequence_runtime::index_bytes::record(
-                                    "retained positions", #selected.bytes(), #selected.len() * ::core::mem::size_of::<u32>(),
-                                );
-                            }
-                        });
-                        build.extend(quote! {
-                            let #selected = ::cq_gpu_sequence_runtime::select(
-                                __cq_pool.clone(), &(#selection).expect("recorded selection"),
-                                __cq_auxiliary.selection)?;
-                            #memory_report
-                        });
-                        parameters.push((
-                            param.clone(),
-                            syn::parse_quote!(*const u32),
-                            quote!(#selected.ptr()),
-                        ));
-                        (Some(param), quote!(#selected.len()))
+                        let (positions, count, length, domain) = selected_source(
+                            name,
+                            &selection,
+                            structure_analysis.retained.contains_key(name),
+                            &mut build,
+                            &mut parameters,
+                        );
+                        (Some(positions), Some(count), length, domain)
                     } else {
-                        (None, quote!(#host_length))
+                        (None, None, quote!(#host_length), quote!(#host_length))
                     };
                 sources.insert(
                     name.clone(),
                     Source {
+                        read: format_ident!("decode"),
                         reads,
                         length,
                         positions,
+                        count,
+                        domain,
                         uses: realization.columns.iter()
                             .filter_map(|(column, source)| columns.get(column)
                                 .map(|slot| (*slot, fields[source].1.to_string()))).collect(),
@@ -1288,9 +1307,12 @@ impl Rows {
         self.sources.insert(
             name.to_owned(),
             Source {
+                read: format_ident!("decode"),
                 reads,
                 length: quote!(#length),
                 positions: None,
+                count: None,
+                domain: quote!(#length),
                 uses: layout.iter().enumerate()
                     .map(|(index, column)| (self.columns[column], format!("__cq_sequence_uploaded_column_{name}_{index}")))
                     .collect(),
@@ -1359,9 +1381,10 @@ impl Rows {
             None => quote!((#position) as u64),
         };
         // DECODE V: P6 source scans reconstruct FOR values into i64 even for code-only joins and predicates.
+        let read = &source.read;
         let reads = source.reads.iter().filter(|(slot, _)| live.is_none_or(|live| live.contains(slot))).map(|(slot, view)| {
             quote! {
-                #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::decode(#view, #position) } as i64;
+                #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::#read(#view, #position) } as i64;
             }
         });
         Ok(quote!(#(#reads)*))
@@ -1385,6 +1408,21 @@ impl Rows {
             .get(name)
             .map(|s| s.length.clone())
             .ok_or_else(|| error(format!("T-Gpu: {name} has no recorded source length")))
+    }
+    /// GPU-SelectedCount: a dispatch's host domain and, for selected
+    /// positions, the device count parameter its kernel reads as the domain.
+    pub fn source_domain(&self, name: &str) -> syn::Result<(TokenStream, Option<Ident>)> {
+        if let Some(source) = self.run_sources.get(name) {
+            return Ok((source.length.clone(), None));
+        }
+        let source = self
+            .sources
+            .get(name)
+            .ok_or_else(|| error(format!("T-Gpu: {name} has no recorded source length")))?;
+        if let Some(count) = &source.count {
+            self.use_parameter(count);
+        }
+        Ok((source.domain.clone(), source.count.clone()))
     }
     pub fn provider_name(&self, name: &str, keys: &[String]) -> syn::Result<String> {
         if let Some(alias) = self
@@ -2088,9 +2126,9 @@ pub(crate) fn origin(
             };
             if let Some(constants) = &rename.constants {
                 if constants
-                    .equalities
+                    .bindings
                     .iter()
-                    .map(|equality| symbol_name(&equality.left))
+                    .map(|binding| symbol_name(&binding.column))
                     .collect::<BTreeSet<_>>()
                     .len()
                     > 1
@@ -2098,17 +2136,16 @@ pub(crate) fn origin(
                     result.predicate = true;
                     return Ok(Some(result));
                 }
-                for equality in &constants.equalities {
-                    let EqualityValue::Literal(value) = &equality.right else {
-                        return Err(error(
-                            "T-Gpu: source selection must compare a code to a constant",
-                        ));
-                    };
+                // A literal or a host-bound capture constant: one code interval.
+                for binding in &constants.bindings {
+                    let value = host_value(&binding.value).map_err(|_| {
+                        error("T-Gpu: source selection must compare a code to a constant")
+                    })?;
                     interval(
                         &mut result.selection,
                         name,
-                        symbol_name(&equality.left),
-                        quote!(::gpu_datalog_runtime::encode_scalar(&(#value))),
+                        symbol_name(&binding.column),
+                        value,
                         "eq",
                     )?;
                 }

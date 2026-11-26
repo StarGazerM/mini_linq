@@ -115,6 +115,25 @@ fn domain_function(term: &Term, domain: DomainId, captures: &Captures) -> Option
     })
 }
 
+/// Formal rule A-DomainLiteral: A positive-atom literal at a code-domain column stays in its atom; its code is one exact capture per domain id and literal value.
+/// The recorded exact capture translating literal `value` at a column of
+/// domain id `domain`. Identified by the domain id and literal value only.
+pub fn literal_code<'a>(
+    captures: &'a Captures,
+    domain: DomainId,
+    value: &syn::Expr,
+) -> Option<&'a Ident> {
+    captures.items.iter().find_map(|capture| {
+        let Capture::Domain(capture) = capture else {
+            return None;
+        };
+        (capture.domain.id == Some(domain)
+            && capture.function == DomainFunction::Exact
+            && capture.operand == *value)
+            .then_some(&capture.name)
+    })
+}
+
 /// A-Domain: translate every closed operand compared with a code-domain column
 /// once on the host. Already translated operands (A-Domain captures of the
 /// same domain) are kept, so normalization stays idempotent.
@@ -321,6 +340,15 @@ impl Translation<'_> {
                         {
                             continue;
                         }
+                        if cq_syntax::equality::literal(argument) {
+                            // A-DomainLiteral: the literal stays an occurrence
+                            // restriction; only its code is recorded.
+                            let domain = column.key().expect("a recorded code-domain column");
+                            if literal_code(self.captures, domain, argument).is_none() {
+                                self.code(&column, argument, DomainFunction::Exact);
+                            }
+                            continue;
+                        }
                         // A-Closed form: a fresh column variable restricted by
                         // the translated closed operand.
                         let key = normal::fresh(self.names, clause, position);
@@ -420,8 +448,9 @@ impl Translation<'_> {
 /// Formal rule WF-Domain: variables occupy columns of one code domain; every
 /// operand compared with a code-domain column is an A-Domain capture of that
 /// domain (`exact` for equality, `lower`/`upper` for `<`/`>=`, no `<=`/`>`,
-/// ranges or literal membership), and a declared output domain is its head
-/// variable's domain.
+/// ranges or literal membership), a positive-atom literal at a code-domain
+/// column has its exact capture (A-DomainLiteral), and a declared output
+/// domain is its head variable's domain.
 pub(super) fn check(module: &Program) -> syn::Result<()> {
     let declarations: BTreeMap<_, _> = module
         .declarations
@@ -520,7 +549,16 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
             BodyItem::Positive { atom } => {
                 let declaration = declarations[&symbol_name(&atom.relation)];
                 for (argument, column) in atom.args.iter().zip(&declaration.columns) {
-                    if column.domain.is_some() && rust::variable(argument).is_none() {
+                    let translated_literal = cq_syntax::equality::literal(argument)
+                        && column
+                            .domain
+                            .as_ref()
+                            .and_then(|domain| domain.id)
+                            .is_some_and(|domain| literal_code(captures, domain, argument).is_some());
+                    if column.domain.is_some()
+                        && rust::variable(argument).is_none()
+                        && !translated_literal
+                    {
                         return Err(error(
                             argument,
                             format!(

@@ -961,9 +961,9 @@ rewrites cannot express this decomposition, the checked \code{segment}
 rewrite pairs an inner-flatten store with an outer tile, justified by
 BE-Offsets and BE-Partition and exposed through both the library and macro.
 Recorded output protocols, including count inserted by lowering, are preserved. Only absent
-protocols are filled: count when the final length depends only on input
-lengths, otherwise reserve; a bounded protocol requires an authored
-capacity. Reported provider, canon and codec obligations are validated
+protocols are filled: bounded for a declared capacity, reserve for a GPU
+machine or a variable final length, otherwise count.
+Reported provider, canon and codec obligations are validated
 against catalog capabilities at their levels. Structures already records
 provider types and canonical references; a canonical rows provider must carry
 the \code{Distinct} capability. Catalog support may retype that provider without changing the reference.
@@ -1150,11 +1150,30 @@ remain available. Lazy demanded-initializer dispatch is outside the ordinary
  \bot&\text{otherwise}\end{cases}}}
  {|\alpha(p)|\le\beta(p).rows\text{ whenever the count estimates hold}}
 
-\Rule{GR-RetainPrefix}{M.gpu\quad \beta(\mathsf{root}(d))<w_M\quad
+\Rule{BE-PrefixEstimate}{\varepsilon(r)=\mathsf{count}_E(r)\text{ when recorded for the result }r\text{ itself, else}\\
+ \varepsilon(\mathsf{rename}\ R)=\mathsf{count}_E(R)\quad
+ \varepsilon(\sigma\,x)=\varepsilon(\mathsf{guard}\ x)=\varepsilon(\mathsf{scalarBind}\ x)
+ =\varepsilon(x\ltimes y)=\varepsilon(x\rhd y)=\varepsilon(x)\quad
+ \varepsilon(\pi_A x)=\varepsilon(x)\\
+ \varepsilon(\mathsf{probe}[\bar k]\,x,y)={\begin{cases}\lceil\varepsilon(x)\cdot f(y)\rceil&\exists K\in\mathsf{keys}(y).\ K\subseteq\bar k\\
+ \lceil\varepsilon(y)\cdot f(x)\rceil&\exists K\in\mathsf{keys}(x).\ K\subseteq\bar k\\
+ \bot&\text{otherwise}\end{cases}}\quad
+ f(z)=\varepsilon(z)/\beta(z).rows\text{ when both are known and }\beta(z).rows>0\text{, else }1}
+ {\varepsilon(p)\text{ is a nonsemantic row estimate; }\beta\text{ stays the upper bound}}
+
+\Rule{GR-RetainPrefix}{M.gpu\quad \varepsilon(\mathsf{root}(d))<w_M\quad
  e_1,\ldots,e_n\text{ the expansions of }d\text{ from its root}\\
- j=\min\{j\mid \beta(e_j).rows\ge M.retain\_prefix\_rows\}\quad
- \forall i\le j.\ \beta(e_i).rows\ne\bot\quad j<n}
- {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\beta(e_j).rows,w_M,M.retain\_prefix\_rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
+ j=\min\{j\mid \varepsilon(e_j)\ge M.retain\_prefix\_rows\}\quad
+ \forall i\le j.\ \varepsilon(e_i)\ne\bot\quad j<n}
+ {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\varepsilon(e_j),w_M,M.retain\_prefix\_rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
+
+\Rule{GR-RootTile}{M.gpu\quad d\text{ a device store dispatch with authored or preferred width }w\quad
+ F=M.gpu.root\_tiles\quad w<\varepsilon(\mathsf{root}(d))<w\cdot F}
+ {\mathsf{partition}(d,\lceil\varepsilon(\mathsf{root}(d))/F\rceil)\text{ instead of }\mathsf{partition}(d,w)}
+
+\Rule{GPU-FilteredCount}{r=\mathsf{rename}\ R\ \mathsf{constants}\ C\text{ in a GPU TPC-H stage}\quad
+ R\text{ loads table }T\quad v(c)=\text{the literal of }C(c)\text{, or its A-DomainLiteral operand}}
+ {E\text{ records }\mathsf{count}(r)=|\{t\in T\mid\forall c\in\dom C.\ t.c=v(c)\}|\text{, dictionary columns comparing text ids}}
 
 \Rule{GR-SegmentFanout}{\mathsf{retain}(e_j,\_,\_,\_)\text{ recorded}\quad j<i\le n\quad
  \neg\exists K\in\mathsf{keys}(\mathsf{provider}(e_i)).\ K\subseteq\mathsf{lookupKeys}(e_i)}
@@ -1162,17 +1181,28 @@ remain available. Lazy demanded-initializer dispatch is outside the ordinary
 \end{mathpar}
 
 Sequence Analysis records $\beta$ as \code{prefix\_bounds}, with explicit
-unknown rows and key sets. The checker checks each record against evidence
+unknown rows and key sets, and $\varepsilon$ beside it as each record's
+\code{estimate}. The checker checks each record against evidence
 and preceding recorded operands, not by invoking the planner: larger upper
-bounds, omitted keys, and either justified keyed-join side are legal.
+bounds, omitted keys, and either justified keyed-join side are legal; an
+estimate is either unknown or exactly its BE-PrefixEstimate transfer.
 Merge uses the same transfer as Probe; generating binds and Union are unknown.
+A recorded count for a result is a measured filtered size, such as a
+literal-restricted occurrence (GPU-FilteredCount); it is advice: it changes
+estimates and PL-Cost input sizes, never a bound.
+A key-covered probe scales the matched side's estimate by the fraction of the
+keyed side's bound that its estimate keeps, assuming independent keys.
 A recorded \code{retain(e, n, w, R)} is the checked \code{store\_level(e)} rewrite.
-Replay consumes these checked facts and requires $\beta(e).rows=n$,
-$w,R>0$, a root bound below $w$, $n\ge R$, a following expansion, and
-known earlier bounds below $R$. Width and threshold are explicit policy
+Replay consumes these checked facts and requires $\varepsilon(e)=n$,
+$w,R>0$, a root estimate below $w$, $n\ge R$, a following expansion, and
+known earlier estimates below $R$. Width and threshold are explicit policy
 parameters, like ordinary tile advice; replay never reruns advice selection.
-The GR-RetainPrefix search stops at the first unknown bound; it never skips
-it to retain a later bounded expansion.
+The GR-RetainPrefix search stops at the first unknown estimate; it never skips
+it to retain a later estimated expansion.
+GR-RootTile sizes a root that spans more than one but fewer than $F$ tiles so
+that it spans about $F$ tiles: two resident blocks per SM. A root that fits one
+tile keeps width $w$ and GPU-DistributeExpansion's child slicing; a root of at
+least $wF$ rows keeps full tiles. Tile size never changes the published bag.
 GR-RetainPrefix and GR-SegmentFanout change only execution shape (stores, tiles and offsets
 publication), never the recorded relational plan, and apply before
 placement, so ordinary decomposition, grading and PL-Cost continue from the
@@ -1373,9 +1403,8 @@ emission consume the same recorded publication kind, never independent
 deferred-range recognizers. Host references stop at completed publication
 boundaries; a host consumer of a later expanded store is not a host consumer
 of that store's deferred-range input.
-The same record fixes the first attempt's output capacity (zero for
-\code{count}, the store's declared capacity, the machine's default
-reservation for an undeclared \code{reserve}, or the arena's previous count),
+The same record fixes the first attempt's output capacity
+(\textsc{GPU-DispatchReservation}, or the arena's previous count),
 the output compaction (each lane gathers its stripe items; the block reserves
 one range per stripe batch), and one strip per strip-mined level of every
 chain in pre-order: rows per expansion batch, items per lane, nested tile
@@ -1386,9 +1415,13 @@ any positive implicit strip and requires explicit tiles and fold scopes to be
 the chain's. Under the Sequence statement \code{roots spread} (EXT-SeqRoots),
 every fold-free dispatch records \textsc{Spread}$(m)$ instead: root tiles
 shrink at launch so a small driver occupies every resident block
-(GPU-RootSpread). A dispatch with a fold keeps its declared partition, because
-block-local fold scopes depend on the root tile. A spread single-chain
-dispatch that expands also records an expansion share (GPU-ExpansionShare):
+(GPU-RootSpread). Without this explicit policy, a potentially underfilled
+expanding driver records a materialized child level. If the actual domain is
+nonempty and fits one tile, every resident block reads it and visits a disjoint
+interval of that level's children (GPU-ChildSlice). Larger domains keep the
+ordinary root-ticket loop; no expansion descriptors are allocated. A whole
+fold combines disjoint partials; a tile-local fold keeps its exact tile cover.
+A spread single-chain dispatch that expands also records an expansion share (GPU-ExpansionShare):
 once some block waits with nothing to steal, a block running an expansion with
 more than $k$ batches left publishes that expansion's block state (parents,
 range begins, offsets and the run it reads) and its remaining batch range to
@@ -1463,11 +1496,32 @@ raw-candidate programs; checking accepts any legal recorded alternative.
   (\mathsf{partition},\mathsf{publication},
    \mathsf{offsetScan},\mathsf{foldCompletion},\mathsf{synchronizations},
    \mathsf{capacity},\mathsf{reservation},\mathsf{strips})}
-\Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count}\quad
+\Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count, or }\infty\text{ for an active GPU-ChildSlice}\quad
  S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
  {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
+\Rule{GPU-OnePart}{d.\mathsf{partition}=\mathsf{One}(b)\quad
+  d.\mathsf{parts}=\bot\quad b\le w_M\quad
+  \forall c\in d.\mathsf{chains}.\ \beta(\mathsf{root}(c)).rows\le b
+  \ \land\ c\text{ has no materialized expansion}}
+ {d\text{ may launch one root part; an absent or unknown bound is not evidence}}
+\Rule{GPU-DistributeExpansion}{d\text{ has a chain with materialized children}\quad
+ \varepsilon(\mathsf{root}(c))=\bot\ \lor\ \varepsilon(\mathsf{root}(c))\le w_d\quad
+ \text{no tile-local fold scope}}
+ {\text{select }\mathsf{Fanout}(w_d)\text{ and the last pre-fold materialized child of each underfilled chain}}
+\Rule{GPU-FanoutLegal}{d.\mathsf{partition}=\mathsf{Fanout}(w)\quad w>0\quad
+ \neg\mathsf{tileLocalFold}(d)\quad \exists c.\ m_c>0}
+ {\forall c.\ j_c=\bot\ \lor\ 1\le j_c\le m_c,\quad
+ m_c=\text{number of materialized children in }c\text{'s root loop}}
+\Rule{GPU-ChildSlice}{0<|D_c|\le w_d\quad j_c\text{ recorded}\quad
+ i\le j_c\text{ the first scan on this path with } n\ge g \text{ children or }i=j_c\quad
+ q=\lfloor n/g\rfloor,\ r=n\bmod g,\ p_b=bq+\min(b,r)}
+ {\text{block }b\text{ visits }[p_b,p_{b+1})\text{ and all of its descendants};
+  \ \biguplus_{b<g}[p_b,p_{b+1})=[0,n)}
+\Rule{DR-ScheduleOverlay}{A\text{ authored schedule}\quad P\text{ planner schedule}\quad
+ \mathsf{target}(p)\notin\mathsf{targets}(A)}
+ {p\in P\Rightarrow p\text{ is retained; authored geometry overrides only its own targets}}
 \Rule{GPU-ProgramLaunch}{L(d)\text{ recorded}\quad
- L(d)=\mathsf{ProgramOne}\Rightarrow d.\mathsf{partition}=\mathsf{One}\quad
+ L(d)=\mathsf{ProgramOne}\Rightarrow \exists b.\ d.\mathsf{partition}=\mathsf{One}(b)\quad
  (K,C,B)\text{ is the entry's validated ordinary 1-D envelope}\quad 1\le g\le B}
  {\mathsf{launch}(K,C,g)\text{ reuses that program entry's function and attributes;
  only its grid cap varies, with the same scalar ABI and synchronization}}
@@ -1623,29 +1677,72 @@ published, so the batch equals the Count protocol's.
  {\text{published batch}=\text{the }\mathsf{count}\text{ protocol's batch}}
 \end{mathpar}
 
+Ordinary GPU stores count and write in the same attempt, including
+intermediate stores and stores whose logical protocol is \code{count}.
+The first reservation is the store's declared capacity, otherwise a
+representable conditional BE-PrefixBound for the physical result, otherwise
+zero for count or the machine reservation for reserve. No estimate licenses
+truncation. Each dispatch's compiled module, scoped to its CUDA context and
+query lifetime, remembers its last validated \emph{physical} output count
+(range descriptors, not the length after expanding them). No output buffer
+or data survives solely for this hint. PL-Cost charges no mandatory replay
+of such a final producer.
+\begin{mathpar}
+\Rule{GPU-DispatchReservation}{C=\mathsf{lastValidated}(d)\mathbin{??}\mathsf{first}(d)\quad
+ N=\mathsf{count}(d,I)\quad I\text{ unchanged during attempts}}
+ {\mathsf{failure}\Rightarrow\bot;\quad
+ N>C\Rightarrow\mathsf{discardAndReplay}(d,I,N);\quad
+ \neg\mathsf{failure}\land N\le C\Rightarrow
+ \mathsf{publishPrefix}(N),\ \mathsf{lastValidated}(d)\gets N}
+\end{mathpar}
+
 Round may assign a head's producers to a common reservation when their inputs
 remain unchanged through the publication barrier and any replay. Sequence
 refines only a final raw arena dispatch with \code{reserve\_previous}, local
 fold completion, and no range-offset or other intermediate consumer.
 Dispatch-local claim cursors are still reset by the last block; the head's
 cursor and sticky failure bit are not. A failed count (including a wrapped
-reservation) rejects the whole attempt before admission. Heads due at the
-same publication point read their cursor/failure pairs in one transfer. Only
-a head that exceeds its capacity replays its producers, from zero on the
-same inputs with capacity at least the observed total. On success its cursor
-resets. Retry capacity and the next hint for that head and phase allow bounded
-headroom over the observed total, and all available rows in the leased slot
-are writable. Spare rows are never part of the published prefix.
-Intermediate stores and ungrouped terminals retain their own protocol.
+reservation) rejects the whole attempt before admission. Head and phase
+determine the initial hint; retry capacity and the next hint allow bounded
+headroom over the observed total. All rows in the leased slot are writable.
+Intermediate stores retain their own protocol.
 \begin{mathpar}
-\Rule{GPU-HeadCursor}{H=\text{head at a checked publication point}\quad
- B_i=\text{candidate bag of producer }i\text{ on unchanged inputs}\quad
- C_H=\text{shared capacity}}
- {\text{each reservation claims disjoint positions in }[0,N_H),\
- N_H=\sum_i|B_i|;\quad
- \neg\mathsf{failure}_H\ \land\ N_H\le C_H
- \Rightarrow \mathsf{prefix}(H,N_H)=_{\rm bag}\biguplus_i B_i}
+\Rule{GPU-HeadCursor}{H=\text{grouped head member of the epoch cut}\quad
+ B_i=\text{bag appended by producer }i\text{ on unchanged inputs}}
+ {\text{reservations partition }[0,N_H),\quad N_H=\sum_i|B_i|;\quad
+ \neg f_H\land N_H\le C_H\Rightarrow
+ \mathsf{prefix}(H,N_H)=_{\rm bag}\biguplus_i B_i}
 \end{mathpar}
+
+Each publication cut has two kinds of member on one stream. A grouped head
+shares a two-word cursor/failure pair across its producers (GPU-HeadCursor).
+An independent replay-safe final writer with no immediate consumer can use
+a private eight-word Sequence result header and its per-hole reservation.
+The arena retains the unpublished lease and its owners. Manual or observed
+holes are not replayed by the cut; per-hole diagnostics validate private
+outputs immediately instead.
+
+In each validation pass, one stream-ordered download snapshots the prefix
+covering all active slots. Head pairs precede private headers, so a pass
+with only heads active downloads no private headers; an empty pass needs
+no download. For either kind of member $m$, the snapshot supplies the count
+$N_m$ and sticky failure bit $f_m$ to check against its leased capacity $C_m$:
+\begin{mathpar}
+\Rule{GPU-EpochValidation}{m\in\mathsf{active}(\mathit{cut})\quad
+ (N_m,f_m)=\mathsf{snapshot}(\mathit{cut})[m]\quad I=\text{unchanged inputs}}
+ {\begin{cases}
+ \bot & f_m \\
+ \mathsf{discardAndReplay}(m,I,N_m) & \neg f_m\land N_m>C_m \\
+ \mathsf{accept}(\mathsf{prefix}(m,N_m)) & \neg f_m\land N_m\le C_m
+ \end{cases}}
+\end{mathpar}
+A failure aborts before admission. A short member restarts from zero with
+capacity at least its observed count: rerun all producers of that head, or
+just that private writer, without rerunning successful members. Admission
+waits for the whole cut to succeed and sees only initialized prefixes.
+Private batches retain their producer's position among the relation's
+batches, even on replay; a nonempty grouped prefix follows its head's
+individual fallback batches.
 
 \paragraph{Closed host captures.}
 A query-closed operand of an explicit relational \code{where} predicate is
@@ -1767,6 +1864,14 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  a=\text{checked catalog ABI of }T\quad K=\mathrm{concat}(\mathrm{levels})\quad
  P=\text{recorded complete scan or reconstructed lookup payload}}
  {\mathrm{layout}=(T,a,K,P,\text{provider directory policy})}
+\Rule{GPU-RangePayload}{\pi=\operatorname{stableArgsort}_{K}(\operatorname{select}(S))\quad
+ c\in P\quad i<|\pi|}
+ {\operatorname{read}(c,i)=
+  \begin{cases}
+   \operatorname{decode}(c,\pi_i)&c\text{ owns immutable resident storage}\\
+   A_c[i],\quad A_c=\bigl[\operatorname{decode}(c,j)\mid j\in\pi\bigr]
+      &c\text{ projects build-time storage}
+  \end{cases}}
 \Rule{GPU-RadixAdvice}{\Delta(t).\mathrm{abi}=\mathrm{radix}\iff p.\mathrm{radix}=(W,O,\rho,r,m)\quad
  \rho\geq 2\quad r\leq 32\quad m\geq 1}
  {\mathrm{advice}(p)=(W,O,\rho,r,m)\text{ authored per instance; nothing chooses it}}
@@ -1802,6 +1907,10 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  \text{packed fields cover the complete published heading in recorded order}\quad
  \text{each field names its bounds provenance}}
  {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}
+\Rule{GPU-AnswerTransfer}{n=\mathsf{checkedCount}(T)\quad
+ (W_j,[l_j,h_j],f_j)=\mathsf{hostCodec}(\tau_j)\quad v_{ij}=\mathsf{decode}(T_j,i)}
+ {\mathsf{download}(T)=[(f_j(W_j(v_{ij})))_j]_{i<n}
+ \quad\text{reject if any }v_{ij}\notin[l_j,h_j]}
 \end{mathpar}
 Native run and column Host scans require an input schema whose arity and
 recorded logical-type ids match the source relation's ordered declaration;
@@ -1888,6 +1997,13 @@ each row function and the host-bound selection conditions.
 \Rule{GPU-SourceAccess}{\rho=\text{recorded source of }r\quad
  \rho.\mathsf{interval}=\mathsf{fold}(\text{contiguous selections of }r)}
  {\mathsf{read}_{\rm gpu}(r)=\rho.\mathsf{access}(\rho.\mathsf{origin})}
+\Rule{GPU-SelectRows}{\rho.\mathsf{access}=\mathsf{positions}(I)\quad
+ \text{warp }w\text{ owns the 256-row chunk }[256c,256c+256)\text{ of the source}}
+ {w\text{ appends the chunk's row ids }i\text{ with }v_i\in I\text{ in ascending order at one reserved offset};\
+ \text{chunks follow in unspecified order; the positions are a set of rows, read only as dispatch roots}}
+\Rule{GPU-SelectedCount}{\rho.\mathsf{access}=\mathsf{positions}(I)\quad d\text{ a dispatch rooted at }\rho\quad n=|\rho.\mathsf{origin}|}
+ {\text{the host launches }d\text{ over }n\text{ rows; its kernel's domain is the device count }|\{i\mid v_i\in I\}|;\
+ \text{only host code needing the exact length reads the count back}}
 \Rule{GPU-Transfer}{e=\text{recorded host evaluation}\quad
  \tau\in e.\mathsf{transfers}\quad \tau.\mathsf{granularity}=\mathsf{completeRows}}
  {\mathsf{host}(e)\text{ reads }\tau.\mathsf{source}\text{ downloaded once per invocation}}
@@ -1895,6 +2011,9 @@ each row function and the host-bound selection conditions.
  \text{every source of }B\text{ publishes }c}
  {\mathsf{descriptor}(c).\mathsf{bounds}=B\quad
   \mathsf{domain}(c)=B\text{ or one recorded measurement}}
+\Rule{GPU-DenseDirectory}{K\in[0,D)^n\text{ sorted}\quad n\le 2^{32}-1\quad 0\le d\le D}
+ {\mathsf{offset}[d]=|\{i:k_i<d\}|\quad
+  \mathsf{offset}[0..D]\text{ is published directly in owned native }\mathtt{u32}\text{ lanes}}
 \Rule{GPU-TerminalGroup}{G=\text{recorded terminal group of the final publication}\quad
  \text{aliases are transparent stores of }G}
  {\mathsf{group}_{\rm gpu}=G.\mathsf{completion}(G.\mathsf{input})}
@@ -1902,7 +2021,20 @@ each row function and the host-bound selection conditions.
  B=\biguplus_b B_b\text{ over an occupancy grid}\quad
  p_b=(\mathsf{fold}_a(B_b),\mathsf{present}_a(B_b))_a}
  {\mathsf{group}_{\rm gpu}(G)_a=\bigoplus_b (p_b)_a\text{ in one stream-ordered combine block per aggregate }a}
+\Rule{GPU-KeyedGridFold}{G.\mathrm{ty}=\mathsf{SegmentedGroup}\quad K\ne\varnothing\quad
+ D=\prod_{k\in K}(1+\max k-\min k)\quad W=1+|A|}
+ {\begin{cases}
+ DW\le S/8: &\text{one occupancy-grid histogram of live arguments, then combine occupied bins;}\\
+ \text{otherwise}:&\text{stable radix order, prefix warp head counts, fold all run fragments in parallel.}
+ \end{cases}}
 \end{mathpar}
+Here $S$ is the recorded group-reduction scratch size. Enclosing recorded
+resident bounds permit the dense histogram to consume argument evaluation
+directly; otherwise the provider measures the live keys. Dense bins use
+lexicographic mixed-radix order. Sorted run heads supply keys directly;
+continuations combine on the producing stream. Every sum combine checks
+machine overflow; only final occupied cells are checked against the result
+carrier. An empty keyed relation publishes zero rows.
 Whole-relation (zero-key) lookups also demand a recorded source or completed
 publication, including its row count; they do not require a keyed provider.
 Filtered host Cartesian operands are uploaded with the predicate applied,
@@ -1910,9 +2042,14 @@ and consumers read the uploaded count rather than the unfiltered input length.
 A source interval is available only when every folded bound restricts the
 same source column. Independent literal restrictions remain row predicates;
 they are not an illegal multi-column interval. Dense range providers normalize
-signed keys by a recorded runtime base $\min(0,\mathsf{bounds.min})$ before
+signed keys by their recorded lower bound before
 directory addressing. Domain size and its sentinel are checked with widened
 arithmetic; payload values retain their original signed representation.
+For \textsc{GPU-DenseDirectory}, an empty keyed input has $D+1$ zero ranks;
+a keyless provider has no directory. A warp locates the two endpoint ranks of
+one directory tile. If their difference is $s$, it fills the gaps between
+adjacent sorted keys, except when searching the $t$ tile entries within that
+span costs less ($s>t\lceil\log_2(s+1)\rceil$). A zero span is a constant tile.
 An inferred answer binder's declared head type supplies its carrier inference
 constraint before publication storage records scalar bounds and arena metadata.
 The carrier checker validates that constraint independently; printing does not
@@ -1923,8 +2060,10 @@ fields extraction decodes), a completed flat publication or device source
 fused with the chain's row maps under a live mask, or a host evaluation of the
 Physical input, uploaded unless already a device source. Store aliases that
 wrap the same group are realized by its fold rather than published. Keyed
-groups extract arguments on the occupancy grid and call the recorded
-accumulator. Keyless groups fold in one fused pass: each block accumulates its
+groups call their recorded accumulator with live key enclosures. When the
+frame fits the block table the occupancy-grid argument kernel folds directly;
+otherwise the provider measures the extracted live arguments and applies
+\textsc{GPU-KeyedGridFold}. Keyless groups fold in one fused pass: each block accumulates its
 grid-stride live rows into typed per-aggregate partials (count and checked sum,
 extrema with presence) at its recorded block geometry, and one block per
 aggregate combines the partials on the producing stream at the recorded
@@ -1935,14 +2074,15 @@ sticky failure word.
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,
-an equality selection against the literal (a closed capture), and a projection
+an equality selection against the same constant, and a projection
 that drops the fresh column. Its checker inspects the recorded rename--select--project
 chain: intermediate pipes are private single-use results, original mappings
-are preserved, added equalities bind only the source literals, and the final
+are preserved, added equalities bind only the source constants, and the final
 projection is exact. It does not regenerate fresh names or rerun the rewrite.
-Operands at code-domain columns arrive
-already translated by A-Domain into capture references; no string literal
-reaches this rewrite.
+A constant at a code-domain column arrives as its A-DomainLiteral capture
+reference \code{@(k)} and is compared as that closed operand; no string literal
+reaches this rewrite. The rewrite is opt-in: without it a literal-bearing
+rename stays an occurrence restriction.
 \begin{mathpar}
 \Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
  {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{select}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}

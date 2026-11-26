@@ -7,7 +7,7 @@
 //! distributes the remaining expansions over it and publishes offsets before
 //! each fan-out (`tile 1024 items 4 store`). This pass makes those choices
 //! from evidence alone: it retains (stores) the first expansion whose
-//! evidence bound reaches the GPU machine's `retain_prefix_rows`, provided
+//! BE-PrefixEstimate reaches the GPU machine's `retain_prefix_rows`, provided
 //! another expansion follows it, then segments every later expansion whose
 //! lookup does not cover a recorded key of its provider (a fan-out; keyed
 //! lookups match at most one row and stay inline). Join order is unchanged;
@@ -20,7 +20,7 @@ use cq_syntax::symbol_name;
 use crate::{Advice, decomposition};
 
 /// The stream root reached from `term`, recording named expansions root first.
-fn stream(program: &Program, term: &Term, path: &mut Vec<syn::Ident>) -> Option<String> {
+pub(crate) fn stream(program: &Program, term: &Term, path: &mut Vec<syn::Ident>) -> Option<String> {
     match term {
         Term::Rows(name) => Some(symbol_name(name)),
         Term::Ref(name) => {
@@ -56,14 +56,14 @@ fn expansion(term: &Term) -> bool {
     matches!(term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
 }
 
-/// Formal rule GR-RetainPrefix: When a GPU dispatch streams a root whose evidence bound is below one root tile, retain the first expansion whose evidence bound reaches the machine's retain_prefix_rows if another expansion follows it; stop searching at the first unknown bound.
+/// Formal rule GR-RetainPrefix: When a GPU dispatch streams a root whose BE-PrefixEstimate is below one root tile, retain the first expansion whose estimate reaches the machine's retain_prefix_rows if another expansion follows it; stop searching at the first unknown estimate.
 /// Formal rule GR-SegmentFanout: After a retained prefix, segment every expansion whose lookup covers no recorded key of its provider, at the machine's distributing width times its items.
 pub(crate) fn advise(program: &Program, analysis: &Analysis, machine: &Machine) -> Vec<Advice> {
     let (Some(gpu), Some(tile)) = (&machine.gpu, decomposition::width(&machine.root)) else {
         return Vec::new();
     };
     let bounds = &analysis.prefix_bounds;
-    let rows = |name: &str| bounds.get(name).and_then(|bound| bound.rows);
+    let rows = |name: &str| bounds.get(name).and_then(|bound| bound.estimate);
     let fan_out = |name: &syn::Ident| {
         let Some(definition) = program
             .sequence
@@ -158,12 +158,12 @@ pub(crate) fn apply_in(
     let bound = analysis
         .prefix_bounds
         .get(&symbol_name(name))
-        .and_then(|bound| bound.rows);
+        .and_then(|bound| bound.estimate);
     if bound != Some(rows) {
         return Err(syn::Error::new_spanned(
             name,
             format!(
-                "GR-RetainPrefix: recorded bound {rows} differs from the evidence bound {bound:?}"
+                "GR-RetainPrefix: recorded estimate {rows} differs from the evidence estimate {bound:?}"
             ),
         ));
     }
@@ -183,7 +183,7 @@ pub(crate) fn apply_in(
             if !analysis
                 .prefix_bounds
                 .get(&root)
-                .and_then(|bound| bound.rows)
+                .and_then(|bound| bound.estimate)
                 .is_some_and(|rows| rows < tile as u128)
             {
                 return false;
@@ -196,7 +196,7 @@ pub(crate) fn apply_in(
                     analysis
                         .prefix_bounds
                         .get(&symbol_name(earlier))
-                        .and_then(|bound| bound.rows)
+                        .and_then(|bound| bound.estimate)
                         .is_some_and(|rows| rows < minimum as u128)
                 })
         });

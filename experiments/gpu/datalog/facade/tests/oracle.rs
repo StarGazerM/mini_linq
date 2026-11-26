@@ -164,6 +164,53 @@ fn legacy_observer_runs_once_alongside_a_grouped_head() {
     }
 }
 
+/// The `recursion_closure` workload, including its seed predicate (which
+/// must not be moved into the recursive union). Compare complete sets on
+/// its duplicate/cycle and empty-seed fixtures and on a signed continuation.
+#[test]
+fn recursion_closure_set_projection() {
+    use std::collections::BTreeSet;
+    for edges in [
+        vec![(0i32,1i32), (1,2), (2,1), (2,3), (7,8), (0,1)],
+        vec![(-2,-1)],
+        vec![(2,-1), (-1,-2), (-2,3), (3,3)],
+    ] {
+        let mut expected: BTreeSet<_> = edges.iter().copied().filter(|(x,_)| *x >= 0).collect();
+        loop {
+            let before = expected.len();
+            let extra: Vec<_> = expected.iter().flat_map(|&(x, y)| edges.iter()
+                .filter_map(move |&(v,z)| (v == y).then_some((x,z)))).collect();
+            expected.extend(extra);
+            if expected.len() == before { break; }
+        }
+        let reached = cq_datalog::datalog! {
+            pipeline {
+                incremental = ::cq_datalog::passes::incremental(driver(delta_first););
+                storage_rewrites = [::cq_gpu_datalog::device_storage];
+                cq = pipeline {
+                    physical = [::cq_gpu_sequence::capture_constants];
+                    structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+                    sequence = ::mini_linq::passes::sequence;
+                    stage = ::cq_gpu_sequence::stage;
+                    decompose = [::cq_gpu_sequence::decompose];
+                    grade = ::cq_gpu_sequence::machine_grade;
+                    print = ::cq_gpu_sequence::translate_arena;
+                };
+                terminals = [::cq_gpu_sequence::translate_arena => batch];
+                round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor)];
+                print = ::cq_gpu_datalog::print_rounds;
+            }
+            struct RecursionClosure;
+            relation Edge(x:i32,y:i32) = (&edges);
+            relation Reach(x:i32,z:i32);
+            output Reach;
+            Reach(*x,*y) :- Edge(x,y), where x >= 0;
+            Reach(*x,*z) :- Reach(x,y), Edge(y,z);
+        };
+        assert_eq!(reached.collect::<BTreeSet<_>>(), expected);
+    }
+}
+
 /// GPU-ExpansionShare: one seed reaches four hubs, each with 50,000
 /// successors. The first expansion has four children, so one block holds the
 /// second expansion's 200,000 children (782 batches) while every other block

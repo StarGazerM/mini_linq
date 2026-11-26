@@ -22,6 +22,161 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   uninstrumented samples separate from counters. Retain the H19 parallel slowdown
   and hash-provider wins rather than inferring a universal RadixRun advantage.
 
+- GPU Datalog validates grouped heads and replay-safe non-head holes at one
+  publication cut. Each readback covers the active head cursors and private
+  result headers; head-only retries do not download private headers. Each
+  hole keeps its own reservation hint outside a grouped head. A short
+  reservation replays only its member on unchanged inputs, preserving the
+  candidate batch order; a device failure aborts before admission.
+  - Batching private results removed 32.6% of the fixpoint's blocking
+    device-to-host reads versus reading them per hole (about 1-2% of holes
+    overflowed). In that interleaved A/B, all 20 pairs were faster.
+    Median fixpoint deltas (5 pairs per dataset):
+
+    | Dataset | Median delta |
+    |---|---|
+    | scala | -65 ms |
+    | soot | -91 ms |
+    | kotlin | -52 ms |
+    | jython | -44 ms |
+
+  - Digests exact; xalan 26/26; gate 5/5.
+  - Memory or kernel tracing, profiling, and arena timing keep immediate
+    per-hole reads for private results.
+  - Evidence: `/data/design-notes/join-lab/round5/device-sizing.md`.
+
+- GPU Datalog UnionProject assigns the 32-child windows of each source span
+  to 16 warps. Representative and striped bitmap unions compact live source
+  references when the worst-case queue fits the 256 MiB scratch limit.
+  Representative jobs use four warps; striped jobs use one warp at the
+  original full consumer grid width. Raw bag enumeration is unchanged.
+
+- GPU Datalog storage: DOOP device relations now build a 16-bit radix
+  directory per published run (`radix_bits` 0 -> 16 in
+  `datalog/src/storage.rs`). Previously no directory was ever built, so every
+  key-prefix lookup was an unindexed binary search over packed keys.
+  - On 14 captured join rounds, midpoint steps per search fall from 15.6 to 3.8
+    and summed device time from 26.18 to 21.60 ms, build cost included.
+  - DOOP `--gpu-only` fixpoint, 3 interleaved runs, every range disjoint from
+    the control:
+
+    | Dataset | Speedup |
+    |---|---|
+    | Scala | -9.3% |
+    | Soot | -7.3% |
+    | Kotlin | -10.3% |
+    | Jython | -5.2% |
+
+  - Directory builds total 95.9 ms across 23,657 builds. Peak pool memory
+    grows by 84-88 MB.
+  - Digests are unchanged; xalan matches exactly on all 26 outputs; GPU gate
+    5/5. `final-validate.sh`, base -> this change, runs 1 / 2:
+
+    | Binary | Dataset | Base (s) | This change (s) |
+    |---|---|---|---|
+    | doop-gpu | scala | 3.23 | 2.92 / 2.92 |
+    | doop-gpu | soot | 3.58 | 3.33 / 3.32 |
+    | doop-gpu | kotlin | 3.28 | 2.96 / 2.99 |
+    | doop-gpu | jython | 2.82 | 2.70 / 2.70 |
+    | srd-doop-gpu | scala | 7.56 | 5.92 / 6.04 |
+    | srd-doop-gpu | soot | 4.82 | 3.85 / 3.85 |
+    | srd-doop-gpu | kotlin | 7.76 | 6.32 / 6.36 |
+
+  - Evidence: `/data/design-notes/join-lab/round4/radix-prod.md` and
+    `radix-search.md`.
+
+- Atom literals are occurrence restrictions again at code-domain columns
+  (`A-DomainLiteral`, `RL-Occurrence`, `WF-Domain`). Since InternedStrings
+  (`6a4f52bf`), A-Domain rewrote `R(a, "AIR")` into `R(a, k), where k ==
+  @(c)`, so every literal at a domain column became a predicate read
+  (`pipe point select`) and lost its literal-bearing rename. A positive-atom
+  literal now stays in its atom; normalization records one exact capture per
+  domain id and literal, and RL-Occurrence emits `rename R {..} constants
+  {m = @(c)}` (`let`, filtered source). `OccurrenceConstants` holds
+  `OccurrenceConstant { column, value: Term }` (a literal or a capture
+  reference); the CPU host scan, PH-ConstantGuard and GPU sources
+  (GPU-Capture `host_constants`, build-phase position selection) read
+  capture constants. TPC-H h02 (`p_size`, `r_name`), h10, h11, h20 and GPU
+  h19 write their single-value equalities as atom literals. GPU census: 13
+  of 26 advised queries move plan (point selects on literal columns become
+  restricted renames; d27 probes Part before Orders); written orders are
+  unchanged. All 26 validate at SF1 and SF10.
+  Filtered roots then ran slower where planning still used whole-table
+  bounds: h08 SF1 1.44x (1,451 selected Part rows in 256-row tiles: a
+  6-block grid; ncu: dispatch_0 is 1.43M warp instructions, not 7.04M, so
+  the work shrank and the grid starved) and h11 SF10 1.27x (GR-RetainPrefix
+  fired on a Supplier prefix bounded at 100,000 rows; 4,049 are German).
+  Fixes, each a formal rule:
+  - **Estimates beside bounds** (`BE-PrefixEstimate`): each prefix record
+    carries a nonsemantic estimate (a recorded result count, else a
+    transfer; a key-covered probe scales by the keyed side's estimate/bound).
+    `GPU-FilteredCount` records each literal-restricted rename's measured
+    row count at build (one streamed column scan per dataset, table and
+    literals). Bounds still decide `One` and capacities.
+  - **`GR-RootTile`**: a GPU store root estimated between one and 284 tiles
+    is cut into `ceil(estimate/284)`-row tiles (h08 SF10 256 -> 48, h02 140,
+    d19/d85 212, d27/h21_positive 15). Hand schedules use the same rule
+    (`authored_tile`).
+  - **`GR-RetainPrefix` and `GPU-DistributeExpansion` read estimates**; h11
+    no longer retains.
+  - **`GPU-SelectRows`**: one-pass selection; each warp reserves its
+    256-row chunk with one atomic and writes ids in row order (replaces
+    flags + thrust select: three launches and a temporary).
+  - **`GPU-SelectedCount`**: the selected count stays on the device; a
+    dispatch over selected positions launches over the capacity and its
+    kernel reads the count as its domain (spread tiles are resized from it).
+  Physical and structure plans are unchanged versus the atom-literal commit;
+  only Sequence tiles move. Paired against `80d602fa` (one suite each, all
+  26 validated): SF10 sum 158.60 -> 147.81 ms (geomean 0.916), SF1 19.41 ->
+  18.66 ms (0.952); h19 SF10 0.460x, h07 0.721x, h10 0.791x, h04 0.833x,
+  h02 0.864x, d27 0.910x, h08 0.924x; h11 1.014x (four repeats each side
+  overlap: base 1.357-1.504, new 1.367-1.473 ms) and h03 1.005x.
+
+- GPU Sequence/TPC-H: six code-generation performance bugs found by profiling
+  against DuckDB 2.0.1 + Sirius (nsys, ncu, perf; RTX 6000 Ada) are fixed.
+  Plans stay exact; all 26 advised queries match DuckDB at SF1 and SF10.
+  - **No implicit one-block launches** (`GPU-OnePart`,
+    `GPU-DistributeExpansion`, `GPU-ChildSlice`, `GPU-FanoutLegal`,
+    `DR-ScheduleOverlay`). A missing tile decision used to become
+    `Partition::One`; `Partition::One { max_rows }` now needs evidence that
+    the root fits one block pass with no expansion after it. An expanding
+    root that fits one tile records `Partition::Fanout`, and resident blocks
+    split disjoint child intervals. TPC-H hand schedules keep planner
+    geometry for stores they do not author. Advised dispatches: 24 One / 86
+    Tiles -> 0 One / 76 Tiles / 34 Fanout; no Datalog dispatch moved.
+  - **Keyed group fold** (`GPU-KeyedGridFold`): one 256-thread CTA per group
+    per output column is replaced by a dense block-partial histogram for small
+    measured key domains and a row-parallel run-fragment reduction over the
+    sorted order (keys copied from run heads, all aggregates in one launch).
+  - **One execution per output dispatch** (`GPU-DispatchReservation`): the
+    GPU planner defaults to `output reserve`; a dispatch starts from its
+    recorded seed (declared, evidence, reservation or zero) and then from its
+    last validated count, per compiled query and CUDA context, instead of a
+    count-only launch followed by a write launch. Overflow still replays
+    before publishing. Datalog's `reserve_previous` is unchanged.
+  - **Answer transfer** (`GPU-AnswerTransfer`): answer columns are narrowed on
+    device and copied once into pooled pinned memory; the host transposes
+    typed columns without per-row `RowCodec::decode`.
+  - **Nullable values stay on the device** (`DR-NullableLanes`): grouped
+    `Option` results publish value and presence lanes, removing the host
+    islands of h02 stage 1 and h15 stage 2.
+  - **Range construction** (`GPU-RangePayload`, `GPU-DenseDirectory`):
+    resident payloads are read through one retained stable permutation instead
+    of gather + FOR re-encode; dense directories are native `u32`.
+  - Paired SF10 totals (median, ms, base `83b66548` -> this change): h01
+    344.9 -> 4.9, h02 145.5 -> 3.5, h09 158.2 -> 20.9, h21_positive 143.9 ->
+    21.5, h18 80.2 -> 17.4, h20 45.2 -> 13.6, h10 48.5 -> 17.8, h08 18.5 ->
+    7.3; suite sum 1194 -> 199 ms (SF1 127 -> 26.5 ms); geomean 3.2x (SF1
+    2.7x). Every query now beats DuckDB+Sirius warm on the same GPU (SF10
+    geomean 4.1x, SF1 15.9x). `doop-gpu` xalan exact 26/26; fixpoint medians
+    of three 0.4145 s base vs 0.4184 s (overlapping samples).
+
+- GPU Datalog: the checked Round batch terminal now records `UnionProject`
+  for binary compositions whose head drops the sole witness. The runtime
+  chooses direct expansion or exact grouped union per invocation, including
+  across multiple radix runs. Ordinary enumeration remains available to
+  count observers and for unsupported coordinate widths or sparse domains.
+
 - GPU Sequence: a recorded expansion share on a chain with one expansion over
   unselected roots (no GPU-RootSelect, not an authored frontier) is printed
   without the steal pool; its roots are distributed directly. The share path
@@ -40,6 +195,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   `doop-gpu` selects six versions (VPT_Cast@0/@4, AIPT_Store@2/@3,
   VPT_LoadArray@2, VPT_LoadField@2): scala 3.60 -> 3.40 s, soot 4.11 -> 4.09 s,
   kotlin 3.47 -> 3.44 s, jython 3.00 -> 2.96 s; counts unchanged, xalan exact.
+
+- GPU Datalog: `DL-RoundShared` records and checks multi-head prefix sharing
+  over matching versioned reads in a publication epoch. Generated per-head
+  suffix kernels replace the hand-written virtual-dispatch hooks.
 
 - GPU Datalog / DOOP joins, round 2 (reports `/data/design-notes/join-lab/round2-*.md`).
   GPU-RadixExactMember: a membership read on the complete physical key
